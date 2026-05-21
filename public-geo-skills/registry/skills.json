@@ -1,0 +1,158 @@
+{
+  "repository": {
+    "name": "yao-geo-skills",
+    "summary": "面向 GEO 内容与工作流的 Skill 开源合集，持续更新中。",
+    "owner": "yaojingang",
+    "default_branch": "main"
+  },
+  "inventory_contract": {
+    "required_skill_fields": [
+      "id",
+      "family",
+      "maturity",
+      "tags",
+      "requires_web",
+      "primary_outputs",
+      "status",
+      "owner",
+      "stage",
+      "path",
+      "summary",
+      "public_repo_path",
+      "last_updated"
+    ],
+    "allowed_statuses": [
+      "planned",
+      "active",
+      "paused",
+      "deprecated"
+    ],
+    "allowed_maturity": [
+      "scaffold",
+      "draft",
+      "beta",
+      "stable"
+    ]
+  },
+  "skills": [
+    {
+      "id": "yao-geoflow-cli",
+      "family": "geo-operations",
+      "maturity": "stable",
+      "tags": [
+        "geoflow",
+        "cli",
+        "operations",
+        "task-management",
+        "article-publish"
+      ],
+      "requires_web": false,
+      "primary_outputs": [
+        "catalog-lookup-result",
+        "task-operation-result",
+        "article-publish-result"
+      ],
+      "status": "active",
+      "owner": "yaojingang",
+      "stage": "published",
+      "path": "skills/yao-geoflow-cli",
+      "summary": "Operate an existing GEOFlow system through the local geoflow CLI or Laravel API v1 fallback for catalog lookup, task execution, article upload, review, publish flows, and Docker preflight diagnostics.",
+      "public_repo_path": "skills/yao-geoflow-cli",
+      "last_updated": "2026-04-26"
+    },
+    {
+      "id": "yao-geo-tracking",
+      "family": "geo-measurement",
+      "maturity": "beta",
+      "tags": [
+        "geo",
+        "tracking",
+        "attribution",
+        "measurement",
+        "html-report",
+        "docx-report"
+      ],
+      "requires_web": true,
+      "primary_outputs": [
+        "tracking-plan-summary",
+        "html-report",
+        "docx-report"
+      ],
+      "status": "active",
+      "owner": "Yao Team",
+      "stage": "published",
+      "path": "skills/yao-geo-tracking",
+      "summary": "Generate a company-specific GEO backend tracking plan using official-site-first retrieval, business recognition, and China-vs-overseas monitoring logic.",
+      "public_repo_path": "skills/yao-geo-tracking",
+      "last_updated": "2026-04-20"
+    },
+    {
+      "id": "yao-geoflow-template",
+      "family": "geo-operations",
+      "maturity": "beta",
+      "tags": [
+        "geoflow",
+        "frontend",
+        "theme",
+        "template-clone",
+        "preview",
+        "design-tokens"
+      ],
+      "requires_web": true,
+      "primary_outputs": [
+        "theme-package-plan",
+        "tokens-json",
+        "mapping-json",
+        "preview-plan"
+      ],
+      "status": "active",
+      "owner": "yaojingang",
+      "stage": "published",
+      "path": "skills/yao-geoflow-template",
+      "summary": "Map a reference URL onto GEOFlow's frontend contract and generate a preview-first theme package plan with tokens, module mappings, and activation-ready structure.",
+      "public_repo_path": "skills/yao-geoflow-template",
+      "last_updated": "2026-04-20"
+    },
+    {
+      "id": "yao-geoflow-design",
+      "family": "geo-operations",
+      "maturity": "beta",
+      "tags": [
+        "geoflow",
+        "frontend",
+        "theme",
+        "template-optimization",
+        "design-system",
+        "preview",
+        "theme-edit"
+      ],
+      "requires_web": true,
+      "primary_outputs": [
+        "theme-discovery",
+        "preview-theme-session",
+        "design-audit",
+        "theme-package-plan",
+        "optimization-plan",
+        "mapping-json",
+        "preview-plan",
+        "finalize-plan"
+      ],
+      "status": "active",
+      "owner": "yaojingang",
+      "stage": "published",
+      "path": "skills/yao-geoflow-design",
+      "summary": "Discover current GEOFlow Laravel Blade themes, preview-edit a selected template safely, and then clone, optimize, publish as new, or replace the base theme after review without breaking rendering contracts.",
+      "public_repo_path": "skills/yao-geoflow-design",
+      "last_updated": "2026-04-26"
+    }
+  ],
+  "planned_families": [
+    "geo-operations",
+    "geo-measurement",
+    "geo-keyword-discovery",
+    "geo-competitor-scan",
+    "geo-answer-optimizer",
+    "geo-brand-fact-sheet",
+    "geo-content-audit"
+  ]
+}

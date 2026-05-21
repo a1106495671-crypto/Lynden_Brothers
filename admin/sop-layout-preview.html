@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>策略页布局预览</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #f5f7fb;
+      color: #111827;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    .page { max-width: 1680px; margin: 0 auto; padding: 32px 40px 56px; }
+    .topbar {
+      height: 72px;
+      background: #fff;
+      border-bottom: 1px solid #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 48px;
+      color: #6b7280;
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .topbar .active { color: #2563eb; background: #eff6ff; padding: 14px 22px; border-radius: 8px; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: 36px; line-height: 1.2; }
+    .sub { margin-top: 8px; color: #6b7280; font-size: 17px; }
+    .btn {
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #374151;
+      border-radius: 8px;
+      padding: 12px 18px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn.primary { background: #111827; color: #fff; border-color: #111827; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat, .card {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, .04);
+    }
+    .stat { padding: 22px; }
+    .label { color: #6b7280; font-size: 16px; font-weight: 800; }
+    .value { margin-top: 10px; font-size: 36px; font-weight: 900; }
+    .scenes { padding: 26px; margin-bottom: 24px; }
+    .journey {
+      position: relative;
+      margin: 6px 0 28px;
+      border: 1px solid #e5e7eb;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      border-radius: 14px;
+      padding: 34px 34px 30px;
+      overflow: hidden;
+    }
+    .journey-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 22px;
+      z-index: 1;
+    }
+    .journey-row + .journey-row { margin-top: 74px; }
+    .journey-row::before {
+      content: "";
+      position: absolute;
+      left: 6%;
+      right: 6%;
+      top: 30px;
+      height: 14px;
+      border-radius: 999px;
+      background: #bfdbfe;
+      z-index: -2;
+    }
+    .journey-row::after {
+      content: "";
+      position: absolute;
+      left: 9%;
+      right: 9%;
+      top: 35px;
+      border-top: 4px dashed #2563eb;
+      z-index: -1;
+    }
+    .journey-turn {
+      position: absolute;
+      right: 22px;
+      top: 72px;
+      width: 92px;
+      height: 152px;
+      border: 14px solid #bfdbfe;
+      border-left: 0;
+      border-radius: 0 90px 90px 0;
+    }
+    .journey-turn::after {
+      content: "";
+      position: absolute;
+      inset: 14px 14px 14px 0;
+      border-right: 4px dashed #2563eb;
+      border-top: 4px dashed #2563eb;
+      border-bottom: 4px dashed #2563eb;
+      border-radius: 0 70px 70px 0;
+    }
+    .journey-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      text-align: center;
+    }
+    .journey-dot {
+      display: grid;
+      place-items: center;
+      width: 64px;
+      height: 64px;
+      border-radius: 999px;
+      background: #1559b7;
+      color: #fff;
+      font-size: 34px;
+      font-weight: 900;
+      box-shadow: inset 0 -8px 16px rgba(0,0,0,.16), 0 10px 22px rgba(37,99,235,.18);
+    }
+    .journey-step.active .journey-dot {
+      background: #16a34a;
+      box-shadow: 0 0 0 9px rgba(34,197,94,.16), 0 14px 28px rgba(22,163,74,.22);
+    }
+    .journey-label {
+      min-width: 118px;
+      border-radius: 14px;
+      background: #1559b7;
+      color: #fff;
+      padding: 12px 18px;
+      font-size: 18px;
+      font-weight: 900;
+      box-shadow: 0 8px 18px rgba(37,99,235,.14);
+      white-space: nowrap;
+    }
+    .journey-step.active .journey-label { background: #16a34a; }
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 22px;
+    }
+    h2 { margin: 0; font-size: 26px; }
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: #f3f4f6;
+      border-radius: 999px;
+      padding: 10px 16px;
+      color: #374151;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .scene-row {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .scene {
+      min-height: 140px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #fff;
+      padding: 22px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .scene.active {
+      border-color: #2563eb;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .scene.warn.active {
+      border-color: #f97316;
+      background: #fff7ed;
+      color: #9a3412;
+    }
+    .scene-title { font-size: 22px; font-weight: 900; margin-bottom: 24px; }
+    .scene-meta { display: flex; justify-content: space-between; gap: 12px; color: #4b5563; font-size: 16px; font-weight: 700; }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      gap: 24px;
+      align-items: start;
+    }
+    .nodes { overflow: hidden; }
+    .nodes-head {
+      padding: 24px 28px;
+      border-bottom: 1px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    .tabs { display: flex; gap: 4px; padding: 6px; background: #f3f4f6; border-radius: 10px; }
+    .tab {
+      border: 0;
+      background: transparent;
+      border-radius: 8px;
+      padding: 11px 18px;
+      color: #4b5563;
+      font-size: 16px;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .tab.active { background: #fff; color: #2563eb; box-shadow: 0 1px 4px rgba(15, 23, 42, .08); }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      background: #f9fafb;
+      color: #6b7280;
+      text-align: left;
+      font-size: 14px;
+      padding: 14px 18px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    td {
+      padding: 18px;
+      border-bottom: 1px solid #e5e7eb;
+      color: #374151;
+      vertical-align: top;
+      font-size: 15px;
+    }
+    tr { cursor: pointer; }
+    tr:hover, tr.active-row { background: #eff6ff; }
+    .node-name { color: #111827; font-size: 17px; font-weight: 900; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: #eef2ff;
+      color: #1d4ed8;
+      font-size: 13px;
+      font-weight: 900;
+      white-space: nowrap;
+      margin-top: 8px;
+    }
+    .pill.gray { background: #f3f4f6; color: #6b7280; }
+    .status {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 6px 12px;
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      color: #2563eb;
+      font-size: 14px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .status.done { border-color: #bbf7d0; background: #f0fdf4; color: #059669; }
+    .status.pending { border-color: #e5e7eb; background: #f9fafb; color: #6b7280; }
+    .detail { position: sticky; top: 18px; overflow: hidden; }
+    .detail-head { padding: 28px; border-bottom: 1px solid #e5e7eb; }
+    .detail-body { padding: 28px; }
+    .code { color: #2563eb; font-size: 16px; font-weight: 900; }
+    .detail-title { margin: 10px 0 0; font-size: 28px; line-height: 1.25; font-weight: 950; }
+    .box {
+      background: #f9fafb;
+      border-radius: 10px;
+      padding: 20px;
+      margin-top: 18px;
+    }
+    .box-title { color: #6b7280; font-weight: 900; margin-bottom: 10px; }
+    .box-text { font-size: 17px; font-weight: 800; line-height: 1.55; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .detail .btn { width: 100%; margin-top: 20px; }
+    .gantt {
+      padding: 24px;
+      overflow-x: auto;
+    }
+    .gantt-grid {
+      min-width: 980px;
+      display: grid;
+      grid-template-columns: 250px repeat(5, 1fr);
+      gap: 10px;
+    }
+    .gantt-cell {
+      min-height: 54px;
+      border: 1px solid #e5e7eb;
+      border-radius: 9px;
+      background: #f9fafb;
+      padding: 14px;
+      color: #9ca3af;
+      font-weight: 900;
+      text-align: center;
+    }
+    .gantt-cell.name { background: #fff; text-align: left; color: #111827; cursor: pointer; }
+    .gantt-cell.fill { background: #eff6ff; border-color: #bfdbfe; color: #2563eb; }
+    .gantt-cell.fill.current { background: #2563eb; color: #fff; border-color: #2563eb; }
+    .progress-grid { padding: 24px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .step {
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      border-radius: 10px;
+      padding: 18px;
+      cursor: pointer;
+    }
+    .step.active { border-color: #2563eb; background: #eff6ff; }
+    @media (max-width: 1280px) {
+      .workspace { grid-template-columns: 1fr; }
+      .detail { position: static; }
+    }
+    @media (max-width: 980px) {
+      .page { padding: 24px 18px; }
+      .stats, .scene-row, .progress-grid { grid-template-columns: 1fr; }
+      .journey { padding: 22px; }
+      .journey-row { grid-template-columns: 1fr; gap: 18px; }
+      .journey-row + .journey-row { margin-top: 18px; }
+      .journey-row::before, .journey-row::after, .journey-turn { display: none; }
+      .topbar { gap: 18px; font-size: 16px; overflow-x: auto; justify-content: flex-start; padding: 0 18px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="topbar">
+    <span>首页</span>
+    <span>诊断</span>
+    <span class="active">策略</span>
+    <span>交付</span>
+    <span>监测</span>
+    <span>AI配置</span>
+  </nav>
+
+  <main class="page">
+    <div class="header">
+      <div>
+        <h1>策略</h1>
+        <div class="sub">GEO 服务 SOP 与任务派发。</div>
+      </div>
+      <div>
+        <button class="btn">任务管理</button>
+        <button class="btn primary">监测触发应急</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <section class="stat"><div class="label">场景</div><div class="value">5</div></section>
+      <section class="stat"><div class="label">节点</div><div class="value">43</div></section>
+      <section class="stat"><div class="label">可售前</div><div class="value">8</div></section>
+      <section class="stat"><div class="label">联动</div><div class="value">4</div></section>
+    </div>
+
+    <section class="card scenes">
+      <div class="section-head">
+        <h2>场景</h2>
+        <label class="toggle"><input id="presaleOnly" type="checkbox"> 只看可售前完成</label>
+      </div>
+      <div class="journey" aria-label="服务流程路线图">
+        <div class="journey-turn" aria-hidden="true"></div>
+        <div class="journey-row">
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">品牌入驻</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">信息库建设</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">现状评估</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">方案设计</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">方案确认中</div>
+          </div>
+        </div>
+        <div class="journey-row">
+          <div class="journey-step active">
+            <div class="journey-dot">○</div>
+            <div class="journey-label">运营确认中</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">内容策略制定</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">合规评审</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">品牌授权</div>
+          </div>
+          <div class="journey-step">
+            <div class="journey-dot">✓</div>
+            <div class="journey-label">签约</div>
+          </div>
+        </div>
+      </div>
+      <div id="sceneRow" class="scene-row"></div>
+    </section>
+
+    <div class="workspace">
+      <section class="card nodes">
+        <div class="nodes-head">
+          <h2 id="scenarioTitle">节点</h2>
+          <div class="tabs">
+            <button class="tab active" data-view="table">明细表</button>
+            <button class="tab" data-view="gantt">甘特图</button>
+            <button class="tab" data-view="progress">客户进度</button>
+          </div>
+        </div>
+        <div id="tableView"></div>
+        <div id="ganttView" style="display:none"></div>
+        <div id="progressView" style="display:none"></div>
+      </section>
+
+      <aside>
+        <section class="card detail">
+          <div class="detail-head">
+            <h2>节点详情</h2>
+          </div>
+          <div id="detailBody" class="detail-body"></div>
+        </section>
+
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    const scenarios = {
+      onboard: {
+        name: '品牌启动·首月', trigger: '签约触发', grain: '周粒度', warn: false,
+        labels: ['第1周', '第2周', '第3周', '第4周'],
+        nodes: [
+          ['S1', '市场调研：竞品与平台映射', '平台覆盖率 100%', '竞品与平台映射表', '运营/产品', '1-2 天', true, [0, 0], 'done', ''],
+          ['S2', '问题宇宙梳理', '问题覆盖 80+', '问题宇宙表', '策略经理', '1 天', true, [0, 0], 'done', ''],
+          ['S3', '品牌现状数据基线', '六维评分完整', '诊断报告与基线表', '数据分析师', '1 天', true, [0, 0], 'done', ''],
+          ['S4', '单城 30 天策略制定', '路线图确认', '30 天 GEO 路线图', '策略经理', '1-2 天', true, [0, 1], 'done', ''],
+          ['S5', '竞品 GEO 监测与攻防', '竞品监测项 ≥ 3', '竞品攻防清单', '数据分析师', '持续', false, [1, 3], 'in_progress', 'GEO监测'],
+          ['S9', '权威信源矩阵建设', '核心信源 ≥ 8', '信源矩阵与资源清单', '分发运营', '3-7 天', false, [2, 3], 'pending', '媒体分发'],
+        ]
+      },
+      emergency: {
+        name: '应急预案', trigger: '监测告警触发', grain: '小时/天粒度', warn: true,
+        labels: ['0-4h', '4-12h', '12-24h', '24-72h', 'D4-D7'],
+        nodes: [
+          ['E1', '异常确认与分级', '4 小时内确认', '异常确认单', '数据分析师', '0-4h', false, [0, 0], 'in_progress', '监测触发后自动派发'],
+          ['E2', '根因排查', '根因假设 ≥ 2', '根因排查表', '策略经理', '4-12h', false, [1, 1], 'pending', ''],
+          ['E3', '提示词与问题宇宙重构', '新增问法 ≥ 20', '问题宇宙更新表', '策略经理', '12-24h', false, [2, 2], 'pending', ''],
+          ['E4', 'FAQ/案例/验证补强', '补强内容 ≥ 5 条', '修复内容包', '内容团队', '24-48h', false, [3, 3], 'pending', ''],
+          ['E5', '重点信源补发与分发', '重点信源 ≥ 5', '补发记录', '分发运营', '24-72h', false, [3, 3], 'pending', ''],
+          ['E6', '专项监测与复测', 'D4-D7 每日复测', '专项监测表', '数据分析师', 'D4-D7', false, [4, 4], 'pending', ''],
+          ['E7', '专项复盘与防再发', '7 天内复盘', '专项复盘报告', '客户成功', '7 天内', false, [4, 4], 'pending', ''],
+        ]
+      },
+      annual: { name: '全年路线', trigger: '年单触发', grain: '季度/月粒度', labels: ['Q1','Q2','Q3','Q4'], nodes: [] },
+      overview: { name: '单城推进总表', trigger: '签约/渠道触发', grain: '周粒度', labels: ['第1周','第2周','第3周','第4周'], nodes: [] },
+      maintain: { name: '第二月维护', trigger: '首月结束续接', grain: '周粒度', labels: ['第1周','第2周','第3周','第4周'], nodes: [] },
+    };
+    scenarios.annual.nodes = [
+      ['A1','AI 全域 GEO 营销策略制定','年度策略确认','年度 GEO 策略书','策略负责人','1 周',true,[0,0],'done',''],
+      ['A3','竞品 GEO 动态监测与攻防','月度监测持续','竞品攻防台账','数据分析师','全年',false,[0,3],'in_progress',''],
+      ['A6','核心问题内容优化与投放','月度内容达标','内容投放记录','内容团队','全年',false,[0,3],'pending',''],
+      ['A8','周报/月报/季度复盘','报告准时率 100%','周期复盘报告','客户成功','全年',false,[0,3],'pending',''],
+    ];
+    scenarios.overview.nodes = [
+      ['T1','市场调研+问题宇宙+基线','基线完整','启动基线包','策略经理','第1周',true,[0,0],'done',''],
+      ['T2','策略制定+攻防规则','规则确认','策略推进表','策略经理','第1周',true,[0,0],'done',''],
+      ['T5','权威信源矩阵建设','信源 ≥ 8','信源矩阵','分发运营','第2-3周',false,[1,2],'pending',''],
+      ['T9','月度复盘','复盘完成','月度复盘','客户成功','第4周',false,[3,3],'pending',''],
+    ];
+    scenarios.maintain.nodes = [
+      ['M1','上月复盘结论落地','结论全部入池','本月优化清单','客户成功','第1周',false,[0,0],'done',''],
+      ['M3','持续内容投放','月度内容达标','投放记录','内容团队','第1-4周',false,[0,3],'in_progress',''],
+      ['M5','周度巡检与异常响应','每周 1 次','巡检记录','数据分析师','第1-4周',false,[0,3],'pending',''],
+      ['M6','第二月度复盘','复盘报告 1 份','第二月复盘','客户成功','第4周',false,[3,3],'pending',''],
+    ];
+
+    let activeScenario = 'emergency';
+    let activeView = 'gantt';
+    let activeNode = 'E1';
+
+    const statusText = { done: '已完成', in_progress: '执行中', pending: '待执行' };
+
+    function visibleNodes() {
+      const only = document.getElementById('presaleOnly').checked;
+      const nodes = scenarios[activeScenario].nodes;
+      return only ? nodes.filter(n => n[6]) : nodes;
+    }
+    function nodeByCode(code) {
+      return scenarios[activeScenario].nodes.find(n => n[0] === code) || visibleNodes()[0] || scenarios[activeScenario].nodes[0];
+    }
+    function renderScenes() {
+      const row = document.getElementById('sceneRow');
+      row.innerHTML = Object.entries(scenarios).map(([key, scene]) => `
+        <button class="scene ${scene.warn ? 'warn' : ''} ${key === activeScenario ? 'active' : ''}" data-scene="${key}">
+          <div class="scene-title">${scene.name}</div>
+          <div class="scene-meta"><span>${scene.nodes.length} 节点</span><span>${scene.trigger}</span></div>
+        </button>
+      `).join('');
+      row.querySelectorAll('.scene').forEach(btn => btn.onclick = () => {
+        activeScenario = btn.dataset.scene;
+        activeNode = scenarios[activeScenario].nodes[0][0];
+        renderAll();
+      });
+    }
+    function renderTabs() {
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.view === activeView);
+        tab.onclick = () => { activeView = tab.dataset.view; renderAll(); };
+      });
+      document.getElementById('tableView').style.display = activeView === 'table' ? '' : 'none';
+      document.getElementById('ganttView').style.display = activeView === 'gantt' ? '' : 'none';
+      document.getElementById('progressView').style.display = activeView === 'progress' ? '' : 'none';
+    }
+    function statusClass(status) { return status === 'done' ? 'done' : status === 'pending' ? 'pending' : ''; }
+    function renderTable() {
+      const nodes = visibleNodes();
+      document.getElementById('tableView').innerHTML = `
+        <table>
+          <thead><tr><th>节点</th><th>KPI</th><th>产出物</th><th>负责人</th><th>周期</th><th>状态</th></tr></thead>
+          <tbody>${nodes.map(n => `
+            <tr class="${n[0] === activeNode ? 'active-row' : ''}" data-node="${n[0]}">
+              <td><div class="node-name">${n[0]} ${n[1]}</div>${n[6] ? '<span class="pill">可售前</span>' : ''}${n[9] ? `<span class="pill gray">${n[9]}</span>` : ''}</td>
+              <td>${n[2]}</td><td>${n[3]}</td><td>${n[4]}</td><td>${n[5]}</td>
+              <td><span class="status ${statusClass(n[8])}">${statusText[n[8]]}</span></td>
+            </tr>`).join('')}</tbody>
+        </table>`;
+      bindNodeClicks();
+    }
+    function renderGantt() {
+      const scene = scenarios[activeScenario];
+      const nodes = visibleNodes();
+      document.getElementById('ganttView').innerHTML = `
+        <div class="gantt"><div class="gantt-grid">
+          <div class="gantt-cell">节点</div>${scene.labels.map(l => `<div class="gantt-cell">${l}</div>`).join('')}
+          ${nodes.map(n => {
+            const [start, end] = n[7];
+            return `<div class="gantt-cell name" data-node="${n[0]}">${n[0]} ${n[1]}</div>` +
+              scene.labels.map((_, i) => {
+                const fill = i >= start && i <= end;
+                return `<div class="gantt-cell ${fill ? 'fill' : ''} ${fill && n[0] === activeNode ? 'current' : ''}">${fill ? n[4] : '-'}</div>`;
+              }).join('');
+          }).join('')}
+        </div></div>`;
+      bindNodeClicks();
+    }
+    function renderProgress() {
+      const nodes = visibleNodes();
+      document.getElementById('progressView').innerHTML = `<div class="progress-grid">${nodes.map((n, i) => `
+        <button class="step ${n[0] === activeNode ? 'active' : ''}" data-node="${n[0]}">
+          <div class="label">${String(i + 1).padStart(2, '0')}</div>
+          <div class="node-name">${n[0]} ${n[1]}</div>
+          <div style="margin-top:14px"><span class="status ${statusClass(n[8])}">${statusText[n[8]]}</span></div>
+        </button>`).join('')}</div>`;
+      bindNodeClicks();
+    }
+    function renderDetail() {
+      const n = nodeByCode(activeNode);
+      document.getElementById('detailBody').innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:18px;align-items:flex-start">
+          <div><div class="code">${n[0]}</div><div class="detail-title">${n[1]}</div></div>
+          <span class="status ${statusClass(n[8])}">${statusText[n[8]]}</span>
+        </div>
+        <div class="box"><div class="box-title">核心 KPI</div><div class="box-text">${n[2]}</div></div>
+        <div class="box"><div class="box-title">产出物</div><div class="box-text">${n[3]}</div></div>
+        <div class="two">
+          <div class="box"><div class="box-title">负责人</div><div class="box-text">${n[4]}</div></div>
+          <div class="box"><div class="box-title">周期</div><div class="box-text">${n[5]}</div></div>
+        </div>
+        ${n[9] ? `<div class="box"><div class="box-title">备注</div><div class="box-text">${n[9]}</div></div>` : ''}
+        <button class="btn primary">派发到任务管理</button>
+      `;
+    }
+    function bindNodeClicks() {
+      document.querySelectorAll('[data-node]').forEach(el => el.onclick = () => {
+        activeNode = el.dataset.node;
+        renderAll();
+      });
+    }
+    function renderAll() {
+      document.getElementById('scenarioTitle').textContent = scenarios[activeScenario].name;
+      if (!nodeByCode(activeNode)) activeNode = visibleNodes()[0][0];
+      renderScenes();
+      renderTabs();
+      renderTable();
+      renderGantt();
+      renderProgress();
+      renderDetail();
+    }
+    document.getElementById('presaleOnly').onchange = renderAll;
+    renderAll();
+  </script>
+</body>
+</html>

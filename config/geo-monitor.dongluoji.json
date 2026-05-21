@@ -1,0 +1,136 @@
+{
+    "project": {
+        "name": "董逻辑MGEO · AI搜索可见性监测",
+        "clientName": "董逻辑MGEO",
+        "clientAliases": [
+            "董逻辑MGEO",
+            "董逻辑",
+            "MGEO",
+            "M GEO"
+        ],
+        "competitors": [
+            "泛GEO服务商",
+            "内容代发机构",
+            "包效果黑盒型公司"
+        ],
+        "locale": "zh-CN"
+    },
+    "schedule": {
+        "daily": "09:30",
+        "weekly": "Monday 09:30"
+    },
+    "keywords": [
+        {
+            "keyword": "董逻辑MGEO是什么",
+            "intent": "品牌认知"
+        },
+        {
+            "keyword": "董逻辑MGEO怎么样",
+            "intent": "品牌评价"
+        },
+        {
+            "keyword": "董逻辑MGEO做什么服务",
+            "intent": "品牌认知"
+        },
+        {
+            "keyword": "GEO是什么",
+            "intent": "品类教育"
+        },
+        {
+            "keyword": "GEO和SEO有什么区别",
+            "intent": "品类教育"
+        },
+        {
+            "keyword": "豆包GEO怎么做",
+            "intent": "解决方案"
+        },
+        {
+            "keyword": "GEO服务商怎么选",
+            "intent": "购买决策"
+        },
+        {
+            "keyword": "GEO公司推荐",
+            "intent": "购买决策"
+        },
+        {
+            "keyword": "AI品牌入口诊断是什么",
+            "intent": "产品认知"
+        },
+        {
+            "keyword": "30天GEO验证项目怎么做",
+            "intent": "产品认知"
+        },
+        {
+            "keyword": "GEO监测怎么做",
+            "intent": "解决方案"
+        },
+        {
+            "keyword": "品牌怎么在豆包里被推荐",
+            "intent": "解决方案"
+        },
+        {
+            "keyword": "AI搜索结果可以优化吗",
+            "intent": "品类教育"
+        },
+        {
+            "keyword": "企业做GEO先做什么",
+            "intent": "解决方案"
+        },
+        {
+            "keyword": "GEO值不值得做",
+            "intent": "购买决策"
+        }
+    ],
+    "providers": [
+        {
+            "id": "doubao",
+            "name": "豆包",
+            "enabled": true,
+            "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+            "apiKeyEnv": "DOUBAO_API_KEY",
+            "model": "doubao-seed-1-6-250615"
+        },
+        {
+            "id": "kimi",
+            "name": "Kimi",
+            "enabled": true,
+            "baseUrl": "https://api.moonshot.cn/v1",
+            "apiKeyEnv": "KIMI_API_KEY",
+            "model": "moonshot-v1-8k"
+        },
+        {
+            "id": "qianwen",
+            "name": "千问",
+            "enabled": true,
+            "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "apiKeyEnv": "QIANWEN_API_KEY",
+            "model": "qwen-plus"
+        },
+        {
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "enabled": true,
+            "baseUrl": "https://api.deepseek.com/v1",
+            "apiKeyEnv": "DEEPSEEK_API_KEY",
+            "model": "deepseek-chat"
+        }
+    ],
+    "monitoring": {
+        "sampleCount": 1,
+        "mode": "blind_recommendation_rank_monitor",
+        "termDefinitions": [
+            {
+                "term": "GEO",
+                "definition": "Generative Engine Optimization，生成式引擎优化 / AI搜索优化 / AI回答推荐优化，不是地理信息、测绘、地图、定位、GIS 或投放服务。"
+            },
+            {
+                "term": "MGEO",
+                "definition": "董逻辑MGEO，一家专注于GEO（生成式引擎优化）服务的公司，帮助企业品牌在AI搜索结果中获得更高的曝光和推荐。"
+            }
+        ]
+    },
+    "report": {
+        "title": "董逻辑MGEO · AI搜索可见性监测报告",
+        "outputDir": "data/geo-monitor"
+    }
+}

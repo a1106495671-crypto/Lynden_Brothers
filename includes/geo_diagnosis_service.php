@@ -1,0 +1,1161 @@
+<?php
+/**
+ * GEO 雷达诊断服务
+ */
+
+if (!defined('FEISHU_TREASURE')) {
+    die('Access denied');
+}
+
+function geo_diagnosis_ensure_schema(PDO $db): void {
+    $db->exec("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS geo_diagnosis_brands (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(200) NOT NULL,
+            domain VARCHAR(255) DEFAULT '',
+            industry VARCHAR(64) DEFAULT '',
+            metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (name, domain)
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_brands_domain ON geo_diagnosis_brands(domain)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_brands_industry ON geo_diagnosis_brands(industry)");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS geo_diagnosis_runs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            brand_id UUID NOT NULL REFERENCES geo_diagnosis_brands(id) ON DELETE RESTRICT,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            overall_score NUMERIC(5,2),
+            predicted_hit_rate VARCHAR(32),
+            industry_benchmark NUMERIC(5,2),
+            raw_signals_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            error_message TEXT,
+            requester_ip INET,
+            requester_email VARCHAR(200) DEFAULT '',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP DEFAULT NULL
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_runs_brand ON geo_diagnosis_runs(brand_id)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_runs_status ON geo_diagnosis_runs(status)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_runs_created ON geo_diagnosis_runs(created_at DESC)");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS geo_diagnosis_signal_definitions (
+            signal_key VARCHAR(64) PRIMARY KEY,
+            name VARCHAR(64) NOT NULL,
+            default_weight NUMERIC(4,2) NOT NULL,
+            description TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    ");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS geo_diagnosis_signal_scores (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            diagnosis_id UUID NOT NULL REFERENCES geo_diagnosis_runs(id) ON DELETE CASCADE,
+            signal_key VARCHAR(64) NOT NULL,
+            score NUMERIC(5,2) NOT NULL,
+            weight NUMERIC(4,2) NOT NULL,
+            raw_metric JSONB,
+            details_json JSONB,
+            UNIQUE (diagnosis_id, signal_key)
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_scores_run ON geo_diagnosis_signal_scores(diagnosis_id)");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS geo_diagnosis_actions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            diagnosis_id UUID NOT NULL REFERENCES geo_diagnosis_runs(id) ON DELETE CASCADE,
+            signal_key VARCHAR(64) NOT NULL,
+            priority INTEGER NOT NULL,
+            action_text TEXT NOT NULL,
+            estimated_impact NUMERIC(5,2),
+            sku_id VARCHAR(64) DEFAULT '',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_actions_run ON geo_diagnosis_actions(diagnosis_id)");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS geo_diagnosis_domain_authority (
+            domain VARCHAR(255) PRIMARY KEY,
+            tier VARCHAR(4) NOT NULL,
+            weight NUMERIC(3,2) NOT NULL,
+            note TEXT,
+            is_suffix_match BOOLEAN NOT NULL DEFAULT FALSE,
+            source VARCHAR(32) NOT NULL DEFAULT 'seed',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_domain_tier ON geo_diagnosis_domain_authority(tier)");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS geo_diagnosis_industry_benchmarks (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            industry VARCHAR(64) NOT NULL,
+            benchmark_type VARCHAR(16) NOT NULL,
+            signal_key VARCHAR(64) NOT NULL,
+            score NUMERIC(5,2) NOT NULL,
+            sample_size INTEGER NOT NULL DEFAULT 0,
+            effective_month DATE NOT NULL DEFAULT DATE_TRUNC('month', CURRENT_DATE),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (industry, benchmark_type, signal_key, effective_month)
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_bench_lookup ON geo_diagnosis_industry_benchmarks(industry, benchmark_type, effective_month)");
+
+    geo_diagnosis_seed_definitions($db);
+}
+
+function geo_diagnosis_seed_definitions(PDO $db): void {
+    $signals = geo_diagnosis_signal_catalog();
+    $stmt = $db->prepare("
+        INSERT INTO geo_diagnosis_signal_definitions (signal_key, name, default_weight, description)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (signal_key) DO UPDATE SET
+            name = EXCLUDED.name,
+            default_weight = EXCLUDED.default_weight,
+            description = EXCLUDED.description
+    ");
+    foreach ($signals as $signal) {
+        $stmt->execute([$signal['key'], $signal['name'], $signal['weight'], $signal['description']]);
+    }
+
+    $tiers = ['T1' => 1.0, 'T2' => 0.8, 'T3' => 0.6, 'T4' => 0.4, 'T5' => 0.2];
+    $domains = [
+        ['gov.cn', 'T1', '中国政府门户域名后缀', true],
+        ['edu.cn', 'T1', '中国教育机构域名后缀', true],
+        ['xinhuanet.com', 'T1', '新华网', false],
+        ['people.com.cn', 'T1', '人民网', false],
+        ['nature.com', 'T1', 'Nature', false],
+        ['science.org', 'T1', 'Science', false],
+        ['caixin.com', 'T2', '财新', false],
+        ['thepaper.cn', 'T2', '澎湃新闻', false],
+        ['36kr.com', 'T2', '36氪', false],
+        ['huxiu.com', 'T2', '虎嗅', false],
+        ['yicai.com', 'T2', '第一财经', false],
+        ['zhihu.com', 'T3', '知乎', false],
+        ['sspai.com', 'T3', '少数派', false],
+        ['csdn.net', 'T3', 'CSDN', false],
+        ['juejin.cn', 'T3', '掘金', false],
+        ['infoq.cn', 'T3', 'InfoQ 中文站', false],
+        ['bilibili.com', 'T3', 'B 站', false],
+        ['xiaohongshu.com', 'T3', '小红书', false],
+        ['github.com', 'T3', 'GitHub', false],
+        ['stackoverflow.com', 'T3', 'Stack Overflow', false],
+        ['jianshu.com', 'T4', '简书', false],
+        ['cnblogs.com', 'T4', '博客园', false],
+        ['segmentfault.com', 'T4', '思否', false],
+        ['v2ex.com', 'T4', 'V2EX', false],
+        ['douyin.com', 'T4', '抖音', false],
+        ['toutiao.com', 'T4', '今日头条', false],
+    ];
+    $domainStmt = $db->prepare("
+        INSERT INTO geo_diagnosis_domain_authority (domain, tier, weight, note, is_suffix_match, source)
+        VALUES (?, ?, ?, ?, ?, 'seed')
+        ON CONFLICT (domain) DO NOTHING
+    ");
+    foreach ($domains as $item) {
+        [$domain, $tier, $note, $suffix] = $item;
+        $domainStmt->execute([$domain, $tier, $tiers[$tier], $note, $suffix ? 1 : 0]);
+    }
+
+    $benchmarks = [
+        'GEO服务商' => 74,
+        'AI营销服务' => 72,
+        'B2B专业服务' => 70,
+        '企业服务' => 70,
+        'B2B SaaS' => 72,
+        '消费品' => 68,
+        '教育' => 70,
+        '医疗' => 76,
+        '金融' => 78,
+        '本地生活' => 62,
+    ];
+    $benchStmt = $db->prepare("
+        INSERT INTO geo_diagnosis_industry_benchmarks (industry, benchmark_type, signal_key, score, sample_size)
+        VALUES (?, 'top_25', ?, ?, 25)
+        ON CONFLICT (industry, benchmark_type, signal_key, effective_month) DO NOTHING
+    ");
+    foreach ($benchmarks as $industry => $baseScore) {
+        foreach ($signals as $index => $signal) {
+            $benchStmt->execute([$industry, $signal['key'], max(45, min(92, $baseScore + (($index % 3) - 1) * 4))]);
+        }
+    }
+}
+
+function geo_diagnosis_signal_catalog(): array {
+    return [
+        ['key' => 'third_party_mention', 'name' => '第三方提及', 'weight' => 0.25, 'description' => '知乎、媒体、Reddit 等独立来源对品牌的提及量与质量'],
+        ['key' => 'fact_density', 'name' => '事实密度', 'weight' => 0.20, 'description' => '每百词出现的数据点、引用、统计数字密度'],
+        ['key' => 'structure', 'name' => '结构化程度', 'weight' => 0.15, 'description' => 'H 标签、列表、表格、FAQ 等结构化标记占比'],
+        ['key' => 'authoritative_links', 'name' => '权威外链', 'weight' => 0.15, 'description' => '出站链接到 .gov / .edu / 主流媒体的比例'],
+        ['key' => 'ugc_coverage', 'name' => 'UGC 平台覆盖', 'weight' => 0.15, 'description' => '在知乎、小红书、B 站、即刻、公众号等 UGC 平台的内容铺设'],
+        ['key' => 'site_identity', 'name' => '站点身份', 'weight' => 0.10, 'description' => 'About 页、作者署名、编辑政策、联系方式完整度'],
+    ];
+}
+
+function geo_diagnosis_industries(): array {
+    return ['GEO服务商', 'AI营销服务', 'B2B专业服务', '企业服务', 'B2B SaaS', '消费品', '教育', '医疗', '金融', '本地生活'];
+}
+
+function geo_diagnosis_data_source_config(): array {
+    $provider = (string) get_setting('geo_diagnosis_search_provider', 'disabled');
+    $allowedProviders = ['disabled', 'bing', 'serpapi', 'google_cse', 'bocha'];
+    if (!in_array($provider, $allowedProviders, true)) {
+        $provider = 'disabled';
+    }
+
+    $apiKeyStored = (string) get_setting('geo_diagnosis_search_api_key', '');
+    $apiKey = $apiKeyStored !== '' ? decrypt_ai_api_key($apiKeyStored) : '';
+
+    return [
+        'provider' => $provider,
+        'api_key' => $apiKey,
+        'api_key_configured' => $apiKey !== '',
+        'google_cse_id' => (string) get_setting('geo_diagnosis_google_cse_id', ''),
+        'result_limit' => max(5, min(50, (int) get_setting('geo_diagnosis_result_limit', '10'))),
+        'timeout_seconds' => max(3, min(60, (int) get_setting('geo_diagnosis_timeout_seconds', '15'))),
+        'enable_site_crawl' => get_setting('geo_diagnosis_enable_site_crawl', '1') === '1',
+    ];
+}
+
+function geo_diagnosis_save_data_source_config(array $input): bool {
+    $provider = trim((string) ($input['provider'] ?? 'disabled'));
+    $allowedProviders = ['disabled', 'bing', 'serpapi', 'google_cse', 'bocha'];
+    if (!in_array($provider, $allowedProviders, true)) {
+        $provider = 'disabled';
+    }
+
+    $settings = [
+        'geo_diagnosis_search_provider' => $provider,
+        'geo_diagnosis_google_cse_id' => trim((string) ($input['google_cse_id'] ?? '')),
+        'geo_diagnosis_result_limit' => (string) max(5, min(50, (int) ($input['result_limit'] ?? 10))),
+        'geo_diagnosis_timeout_seconds' => (string) max(3, min(60, (int) ($input['timeout_seconds'] ?? 15))),
+        'geo_diagnosis_enable_site_crawl' => !empty($input['enable_site_crawl']) ? '1' : '0',
+    ];
+
+    foreach ($settings as $key => $value) {
+        if (!set_setting($key, $value)) {
+            return false;
+        }
+    }
+
+    if (!empty($input['clear_api_key'])) {
+        return set_setting('geo_diagnosis_search_api_key', '');
+    }
+
+    $apiKey = trim((string) ($input['api_key'] ?? ''));
+    if ($apiKey !== '') {
+        return set_setting('geo_diagnosis_search_api_key', encrypt_ai_api_key($apiKey));
+    }
+
+    return true;
+}
+
+function geo_diagnosis_normalize_domain(string $domain): string {
+    $domain = trim(strtolower($domain));
+    $domain = preg_replace('#^https?://#', '', $domain);
+    $domain = preg_replace('#/.*$#', '', (string) $domain);
+    $domain = preg_replace('#^www\.#', '', (string) $domain);
+    return trim((string) $domain);
+}
+
+function geo_diagnosis_domain_authority(PDO $db, string $domain): array {
+    $domain = geo_diagnosis_normalize_domain($domain);
+    if ($domain === '') {
+        return ['tier' => 'T5', 'weight' => 0.2, 'note' => '未提供官网域名'];
+    }
+
+    $stmt = $db->prepare("
+        SELECT domain, tier, weight, note, is_suffix_match
+        FROM geo_diagnosis_domain_authority
+        WHERE domain = ?
+           OR (is_suffix_match = TRUE AND ? LIKE '%' || domain)
+        ORDER BY is_suffix_match ASC, weight DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$domain, $domain]);
+    $row = $stmt->fetch();
+    return $row ?: ['tier' => 'T5', 'weight' => 0.2, 'note' => '未进入权威域名种子库'];
+}
+
+function geo_diagnosis_create(PDO $db, array $input): string {
+    geo_diagnosis_ensure_schema($db);
+
+    $brandName = trim((string) ($input['brand_name'] ?? ''));
+    $domain = geo_diagnosis_normalize_domain((string) ($input['domain'] ?? ''));
+    $industry = trim((string) ($input['industry'] ?? ''));
+    $email = trim((string) ($input['email'] ?? ''));
+    $evidence = trim((string) ($input['evidence'] ?? ''));
+
+    if ($brandName === '' && $domain === '') {
+        throw new InvalidArgumentException('品牌名称或官网域名至少填写一项');
+    }
+    if ($brandName === '') {
+        $brandName = $domain;
+    }
+    if ($domain !== '' && !preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/i', $domain)) {
+        throw new InvalidArgumentException('官网域名格式不正确');
+    }
+    if (!in_array($industry, geo_diagnosis_industries(), true)) {
+        $industry = 'B2B SaaS';
+    }
+
+    $db->beginTransaction();
+    try {
+        $brandStmt = $db->prepare("
+            INSERT INTO geo_diagnosis_brands (name, domain, industry, metadata_json)
+            VALUES (?, ?, ?, ?::jsonb)
+            ON CONFLICT (name, domain) DO UPDATE SET
+                industry = EXCLUDED.industry,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id
+        ");
+        $brandStmt->execute([
+            $brandName,
+            $domain,
+            $industry,
+            json_encode(['evidence' => $evidence], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+        $brandId = (string) $brandStmt->fetchColumn();
+
+        $scores = geo_diagnosis_calculate_scores($db, $brandName, $domain, $industry, $evidence);
+        $overall = geo_diagnosis_overall_score($scores);
+        $benchmark = geo_diagnosis_industry_benchmark($db, $industry);
+        $hitRate = geo_diagnosis_hit_rate($overall);
+
+        $runStmt = $db->prepare("
+            INSERT INTO geo_diagnosis_runs (
+                brand_id, status, overall_score, predicted_hit_rate, industry_benchmark,
+                raw_signals_json, requester_ip, requester_email, completed_at
+            )
+            VALUES (?, 'completed', ?, ?, ?, ?::jsonb, ?::inet, ?, CURRENT_TIMESTAMP)
+            RETURNING id
+        ");
+        $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+        $runStmt->execute([
+            $brandId,
+            $overall,
+            $hitRate,
+            $benchmark,
+            json_encode($scores, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $ip ?: null,
+            $email,
+        ]);
+        $diagnosisId = (string) $runStmt->fetchColumn();
+
+        $scoreStmt = $db->prepare("
+            INSERT INTO geo_diagnosis_signal_scores (diagnosis_id, signal_key, score, weight, raw_metric, details_json)
+            VALUES (?, ?, ?, ?, ?::jsonb, ?::jsonb)
+            ON CONFLICT (diagnosis_id, signal_key) DO UPDATE SET
+                score = EXCLUDED.score,
+                weight = EXCLUDED.weight,
+                raw_metric = EXCLUDED.raw_metric,
+                details_json = EXCLUDED.details_json
+        ");
+        foreach ($scores as $score) {
+            $scoreStmt->execute([
+                $diagnosisId,
+                $score['key'],
+                $score['score'],
+                $score['weight'],
+                json_encode($score['raw_metric'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                json_encode($score['details'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            ]);
+        }
+
+        $actionStmt = $db->prepare("
+            INSERT INTO geo_diagnosis_actions (diagnosis_id, signal_key, priority, action_text, estimated_impact, sku_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+        foreach (geo_diagnosis_actions_for_scores($scores) as $action) {
+            $actionStmt->execute([
+                $diagnosisId,
+                $action['signal_key'],
+                $action['priority'],
+                $action['action_text'],
+                $action['estimated_impact'],
+                $action['sku_id'],
+            ]);
+        }
+
+        $db->commit();
+        return $diagnosisId;
+    } catch (Throwable $e) {
+        $db->rollBack();
+        throw $e;
+    }
+}
+
+function geo_diagnosis_calculate_scores(PDO $db, string $brand, string $domain, string $industry, string $evidence): array {
+    // 优先走真实搜索 API；provider=disabled 或 API 调用失败时自动降级为估算
+    $cfg = geo_diagnosis_data_source_config();
+    if (($cfg['provider'] ?? 'disabled') !== 'disabled' && ($cfg['api_key'] ?? '') !== '') {
+        $realScores = geo_diagnosis_real_calculate_scores($brand, $domain, $industry, $evidence, $cfg);
+        if ($realScores !== null) {
+            return $realScores;
+        }
+    }
+
+    // ── 降级估算（原有逻辑） ──
+    $signals = geo_diagnosis_signal_catalog();
+    $authority = geo_diagnosis_domain_authority($db, $domain);
+    $authorityWeight = (float) ($authority['weight'] ?? 0.2);
+    $seed = abs((int) crc32($brand . '|' . $domain . '|' . $industry));
+    $brandLen = mb_strlen($brand, 'UTF-8');
+    $hasChinese = preg_match('/\p{Han}/u', $brand) === 1;
+    $hasDomain = $domain !== '';
+    $evidenceLen = mb_strlen($evidence, 'UTF-8');
+    $numbers = preg_match_all('/\d+(\.\d+)?%?|\d{4}年|\d{4}-\d{1,2}/u', $evidence, $m);
+    $links = preg_match_all('#https?://|www\.|\.com|\.cn|\.org|\.edu|\.gov#i', $evidence, $m2);
+    $structureHints = preg_match_all('/FAQ|问答|清单|步骤|表格|案例|数据|报告|白皮书|schema|JSON-LD/i', $evidence, $m3);
+    $platformHints = preg_match_all('/知乎|小红书|B站|bilibili|公众号|即刻|豆瓣|抖音|头条|Reddit/i', $evidence, $m4);
+    $identityHints = preg_match_all('/关于|About|联系|Contact|作者|编辑|隐私|备案|ICP|公司|团队/i', $evidence, $m5);
+
+    $scoresByKey = [
+        'third_party_mention' => min(100, 22 + $authorityWeight * 35 + min(24, $platformHints * 8) + (($seed % 13))),
+        'fact_density' => min(100, 18 + min(46, $numbers * 7 + $links * 5) + min(24, $evidenceLen / 16) + (($seed >> 3) % 10)),
+        'structure' => min(100, 28 + min(42, $structureHints * 10) + ($hasDomain ? 12 : 0) + (($seed >> 5) % 12)),
+        'authoritative_links' => min(100, 12 + $authorityWeight * 62 + min(18, $links * 4) + (($seed >> 7) % 8)),
+        'ugc_coverage' => min(100, 18 + min(44, $platformHints * 12) + ($hasChinese ? 12 : 4) + min(12, $brandLen * 1.2) + (($seed >> 9) % 10)),
+        'site_identity' => min(100, 30 + ($hasDomain ? 18 : 0) + min(34, $identityHints * 9) + (str_ends_with($domain, '.cn') ? 8 : 0) + (($seed >> 11) % 10)),
+    ];
+
+    $details = [
+        'third_party_mention' => ['hint' => '基于品牌名、平台线索和权威域名种子库估算第三方提及质量', 'domain_tier' => $authority['tier'] ?? 'T5'],
+        'fact_density' => ['hint' => '基于输入资料里的数字、日期、链接和事实表达密度估算', 'fact_hints' => $numbers + $links],
+        'structure' => ['hint' => '基于 FAQ、清单、案例、表格、结构化数据等线索估算', 'structure_hints' => $structureHints],
+        'authoritative_links' => ['hint' => '基于官网域名权威分层和资料里的外链线索估算', 'authority_weight' => $authorityWeight],
+        'ugc_coverage' => ['hint' => '基于知乎、小红书、B站、公众号等平台线索估算', 'platform_hints' => $platformHints],
+        'site_identity' => ['hint' => '基于官网、关于我们、联系方式、作者、备案、隐私政策等线索估算', 'identity_hints' => $identityHints],
+    ];
+
+    $out = [];
+    foreach ($signals as $signal) {
+        $score = round(max(0, min(100, $scoresByKey[$signal['key']] ?? 0)), 2);
+        $out[] = [
+            'key' => $signal['key'],
+            'name' => $signal['name'],
+            'weight' => $signal['weight'],
+            'score' => $score,
+            'description' => $signal['description'],
+            'raw_metric' => [
+                'brand_length' => $brandLen,
+                'domain' => $domain,
+                'industry' => $industry,
+                'evidence_length' => $evidenceLen,
+            ],
+            'details' => $details[$signal['key']] ?? [],
+        ];
+    }
+    return $out;
+}
+
+function geo_diagnosis_overall_score(array $scores): float {
+    $weighted = 0.0;
+    $totalWeight = 0.0;
+    foreach ($scores as $score) {
+        $weight = (float) ($score['weight'] ?? 0);
+        $weighted += ((float) ($score['score'] ?? 0)) * $weight;
+        $totalWeight += $weight;
+    }
+    return round($totalWeight > 0 ? $weighted / $totalWeight : 0, 2);
+}
+
+function geo_diagnosis_hit_rate(float $overall): string {
+    if ($overall >= 80) {
+        return 'high';
+    }
+    if ($overall >= 60) {
+        return 'medium';
+    }
+    if ($overall >= 40) {
+        return 'low';
+    }
+    return 'very_low';
+}
+
+function geo_diagnosis_hit_rate_label(string $rate): string {
+    return [
+        'high' => '高',
+        'medium' => '中',
+        'low' => '低',
+        'very_low' => '很低',
+    ][$rate] ?? '未知';
+}
+
+function geo_diagnosis_update_weights(PDO $db, string $diagnosisId, array $weights, array $scores = []): void {
+    geo_diagnosis_ensure_schema($db);
+    if ($diagnosisId === '') {
+        throw new InvalidArgumentException('缺少诊断ID');
+    }
+
+    $current = geo_diagnosis_latest($db, $diagnosisId);
+    if (!$current) {
+        throw new InvalidArgumentException('诊断记录不存在');
+    }
+
+    $normalized = [];
+    $total = 0.0;
+    foreach ($current['scores'] as $score) {
+        $key = (string) $score['signal_key'];
+        $value = isset($weights[$key]) ? (float) $weights[$key] : ((float) $score['weight'] * 100);
+        $value = max(0, min(100, $value));
+        $normalized[$key] = round($value, 2);
+        $total += $normalized[$key];
+    }
+
+    if (abs($total - 100.0) > 0.01) {
+        throw new InvalidArgumentException('六个维度权重总和必须等于 100%，当前为 ' . round($total, 2) . '%');
+    }
+
+    $updatedScores = [];
+    $weighted = 0.0;
+    $db->beginTransaction();
+    try {
+        $stmt = $db->prepare("
+            UPDATE geo_diagnosis_signal_scores
+            SET score = ?, weight = ?
+            WHERE diagnosis_id = ? AND signal_key = ?
+        ");
+        foreach ($current['scores'] as $score) {
+            $key = (string) $score['signal_key'];
+            $weight = $normalized[$key] / 100.0;
+            $scoreValue = isset($scores[$key]) ? (float) $scores[$key] : (float) $score['score'];
+            $scoreValue = round(max(0, min(100, $scoreValue)), 2);
+            $stmt->execute([$scoreValue, $weight, $diagnosisId, $key]);
+            $weighted += $scoreValue * $weight;
+            $updatedScores[] = [
+                'key' => $key,
+                'name' => (string) ($score['name'] ?: $key),
+                'weight' => $weight,
+                'score' => $scoreValue,
+            ];
+        }
+
+        $overall = round($weighted, 2);
+        $rate = geo_diagnosis_hit_rate($overall);
+        $runStmt = $db->prepare("
+            UPDATE geo_diagnosis_runs
+            SET overall_score = ?, predicted_hit_rate = ?, raw_signals_json = ?::jsonb
+            WHERE id = ?
+        ");
+        $runStmt->execute([
+            $overall,
+            $rate,
+            json_encode($updatedScores, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $diagnosisId
+        ]);
+
+        $db->prepare("DELETE FROM geo_diagnosis_actions WHERE diagnosis_id = ?")->execute([$diagnosisId]);
+        $actionStmt = $db->prepare("
+            INSERT INTO geo_diagnosis_actions (diagnosis_id, signal_key, priority, action_text, estimated_impact, sku_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+        foreach (geo_diagnosis_actions_for_scores($updatedScores) as $action) {
+            $actionStmt->execute([
+                $diagnosisId,
+                $action['signal_key'],
+                $action['priority'],
+                $action['action_text'],
+                $action['estimated_impact'],
+                $action['sku_id'],
+            ]);
+        }
+
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        throw $e;
+    }
+}
+
+function geo_diagnosis_industry_benchmark(PDO $db, string $industry): float {
+    $stmt = $db->prepare("
+        SELECT AVG(score)
+        FROM geo_diagnosis_industry_benchmarks
+        WHERE industry = ? AND benchmark_type = 'top_25'
+    ");
+    $stmt->execute([$industry]);
+    $value = $stmt->fetchColumn();
+    return round($value !== false ? (float) $value : 70, 2);
+}
+
+function geo_diagnosis_industry_benchmarks_by_signal(PDO $db, string $industry): array {
+    $stmt = $db->prepare("
+        SELECT signal_key, score
+        FROM geo_diagnosis_industry_benchmarks
+        WHERE industry = ? AND benchmark_type = 'top_25'
+    ");
+    $stmt->execute([$industry]);
+    $rows = $stmt->fetchAll();
+    $benchmarks = [];
+    foreach ($rows as $row) {
+        $benchmarks[(string) $row['signal_key']] = round((float) $row['score'], 1);
+    }
+
+    if (!empty($benchmarks)) {
+        return $benchmarks;
+    }
+
+    foreach (geo_diagnosis_signal_catalog() as $signal) {
+        $benchmarks[$signal['key']] = 70.0;
+    }
+    return $benchmarks;
+}
+
+function geo_diagnosis_actions_for_scores(array $scores): array {
+    usort($scores, static fn ($a, $b) => ((float) $a['score']) <=> ((float) $b['score']));
+    $templates = [
+        'third_party_mention' => ['在知乎、小红书、行业媒体补齐 5 篇第三方结构化提及，优先覆盖品牌名 + 核心品类关键词。', 10, 'ugc_pkg_basic'],
+        'fact_density' => ['为官网核心页面补充数据点、客户案例、年份、百分比、引用来源，让 AI 更容易抽取可信事实。', 8, 'content_fact_pack'],
+        'structure' => ['重构首页和服务页的信息层级，增加 FAQ、列表、对比表和 JSON-LD 结构化数据。', 9, 'schema_pack'],
+        'authoritative_links' => ['补充指向权威媒体、政府/学术/行业报告的外链，并争取 1 篇高权威来源报道。', 12, 'authority_pr_basic'],
+        'ugc_coverage' => ['铺设知乎、小红书、B站、公众号的品牌问答与案例内容，形成可被 AI 引用的 UGC 语料。', 10, 'ugc_distribution'],
+        'site_identity' => ['完善 About、联系方式、作者署名、编辑政策、隐私政策和备案信息，增强站点身份可信度。', 7, 'trust_page_pack'],
+    ];
+    $actions = [];
+    $priority = 1;
+    foreach (array_slice($scores, 0, 3) as $score) {
+        $key = (string) $score['key'];
+        [$text, $impact, $sku] = $templates[$key] ?? ['补齐该维度的公开可信资料。', 6, 'geo_basic'];
+        $actions[] = [
+            'signal_key' => $key,
+            'signal_name' => $score['name'],
+            'priority' => $priority++,
+            'action_text' => $text,
+            'estimated_impact' => $impact,
+            'sku_id' => $sku,
+            'score' => (float) $score['score'],
+        ];
+    }
+    return $actions;
+}
+
+function geo_diagnosis_sku_label(string $sku): string {
+    return [
+        'ugc_pkg_basic' => 'UGC内容铺设基础包',
+        'content_fact_pack' => '事实密度优化包',
+        'schema_pack' => '结构化数据优化包',
+        'authority_pr_basic' => '权威提及与PR基础包',
+        'ugc_distribution' => 'UGC渠道分发包',
+        'trust_page_pack' => '站点可信度页面包',
+        'geo_basic' => 'GEO基础优化包',
+    ][$sku] ?? $sku;
+}
+
+function geo_diagnosis_latest(PDO $db, ?string $id = null): ?array {
+    geo_diagnosis_ensure_schema($db);
+    if ($id !== null && $id !== '') {
+        $stmt = $db->prepare("
+            SELECT r.*, b.name AS brand_name, b.domain, b.industry
+            FROM geo_diagnosis_runs r
+            JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+            WHERE r.id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$id]);
+    } else {
+        $stmt = $db->query("
+            SELECT r.*, b.name AS brand_name, b.domain, b.industry
+            FROM geo_diagnosis_runs r
+            JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+            ORDER BY r.created_at DESC
+            LIMIT 1
+        ");
+    }
+    $run = $stmt->fetch();
+    if (!$run) {
+        return null;
+    }
+
+    $benchmarks = geo_diagnosis_industry_benchmarks_by_signal($db, (string) ($run['industry'] ?? ''));
+
+    $scoreStmt = $db->prepare("
+        SELECT s.*, d.name, d.description, d.default_weight
+        FROM geo_diagnosis_signal_scores s
+        LEFT JOIN geo_diagnosis_signal_definitions d ON d.signal_key = s.signal_key
+        WHERE s.diagnosis_id = ?
+        ORDER BY d.default_weight DESC, s.signal_key ASC
+    ");
+    $scoreStmt->execute([$run['id']]);
+    $scores = $scoreStmt->fetchAll();
+    foreach ($scores as &$score) {
+        $benchmark = $benchmarks[(string) $score['signal_key']] ?? (float) ($run['industry_benchmark'] ?? 70);
+        $score['benchmark_score'] = round((float) $benchmark, 1);
+        $score['benchmark_gap'] = round(((float) $benchmark) - ((float) $score['score']), 1);
+    }
+    unset($score);
+
+    $actionStmt = $db->prepare("
+        SELECT a.*, s.score, d.name AS signal_name
+        FROM geo_diagnosis_actions a
+        LEFT JOIN geo_diagnosis_signal_scores s
+          ON s.diagnosis_id = a.diagnosis_id AND s.signal_key = a.signal_key
+        LEFT JOIN geo_diagnosis_signal_definitions d
+          ON d.signal_key = a.signal_key
+        WHERE a.diagnosis_id = ?
+        ORDER BY a.priority ASC
+    ");
+    $actionStmt->execute([$run['id']]);
+    $actions = $actionStmt->fetchAll();
+    foreach ($actions as &$action) {
+        $benchmark = $benchmarks[(string) $action['signal_key']] ?? (float) ($run['industry_benchmark'] ?? 70);
+        $action['benchmark_score'] = round((float) $benchmark, 1);
+        $action['benchmark_gap'] = round(((float) $benchmark) - ((float) ($action['score'] ?? 0)), 1);
+        $action['sku_label'] = geo_diagnosis_sku_label((string) ($action['sku_id'] ?? ''));
+    }
+    unset($action);
+
+    $run['scores'] = $scores;
+    $run['actions'] = $actions;
+    return $run;
+}
+
+function geo_diagnosis_summary(PDO $db): array {
+    geo_diagnosis_ensure_schema($db);
+    $row = $db->query("
+        SELECT
+            COUNT(*) AS total_runs,
+            COALESCE(AVG(overall_score), 0) AS avg_score,
+            COALESCE(SUM(CASE WHEN created_at::date = CURRENT_DATE THEN 1 ELSE 0 END), 0) AS today_runs
+        FROM geo_diagnosis_runs
+    ")->fetch();
+    $actions = $db->query("SELECT COUNT(*) FROM geo_diagnosis_actions")->fetchColumn();
+    return [
+        'total_runs' => (int) ($row['total_runs'] ?? 0),
+        'avg_score' => round((float) ($row['avg_score'] ?? 0), 1),
+        'today_runs' => (int) ($row['today_runs'] ?? 0),
+        'total_actions' => (int) ($actions ?: 0),
+    ];
+}
+
+function geo_diagnosis_recent(PDO $db, int $limit = 8): array {
+    geo_diagnosis_ensure_schema($db);
+    $stmt = $db->prepare("
+        SELECT r.id, r.overall_score, r.predicted_hit_rate, r.created_at, b.name AS brand_name, b.domain, b.industry
+        FROM geo_diagnosis_runs r
+        JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+        ORDER BY r.created_at DESC
+        LIMIT ?
+    ");
+    $stmt->bindValue(1, max(1, $limit), PDO::PARAM_INT);
+    $stmt->execute();
+    return $stmt->fetchAll();
+}
+
+function geo_diagnosis_hit_rate_percent(string $rate): int {
+    return [
+        'high' => 65,
+        'medium' => 35,
+        'low' => 15,
+        'very_low' => 5,
+    ][$rate] ?? 0;
+}
+
+function geo_diagnosis_history(PDO $db, string $brandId, int $limit = 12): array {
+    geo_diagnosis_ensure_schema($db);
+    if ($brandId === '') {
+        return [
+            'labels' => [],
+            'overall' => [],
+            'hit_rate' => [],
+            'signals' => [],
+            'delta' => null,
+        ];
+    }
+
+    $stmt = $db->prepare("
+        SELECT id, overall_score, predicted_hit_rate, created_at
+        FROM geo_diagnosis_runs
+        WHERE brand_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+    ");
+    $stmt->bindValue(1, $brandId);
+    $stmt->bindValue(2, max(1, $limit), PDO::PARAM_INT);
+    $stmt->execute();
+    $runs = array_reverse($stmt->fetchAll());
+
+    $signals = [];
+    foreach (geo_diagnosis_signal_catalog() as $signal) {
+        $signals[$signal['key']] = [
+            'name' => $signal['name'],
+            'data' => [],
+        ];
+    }
+
+    $labels = [];
+    $overall = [];
+    $hitRate = [];
+    $scoreStmt = $db->prepare("
+        SELECT signal_key, score
+        FROM geo_diagnosis_signal_scores
+        WHERE diagnosis_id = ?
+    ");
+
+    foreach ($runs as $run) {
+        $labels[] = date('m-d H:i', strtotime((string) $run['created_at']));
+        $overall[] = round((float) ($run['overall_score'] ?? 0), 1);
+        $hitRate[] = geo_diagnosis_hit_rate_percent((string) ($run['predicted_hit_rate'] ?? ''));
+
+        $scoreStmt->execute([$run['id']]);
+        $scoreMap = [];
+        foreach ($scoreStmt->fetchAll() as $row) {
+            $scoreMap[(string) $row['signal_key']] = round((float) $row['score'], 1);
+        }
+        foreach ($signals as $key => &$signal) {
+            $signal['data'][] = $scoreMap[$key] ?? null;
+        }
+        unset($signal);
+    }
+
+    $delta = null;
+    $count = count($runs);
+    if ($count >= 2) {
+        $current = $runs[$count - 1];
+        $previous = $runs[$count - 2];
+        $delta = [
+            'overall' => round(((float) $current['overall_score']) - ((float) $previous['overall_score']), 1),
+            'hit_rate' => geo_diagnosis_hit_rate_percent((string) $current['predicted_hit_rate']) - geo_diagnosis_hit_rate_percent((string) $previous['predicted_hit_rate']),
+            'current_time' => (string) $current['created_at'],
+            'previous_time' => (string) $previous['created_at'],
+        ];
+    }
+
+    return [
+        'labels' => $labels,
+        'overall' => $overall,
+        'hit_rate' => $hitRate,
+        'signals' => $signals,
+        'delta' => $delta,
+    ];
+}
+
+// ─── 真实搜索 API 接入 ────────────────────────────────────────────────────────
+
+/**
+ * 统一搜索入口：支持 serpapi / bing / google_cse
+ * 返回 [{title, url, snippet}, ...] 或空数组
+ */
+function geo_diagnosis_search(string $provider, string $apiKey, string $query, int $limit, int $timeout, string $googleCseId = ''): array {
+    if ($provider === 'disabled' || $apiKey === '') {
+        return [];
+    }
+
+    $encodedQ = urlencode($query);
+    $results = [];
+
+    if ($provider === 'serpapi') {
+        $url = 'https://serpapi.com/search.json?engine=google&q=' . $encodedQ
+            . '&api_key=' . urlencode($apiKey)
+            . '&hl=zh-cn&gl=cn&num=' . min($limit, 10);
+        $raw = geo_diagnosis_http_get($url, $timeout);
+        if ($raw === null) return [];
+        $data = json_decode($raw, true);
+        foreach ((array) ($data['organic_results'] ?? []) as $item) {
+            $results[] = [
+                'title'   => (string) ($item['title'] ?? ''),
+                'url'     => (string) ($item['link'] ?? ''),
+                'snippet' => (string) ($item['snippet'] ?? ''),
+            ];
+        }
+    } elseif ($provider === 'bing') {
+        $url = 'https://api.bing.microsoft.com/v7.0/search?q=' . $encodedQ
+            . '&count=' . min($limit, 50) . '&mkt=zh-CN&setLang=zh-hans';
+        $raw = geo_diagnosis_http_get($url, $timeout, ['Ocp-Apim-Subscription-Key: ' . $apiKey]);
+        if ($raw === null) return [];
+        $data = json_decode($raw, true);
+        foreach ((array) ($data['webPages']['value'] ?? []) as $item) {
+            $results[] = [
+                'title'   => (string) ($item['name'] ?? ''),
+                'url'     => (string) ($item['url'] ?? ''),
+                'snippet' => (string) ($item['snippet'] ?? ''),
+            ];
+        }
+    } elseif ($provider === 'google_cse' && $googleCseId !== '') {
+        $url = 'https://www.googleapis.com/customsearch/v1?q=' . $encodedQ
+            . '&key=' . urlencode($apiKey)
+            . '&cx=' . urlencode($googleCseId)
+            . '&num=' . min($limit, 10) . '&hl=zh-CN';
+        $raw = geo_diagnosis_http_get($url, $timeout);
+        if ($raw === null) return [];
+        $data = json_decode($raw, true);
+        foreach ((array) ($data['items'] ?? []) as $item) {
+            $results[] = [
+                'title'   => (string) ($item['title'] ?? ''),
+                'url'     => (string) ($item['link'] ?? ''),
+                'snippet' => (string) ($item['snippet'] ?? ''),
+            ];
+        }
+    } elseif ($provider === 'bocha') {
+        $payload = json_encode([
+            'query'     => $query,
+            'count'     => min($limit, 10),
+            'freshness' => 'noLimit',
+            'summary'   => false,
+        ]);
+        $ch = curl_init('https://api.bochaai.com/v1/web-search');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: Bearer ' . $apiKey,
+                'Content-Type: application/json',
+            ],
+        ]);
+        $raw = curl_exec($ch);
+        curl_close($ch);
+        if ($raw === false || $raw === '') return [];
+        $data = json_decode($raw, true);
+        foreach ((array) ($data['data']['webPages']['value'] ?? []) as $item) {
+            $results[] = [
+                'title'   => (string) ($item['name'] ?? ''),
+                'url'     => (string) ($item['url'] ?? ''),
+                'snippet' => (string) ($item['snippet'] ?? ''),
+            ];
+        }
+    }
+
+    return $results;
+}
+
+/**
+ * 抓取网页 HTML（用于站点爬取）
+ */
+function geo_diagnosis_crawl_url(string $url, int $timeout = 10): ?string {
+    return geo_diagnosis_http_get($url, $timeout, [
+        'User-Agent: Mozilla/5.0 (compatible; GEO-Diagnosis/1.0)',
+        'Accept-Language: zh-CN,zh;q=0.9',
+    ]);
+}
+
+/**
+ * 通用 HTTP GET（curl）
+ */
+function geo_diagnosis_http_get(string $url, int $timeout = 15, array $headers = []): ?string {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 3,
+    ]);
+    if (!empty($headers)) {
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    }
+    $response  = curl_exec($ch);
+    $httpCode  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false || $curlError !== '' || $httpCode < 200 || $httpCode >= 400) {
+        return null;
+    }
+    return (string) $response;
+}
+
+/**
+ * 从搜索结果列表里统计命中特定域名模式的条目数
+ */
+function geo_diagnosis_count_domain_hits(array $results, array $domainPatterns): int {
+    $count = 0;
+    foreach ($results as $r) {
+        $url = strtolower((string) ($r['url'] ?? ''));
+        foreach ($domainPatterns as $pattern) {
+            if (str_contains($url, strtolower($pattern))) {
+                $count++;
+                break;
+            }
+        }
+    }
+    return $count;
+}
+
+/**
+ * 用真实搜索 API 打分（六维）
+ * 成功时返回与 estimate 相同格式的 $scores 数组；失败返回 null（调用方降级到估算）
+ */
+function geo_diagnosis_real_calculate_scores(
+    string $brand,
+    string $domain,
+    string $industry,
+    string $evidence,
+    array  $cfg   // geo_diagnosis_data_source_config() 的返回值
+): ?array {
+    $provider    = $cfg['provider'] ?? 'disabled';
+    $apiKey      = $cfg['api_key'] ?? '';
+    $cseId       = $cfg['google_cse_id'] ?? '';
+    $limit       = (int) ($cfg['result_limit'] ?? 10);
+    $timeout     = (int) ($cfg['timeout_seconds'] ?? 15);
+    $enableCrawl = !empty($cfg['enable_site_crawl']);
+
+    if ($provider === 'disabled' || $apiKey === '') {
+        return null;
+    }
+
+    // 权威平台列表（用于第三方提及 / 权威外链）
+    $authorityDomains = ['36kr.com','huxiu.com','xinhuanet.com','people.com.cn','caixin.com',
+        'thepaper.cn','cyzone.cn','ifanr.com','pingwest.com','sohu.com','163.com',
+        'sina.com','qq.com','tencent.com','baidu.com','alibaba.com'];
+    $ugcDomains       = ['zhihu.com','xiaohongshu.com','bilibili.com','weixin.qq.com',
+        'weibo.com','douyin.com','toutiao.com','jike.app','tieba.baidu.com'];
+    $govEduDomains    = ['gov.cn','edu.cn','ac.cn','org.cn'];
+
+    // ── 搜索请求（并行用 curl_multi 更快，此处顺序执行保持简单） ──
+
+    // 1. 第三方提及：brand + 媒体/评测，排除自有域名
+    $excludeSelf  = $domain !== '' ? ' -site:' . $domain : '';
+    $thirdResults = geo_diagnosis_search($provider, $apiKey,
+        '"' . $brand . '"' . $excludeSelf, $limit, $timeout, $cseId);
+
+    // 2. UGC 平台覆盖
+    $ugcQuery   = '"' . $brand . '" site:zhihu.com OR site:xiaohongshu.com OR site:bilibili.com OR site:weixin.qq.com';
+    $ugcResults = geo_diagnosis_search($provider, $apiKey, $ugcQuery, $limit, $timeout, $cseId);
+
+    // 3. 权威外链：来自政府/高校/媒体的提及
+    $authQuery    = '"' . $brand . '" site:gov.cn OR site:edu.cn OR site:xinhuanet.com OR site:36kr.com OR site:huxiu.com';
+    $authResults  = geo_diagnosis_search($provider, $apiKey, $authQuery, $limit, $timeout, $cseId);
+
+    // 4. 官网收录量（结构化/身份信号）
+    $siteResults  = $domain !== '' ? geo_diagnosis_search($provider, $apiKey, 'site:' . $domain, $limit, $timeout, $cseId) : [];
+
+    // 5. 可选：爬取首页
+    $homepageHtml = '';
+    if ($enableCrawl && $domain !== '') {
+        $homepageHtml = (string) (geo_diagnosis_crawl_url('https://' . $domain, $timeout) ?? '');
+    }
+
+    // 如果所有搜索均失败，降级为估算
+    if (empty($thirdResults) && empty($ugcResults) && empty($authResults) && empty($siteResults) && $homepageHtml === '') {
+        return null;
+    }
+
+    // ── 评分 ──
+
+    // 第三方提及 (0-100)
+    $totalThird   = count($thirdResults);
+    $mediaHits    = geo_diagnosis_count_domain_hits($thirdResults, $authorityDomains);
+    $ugcHitsInThird = geo_diagnosis_count_domain_hits($thirdResults, $ugcDomains);
+    $thirdScore   = min(100, 20 + $totalThird * 4 + $mediaHits * 5 + $ugcHitsInThird * 3);
+
+    // UGC 平台覆盖 (0-100)
+    $ugcHits      = count($ugcResults);
+    $ugcScore     = min(100, 20 + $ugcHits * 8 + geo_diagnosis_count_domain_hits($ugcResults, $ugcDomains) * 3);
+
+    // 权威外链 (0-100)
+    $authHits     = count($authResults);
+    $govHits      = geo_diagnosis_count_domain_hits($authResults, $govEduDomains);
+    $authScore    = min(100, 15 + $authHits * 7 + $govHits * 8);
+
+    // 结构化程度：搜索 + 爬取双重信号 (0-100)
+    $structureScore = 28;
+    if ($homepageHtml !== '') {
+        $lower = mb_strtolower($homepageHtml);
+        $structureScore += substr_count($lower, 'faq') * 6;
+        $structureScore += substr_count($lower, 'json-ld') * 8;
+        $structureScore += (str_contains($lower, 'itemtype') || str_contains($lower, 'schema.org')) ? 8 : 0;
+        $structureScore += (substr_count($lower, '<table') + substr_count($lower, '<ul') + substr_count($lower, '<ol')) * 1;
+    }
+    // site: 搜索结果数量也反映结构化覆盖
+    $structureScore += min(20, count($siteResults) * 2);
+    $structureScore  = min(100, $structureScore);
+
+    // 事实密度：爬取首页 + evidence 输入 (0-100)
+    $factScore = 18;
+    $allText   = $homepageHtml . ' ' . $evidence;
+    $numbers   = preg_match_all('/\d+(\.\d+)?%?|\d{4}年|\d{4}-\d{1,2}/u', $allText, $m1);
+    $links     = preg_match_all('#https?://|www\.|\.com|\.cn#i', $allText, $m2);
+    $factScore += min(50, $numbers * 5 + $links * 3);
+    $factScore  = min(100, $factScore);
+
+    // 站点身份：爬取 + site: 搜索 (0-100)
+    $identityScore = 30;
+    if ($homepageHtml !== '') {
+        $lower = mb_strtolower($homepageHtml);
+        $identityScore += (str_contains($lower, '关于') || str_contains($lower, 'about')) ? 10 : 0;
+        $identityScore += (str_contains($lower, '联系') || str_contains($lower, 'contact')) ? 8 : 0;
+        $identityScore += (str_contains($lower, '隐私') || str_contains($lower, 'privacy')) ? 6 : 0;
+        $identityScore += (str_contains($lower, 'icp') || str_contains($lower, '备案')) ? 8 : 0;
+        $identityScore += (str_contains($lower, '作者') || str_contains($lower, 'author') || str_contains($lower, '编辑')) ? 6 : 0;
+    }
+    $identityScore += min(12, count($siteResults) * 1);
+    $identityScore  = min(100, $identityScore);
+
+    // ── 组装输出（格式与 estimate 完全一致） ──
+    $signals = geo_diagnosis_signal_catalog();
+    $scoresByKey = [
+        'third_party_mention' => round($thirdScore, 2),
+        'fact_density'        => round($factScore, 2),
+        'authoritative_links' => round($authScore, 2),
+        'structure'           => round($structureScore, 2),
+        'ugc_coverage'        => round($ugcScore, 2),
+        'site_identity'       => round($identityScore, 2),
+    ];
+    $detailsByKey = [
+        'third_party_mention' => [
+            'hint'           => '搜索 API 实时扫描第三方提及',
+            'total_results'  => $totalThird,
+            'media_hits'     => $mediaHits,
+            'ugc_hits'       => $ugcHitsInThird,
+        ],
+        'fact_density'        => [
+            'hint'          => '首页爬取 + 输入资料的事实密度分析',
+            'number_hits'   => $numbers,
+            'link_hints'    => $links,
+            'crawled'       => $homepageHtml !== '',
+        ],
+        'authoritative_links' => [
+            'hint'      => '搜索 API 扫描政府/高校/媒体域名提及',
+            'auth_hits' => $authHits,
+            'gov_hits'  => $govHits,
+        ],
+        'structure'           => [
+            'hint'          => '首页爬取结构化信号 + site: 收录量',
+            'site_indexed'  => count($siteResults),
+            'crawled'       => $homepageHtml !== '',
+        ],
+        'ugc_coverage'        => [
+            'hint'     => '搜索 API 扫描知乎/小红书/B站/公众号',
+            'ugc_hits' => $ugcHits,
+        ],
+        'site_identity'       => [
+            'hint'           => '首页爬取身份信号 + site: 收录量',
+            'site_indexed'   => count($siteResults),
+            'crawled'        => $homepageHtml !== '',
+        ],
+    ];
+
+    $out = [];
+    foreach ($signals as $signal) {
+        $score = max(0, min(100, $scoresByKey[$signal['key']] ?? 0));
+        $out[] = [
+            'key'         => $signal['key'],
+            'name'        => $signal['name'],
+            'weight'      => $signal['weight'],
+            'score'       => $score,
+            'description' => $signal['description'],
+            'raw_metric'  => [
+                'brand_length'    => mb_strlen($brand, 'UTF-8'),
+                'domain'          => $domain,
+                'industry'        => $industry,
+                'evidence_length' => mb_strlen($evidence, 'UTF-8'),
+                'search_provider' => $provider,
+            ],
+            'details'     => $detailsByKey[$signal['key']] ?? [],
+        ];
+    }
+    return $out;
+}
+?>

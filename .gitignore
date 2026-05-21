@@ -1,0 +1,52 @@
+
+*.bak
+bin/git/state/
+bin/logs/*
+config/geo-monitor.local.json
+data/backups/
+data/browser-profiles/
+data/db/
+data/geo-monitor/
+data/login_attempts.json
+*.db
+*.db-*
+*.db.*
+docs/git/repo/
+docs/git/state/
+**/.DS_Store
+.DS_Store
+.env
+.env.*
+!.env.delivery.example
+!.env.dongluoji-client-01.example
+!.env.example
+*.flag
+.geoflow.json
+geo-system-full-dl.zip
+.local/
+# Local docs snapshot repo
+# Local GEOFlow CLI config
+# Local git automation state
+# Local runtime markers
+*.log
+logs/*
+logs/.docker-ready
+!logs/.htaccess
+# macOS
+*.pid
+*.pid.lock
+# Runtime database and local backups
+# Runtime logs
+# Runtime uploads
+*.sqlite
+*.sqlite-*
+*.temp
+# Temporary exports and backups
+*.tmp
+tmp-*.json
+tmp-*.md
+tmp-*.txt
+uploads/images/
+uploads/knowledge/
+uploads/tmp/
+*.zip

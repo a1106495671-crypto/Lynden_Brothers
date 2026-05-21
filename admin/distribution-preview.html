@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>媒体分发改版预览</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <header class="border-b bg-white">
+    <div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+      <div class="text-xl font-semibold">董逻辑 GEO 交付后台</div>
+      <nav class="flex items-center gap-2 text-sm text-slate-500">
+        <span class="rounded-md px-3 py-2">首页</span>
+        <span class="rounded-md px-3 py-2">诊断</span>
+        <span class="rounded-md px-3 py-2">策略</span>
+        <span class="rounded-md bg-blue-50 px-3 py-2 font-medium text-blue-600">交付</span>
+        <span class="rounded-md px-3 py-2">监测</span>
+        <span class="rounded-md px-3 py-2">AI配置</span>
+      </nav>
+      <div class="text-sm text-slate-500">欢迎，admin</div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-7xl px-6 py-8">
+    <div class="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">媒体分发</h1>
+        <p class="mt-2 text-sm text-slate-600">把已审核文章投放到指定渠道，统一管理分发资源、队列状态和发布结果。</p>
+      </div>
+      <div class="flex gap-3">
+        <button class="inline-flex items-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
+          <i data-lucide="file-text" class="mr-2 h-4 w-4"></i>
+          返回文章
+        </button>
+        <button class="inline-flex items-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm">
+          <i data-lucide="play-circle" class="mr-2 h-4 w-4"></i>
+          执行分发队列
+        </button>
+      </div>
+    </div>
+
+    <section class="mb-8 grid grid-cols-1 gap-4 md:grid-cols-5">
+      <div class="rounded-lg border bg-white p-5 shadow-sm">
+        <div class="flex items-center gap-4">
+          <i data-lucide="database" class="h-7 w-7 text-blue-600"></i>
+          <div><div class="text-sm font-medium text-slate-500">分发资源</div><div class="text-2xl font-bold">8</div></div>
+        </div>
+      </div>
+      <div class="rounded-lg border bg-white p-5 shadow-sm">
+        <div class="flex items-center gap-4">
+          <i data-lucide="check-circle" class="h-7 w-7 text-emerald-600"></i>
+          <div><div class="text-sm font-medium text-slate-500">启用资源</div><div class="text-2xl font-bold">6</div></div>
+        </div>
+      </div>
+      <div class="rounded-lg border bg-white p-5 shadow-sm">
+        <div class="flex items-center gap-4">
+          <i data-lucide="clock" class="h-7 w-7 text-amber-600"></i>
+          <div><div class="text-sm font-medium text-slate-500">待分发</div><div class="text-2xl font-bold">12</div></div>
+        </div>
+      </div>
+      <div class="rounded-lg border bg-white p-5 shadow-sm">
+        <div class="flex items-center gap-4">
+          <i data-lucide="send" class="h-7 w-7 text-teal-600"></i>
+          <div><div class="text-sm font-medium text-slate-500">渠道已发布</div><div class="text-2xl font-bold">34</div></div>
+        </div>
+      </div>
+      <div class="rounded-lg border bg-white p-5 shadow-sm">
+        <div class="flex items-center gap-4">
+          <i data-lucide="alert-circle" class="h-7 w-7 text-red-600"></i>
+          <div><div class="text-sm font-medium text-slate-500">分发失败</div><div class="text-2xl font-bold">2</div></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <section class="rounded-lg border bg-white shadow-sm lg:col-span-2">
+        <div class="border-b px-6 py-5">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h2 class="text-xl font-semibold">创建分发计划</h2>
+              <p class="mt-1 text-sm text-slate-500">只选择已完成审核的内容，再投放到对应分发资源。</p>
+            </div>
+            <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">内容生产之后的下一步</span>
+          </div>
+        </div>
+
+        <div class="space-y-6 p-6">
+          <div>
+            <label class="mb-2 block text-sm font-semibold text-slate-700">1. 选择已审核文章</label>
+            <select class="block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm">
+              <option>品牌 GEO 服务商如何进入 AI 引用结果｜已审核</option>
+              <option>AI 搜索时代，B2B SaaS 内容如何建立可信度｜已审核</option>
+              <option>生成式搜索优化和传统 SEO 的区别｜已审核</option>
+            </select>
+            <div class="mt-3 rounded-lg bg-slate-50 p-4 text-sm text-slate-600">
+              <div class="font-medium text-slate-900">文章摘要</div>
+              <p class="mt-1">本文用于解释 GEO 服务的诊断、内容资产建设与持续监测逻辑，适合投放到知乎、行业媒体和企业服务类门户。</p>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-blue-100 bg-blue-50 p-5">
+            <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <label class="block text-sm font-semibold text-blue-900">2. 选择客户行业并生成分发权重</label>
+                <p class="mt-2 text-sm text-blue-800">先按客户行业确定 AI 偏好和信源占比，再保留通用重媒体，最后从价格表里补充可执行资源。</p>
+              </div>
+              <select class="industry-select rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-900 shadow-sm">
+                <option>B2B SaaS / 企业服务</option>
+                <option>医疗 / 健康</option>
+                <option>消费品 / 美妆 / 食品</option>
+                <option>教育 / 知识付费</option>
+                <option>金融 / 投资</option>
+                <option>本地生活 / 餐饮</option>
+              </select>
+            </div>
+            <div class="mt-5 grid gap-4 md:grid-cols-3">
+              <div class="rounded-lg bg-white p-4">
+                <div class="text-xs font-semibold text-slate-500">AI 优先级</div>
+                <div id="aiPriority" class="mt-3 flex flex-wrap gap-2">
+                  <span class="rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white">#1 DeepSeek</span>
+                  <span class="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">#2 通义</span>
+                  <span class="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">#3 Kimi</span>
+                </div>
+                <p id="aiNote" class="mt-3 text-sm text-slate-600">B2B 决策者更常用技术问答、媒体背书和企业资料做判断。</p>
+              </div>
+              <div class="rounded-lg bg-white p-4">
+                <div class="text-xs font-semibold text-slate-500">资源占比</div>
+                <div id="mixRows" class="mt-3 space-y-2 text-sm">
+                  <div class="flex items-center justify-between"><span>通用重媒体</span><strong>35%</strong></div>
+                  <div class="flex items-center justify-between"><span>行业权威信源</span><strong>45%</strong></div>
+                  <div class="flex items-center justify-between"><span>价格表补充资源</span><strong>20%</strong></div>
+                </div>
+              </div>
+              <div class="rounded-lg bg-white p-4">
+                <div class="text-xs font-semibold text-slate-500">保留原则</div>
+                <p id="principleText" class="mt-3 text-sm text-slate-600">知乎、公众号、头条作为基础保留；B2B 额外优先 CSDN、36氪、掘金、钉钉文档和 GitHub README。</p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="mb-3 flex items-center justify-between">
+              <label class="block text-sm font-semibold text-slate-700">3. 按行业权重选择分发资源</label>
+              <div class="flex gap-2 text-xs">
+                <button class="rounded-full bg-slate-100 px-3 py-1 text-slate-600">全部</button>
+                <button class="rounded-full bg-blue-50 px-3 py-1 text-blue-700">通用重媒体</button>
+                <button class="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">行业权威</button>
+                <button class="rounded-full bg-slate-100 px-3 py-1 text-slate-600">价格表补充</button>
+              </div>
+            </div>
+            <div class="mb-4 rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600">
+              <span class="font-semibold text-slate-900">资源来源分三层：</span>
+              通用重媒体必须保留；行业权威信源按行业白名单保留；<span class="font-semibold">news.growume.com</span> 价格表只负责补充可下单媒体，不再代表全部分发策略。
+            </div>
+
+            <div class="overflow-hidden rounded-lg border border-slate-200">
+              <table class="min-w-full divide-y divide-slate-200">
+                <thead class="bg-slate-50">
+                  <tr>
+                    <th class="w-[6%] px-4 py-3 text-left text-xs font-medium text-slate-500">选择</th>
+                    <th class="w-[24%] px-4 py-3 text-left text-xs font-medium text-slate-500">信源</th>
+                    <th class="w-[13%] px-4 py-3 text-left text-xs font-medium text-slate-500">资源类型</th>
+                    <th class="w-[22%] px-4 py-3 text-left text-xs font-medium text-slate-500">行业权重</th>
+                    <th class="w-[35%] px-4 py-3 text-left text-xs font-medium text-slate-500">执行方式</th>
+                  </tr>
+                </thead>
+                <tbody id="resourceRows" class="divide-y divide-slate-200 bg-white text-sm">
+                  <tr class="hover:bg-slate-50">
+                    <td class="px-4 py-4"><input data-price="0" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+                    <td class="px-4 py-4">
+                      <div class="font-semibold text-slate-900">知乎</div>
+                      <div class="mt-1 text-xs text-slate-500">全平台通吃 · 问答和长文沉淀</div>
+                    </td>
+                    <td class="px-4 py-4"><span class="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">通用重媒体</span></td>
+                    <td class="px-4 py-4"><div class="font-semibold">15%</div><div class="text-xs text-slate-500">Kimi 5 / DeepSeek 4 / 通义 4</div></td>
+                    <td class="px-4 py-4 text-xs text-slate-500">必选；可用自有账号、问答代运营或价格表匹配资源执行。</td>
+                  </tr>
+                  <tr class="hover:bg-slate-50">
+                    <td class="px-4 py-4"><input data-price="0" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+                    <td class="px-4 py-4">
+                      <div class="font-semibold text-slate-900">小红书</div>
+                      <div class="mt-1 text-xs text-slate-500">UGC 讨论和体验笔记</div>
+                    </td>
+                    <td class="px-4 py-4"><span class="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">通用重媒体</span></td>
+                    <td class="px-4 py-4"><div class="font-semibold">8%</div><div class="text-xs text-slate-500">消费强，医疗需合规筛选</div></td>
+                    <td class="px-4 py-4 text-xs text-slate-500">保留入口；健康类只发科普和经验型内容，避开医疗承诺。</td>
+                  </tr>
+                  <tr class="hover:bg-slate-50">
+                    <td class="px-4 py-4"><input data-price="0" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+                    <td class="px-4 py-4">
+                      <div class="font-semibold text-slate-900">微信公众号</div>
+                      <div class="mt-1 text-xs text-slate-500">深度内容和品牌自有阵地</div>
+                    </td>
+                    <td class="px-4 py-4"><span class="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">通用重媒体</span></td>
+                    <td class="px-4 py-4"><div class="font-semibold">10%</div><div class="text-xs text-slate-500">元宝 5 / Kimi 3 / DeepSeek 3</div></td>
+                    <td class="px-4 py-4 text-xs text-slate-500">必选；适合沉淀长文、案例、专家观点和客户证据。</td>
+                  </tr>
+                  <tr class="hover:bg-slate-50">
+                    <td class="px-4 py-4"><input data-price="0" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+                    <td class="px-4 py-4">
+                      <div class="font-semibold text-slate-900">今日头条 / 抖音百科</div>
+                      <div class="mt-1 text-xs text-slate-500">字节生态 · 豆包强绑定</div>
+                    </td>
+                    <td class="px-4 py-4"><span class="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">通用重媒体</span></td>
+                    <td class="px-4 py-4"><div class="font-semibold">7%</div><div class="text-xs text-slate-500">豆包偏好 5</div></td>
+                    <td class="px-4 py-4 text-xs text-slate-500">保留；适合做基础曝光、科普解释和品牌实体补充。</td>
+                  </tr>
+                  <tr class="bg-emerald-50/40 hover:bg-emerald-50">
+                    <td class="px-4 py-4"><input data-price="0" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+                    <td class="px-4 py-4">
+                      <div class="font-semibold text-slate-900">丁香医生 / 丁香园</div>
+                      <div class="mt-1 text-xs text-slate-500">医疗健康权威信源</div>
+                    </td>
+                    <td class="px-4 py-4"><span class="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">行业权威</span></td>
+                    <td class="px-4 py-4"><div class="font-semibold">15%</div><div class="text-xs text-slate-500">医疗行业专属保留</div></td>
+                    <td class="px-4 py-4 text-xs text-slate-500">非价格表资源；需人工对接或作为内容引用、专家背书目标。</td>
+                  </tr>
+                  <tr class="bg-emerald-50/40 hover:bg-emerald-50">
+                    <td class="px-4 py-4"><input data-price="0" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+                    <td class="px-4 py-4">
+                      <div class="font-semibold text-slate-900">百度健康 / 知乎健康</div>
+                      <div class="mt-1 text-xs text-slate-500">健康问答和百度系可信入口</div>
+                    </td>
+                    <td class="px-4 py-4"><span class="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">行业权威</span></td>
+                    <td class="px-4 py-4"><div class="font-semibold">15%</div><div class="text-xs text-slate-500">文心优先</div></td>
+                    <td class="px-4 py-4 text-xs text-slate-500">用于健康类问答、百科词条、科普内容和权威引用建设。</td>
+                  </tr>
+                  <tr class="hover:bg-slate-50">
+                    <td class="px-4 py-4"><input data-price="10" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+                    <td class="px-4 py-4">
+                      <div class="font-semibold text-slate-900">医脉通(39健康)</div>
+                      <div class="mt-1 text-xs text-slate-500">resource_id: 105426 · 网站媒体</div>
+                    </td>
+                    <td class="px-4 py-4"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">价格表补充</span></td>
+                    <td class="px-4 py-4"><div class="font-semibold">10%</div><div class="text-xs text-slate-500">¥10.00 · news.growume.com</div></td>
+                    <td class="px-4 py-4 text-xs text-slate-500">价格表真实资源；可作为医疗健康类 GEO 稿件的执行补充。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-3 border-t bg-white px-6 py-4 md:flex-row md:items-center md:justify-between">
+          <div class="text-sm text-slate-700">
+            已选 <span id="count" class="font-bold text-blue-600">7</span> 个信源，
+            其中价格表费用 <span id="price" class="font-bold text-blue-600">¥10.00</span>
+            <span class="ml-2 text-slate-500">其余为通用重媒体或行业权威信源，按外部渠道/人工对接执行。</span>
+          </div>
+          <button class="inline-flex items-center justify-center rounded-md bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm">
+            <i data-lucide="send" class="mr-2 h-4 w-4"></i>
+            加入分发队列
+          </button>
+        </div>
+      </section>
+
+      <aside class="rounded-lg border bg-white shadow-sm">
+        <div class="border-b px-6 py-5">
+          <h2 class="text-xl font-semibold">行业策略配置</h2>
+          <p class="mt-1 text-sm text-slate-500">行业决定信源池，AI偏好决定优先级，价格表只做可下单资源补充。</p>
+        </div>
+        <div class="space-y-4 p-6">
+          <label class="block text-sm font-semibold text-slate-700">客户行业
+            <select class="industry-select mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-normal">
+              <option>B2B SaaS / 企业服务</option>
+              <option>医疗 / 健康</option>
+              <option>消费品 / 美妆 / 食品</option>
+              <option>教育 / 知识付费</option>
+              <option>金融 / 投资</option>
+              <option>本地生活 / 餐饮</option>
+            </select>
+          </label>
+
+          <div class="rounded-lg border border-slate-200 p-4">
+            <div class="text-sm font-semibold text-slate-700">通用重媒体</div>
+            <div class="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-700">
+              <label class="flex items-center gap-2"><input type="checkbox" checked class="rounded border-slate-300 text-blue-600">知乎</label>
+              <label class="flex items-center gap-2"><input type="checkbox" checked class="rounded border-slate-300 text-blue-600">小红书</label>
+              <label class="flex items-center gap-2"><input type="checkbox" checked class="rounded border-slate-300 text-blue-600">微信公众号</label>
+              <label class="flex items-center gap-2"><input type="checkbox" checked class="rounded border-slate-300 text-blue-600">今日头条</label>
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-emerald-100 bg-emerald-50 p-4">
+            <div id="authorityTitle" class="text-sm font-semibold text-emerald-900">B2B 行业权威信源</div>
+            <div id="authorityChips" class="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-emerald-700">
+              <span class="rounded-full bg-white px-3 py-1">CSDN</span>
+              <span class="rounded-full bg-white px-3 py-1">36氪</span>
+              <span class="rounded-full bg-white px-3 py-1">掘金</span>
+              <span class="rounded-full bg-white px-3 py-1">钉钉文档</span>
+              <span class="rounded-full bg-white px-3 py-1">GitHub README</span>
+            </div>
+            <p id="authorityNote" class="mt-3 text-xs text-emerald-800">这些资源不一定来自价格表，但要进入当前行业的分发白名单。</p>
+          </div>
+
+          <details class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <summary class="cursor-pointer text-sm font-semibold text-slate-700">价格表补充资源</summary>
+            <div class="mt-4 space-y-3">
+              <label class="block text-sm font-semibold text-slate-700">价格表域名
+                <input class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-normal" value="https://news.growume.com">
+              </label>
+              <label class="block text-sm font-semibold text-slate-700">资源类型
+                <select class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-normal">
+                  <option>媒体价格 /index/price/website</option>
+                  <option>自媒体价格 /index/price/wemedia</option>
+                  <option>短视频价格 /index/price/shortvideo</option>
+                  <option>问答价格 /index/price/question</option>
+                </select>
+              </label>
+              <label class="block text-sm font-semibold text-slate-700">搜索媒体名称
+                <input id="priceSearchPlaceholder" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-normal" placeholder="例如：CSDN、36氪、博客园">
+              </label>
+              <label class="block text-sm font-semibold text-slate-700">筛选条件
+                <select id="priceFilter" class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 font-normal"><option>B2B / 企业服务</option><option>健康医疗</option><option>包网页收录</option><option>可带网址</option><option>当日发布</option></select>
+              </label>
+            </div>
+          </details>
+
+          <button class="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white">
+            <i data-lucide="sliders-horizontal" class="mr-2 h-4 w-4"></i>
+            生成行业分发方案
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <section class="rounded-lg border bg-white shadow-sm">
+        <div class="border-b px-6 py-5"><h2 class="text-xl font-semibold">资源池来源</h2></div>
+        <div class="divide-y text-sm">
+          <div class="p-5">
+            <div class="flex items-start justify-between"><div><div class="font-semibold">AI偏好对照表</div><div class="mt-1 text-slate-500">按行业给出 AI 优先级和信源权重</div></div><span class="rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700">策略来源</span></div>
+          </div>
+          <div class="p-5">
+            <div class="flex items-start justify-between"><div><div class="font-semibold">行业权威白名单</div><div class="mt-1 text-slate-500">丁香医生、丁香园、百度健康、卫健委站</div></div><span class="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-700">行业保留</span></div>
+          </div>
+          <div class="p-5">
+            <div class="flex items-start justify-between"><div><div class="font-semibold">news.growume.com 价格表</div><div class="mt-1 text-slate-500">媒体价格、自媒体价格、问答价格等可下单资源</div></div><span class="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">执行补充</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rounded-lg border bg-white shadow-sm lg:col-span-2">
+        <div class="flex items-center justify-between border-b px-6 py-5">
+          <h2 class="text-xl font-semibold">分发队列</h2>
+          <button class="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">执行待分发内容</button>
+        </div>
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50 text-xs text-slate-500">
+            <tr><th class="px-6 py-3 text-left">文章</th><th class="px-6 py-3 text-left">分发资源</th><th class="px-6 py-3 text-left">状态</th><th class="px-6 py-3 text-left">发布结果</th><th class="px-6 py-3 text-left">操作</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200">
+            <tr>
+              <td class="px-6 py-4 font-medium">品牌 GEO 服务商如何进入 AI 引用结果</td>
+              <td class="px-6 py-4 text-slate-600">知乎</td>
+              <td class="px-6 py-4"><span class="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">待分发</span></td>
+              <td class="px-6 py-4 text-slate-500">通用重媒体必选</td>
+              <td class="px-6 py-4"><button class="text-blue-600">执行分发</button></td>
+            </tr>
+            <tr>
+              <td class="px-6 py-4 font-medium">健康品牌如何建立 AI 可见度</td>
+              <td class="px-6 py-4 text-slate-600">丁香医生 / 丁香园</td>
+              <td class="px-6 py-4"><span class="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">行业权威</span></td>
+              <td class="px-6 py-4 text-slate-500">需人工对接或作为引用目标</td>
+              <td class="px-6 py-4"><button class="text-slate-500">确认渠道</button></td>
+            </tr>
+            <tr>
+              <td class="px-6 py-4 font-medium">健康品牌如何建立 AI 可见度</td>
+              <td class="px-6 py-4 text-slate-600">医脉通(39健康)</td>
+              <td class="px-6 py-4"><span class="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">渠道已发布</span></td>
+              <td class="px-6 py-4"><a class="text-blue-600" href="#">查看链接</a></td>
+              <td class="px-6 py-4"><button class="text-slate-500">记录收录</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    const industryConfigs = {
+      'B2B SaaS / 企业服务': {
+        ai: ['DeepSeek', '通义', 'Kimi'],
+        note: 'B2B 决策者更常用技术问答、媒体背书和企业资料做判断。',
+        mix: [['通用重媒体', 35], ['行业权威信源', 45], ['价格表补充资源', 20]],
+        principle: '知乎、公众号、头条作为基础保留；B2B 额外优先 CSDN、36氪、掘金、钉钉文档和 GitHub README。',
+        authorityTitle: 'B2B 行业权威信源',
+        authority: ['CSDN', '36氪', '掘金', '钉钉文档', 'GitHub README'],
+        search: '例如：CSDN、36氪、博客园',
+        filter: 'B2B / 企业服务',
+        rows: [
+          ['知乎', '全平台通吃 · 问答和长文沉淀', '通用重媒体', '15%', 'Kimi 5 / DeepSeek 4 / 通义 4', '必选；适合做问答长文、行业解释和服务商对比。', 0, 'blue'],
+          ['微信公众号', '深度内容和品牌自有阵地', '通用重媒体', '10%', '元宝 5 / Kimi 3 / DeepSeek 3', '必选；适合沉淀案例、白皮书和客户证据。', 0, 'blue'],
+          ['今日头条', '字节生态 · 豆包强绑定', '通用重媒体', '8%', '豆包偏好 5', '保留；适合做基础曝光和品牌实体补充。', 0, 'blue'],
+          ['CSDN / 掘金 / 技术博客', '技术问答和工程内容', '行业权威', '18%', 'DeepSeek 5 / Kimi 4 / 通义 4', 'B2B 技术类客户优先保留，用于参数表、教程、方案页引用。', 0, 'green'],
+          ['36氪 / 虎嗅 / 媒体', '主流媒体背书', '行业权威', '15%', 'Kimi 4 / DeepSeek 4 / 通义 4', '用于第三方提及、行业观察和品牌可信度建设。', 0, 'green'],
+          ['博客园', 'resource_id: 104884 · news.growume.com', '价格表补充', '9%', '¥5.00 · 包网页收录', '价格表真实资源；适合作为技术内容的低成本补充投放。', 5, 'slate']
+        ]
+      },
+      '医疗 / 健康': {
+        ai: ['文心', 'Kimi', 'DeepSeek'],
+        note: '医疗内容更依赖权威机构、健康问答和百度系生态。',
+        mix: [['通用重媒体', 40], ['行业权威信源', 40], ['价格表补充资源', 20]],
+        principle: '知乎、小红书、公众号、头条属于跨行业重媒体；健康行业额外保留丁香医生、丁香园、百度健康等权威信源。',
+        authorityTitle: '医疗行业权威信源',
+        authority: ['丁香医生', '丁香园', '百度健康', '知乎健康', '微信医疗公众号', '卫健委站'],
+        search: '例如：医脉通、39健康、搜狐健康',
+        filter: '健康医疗',
+        rows: [
+          ['知乎', '全平台通吃 · 问答和长文沉淀', '通用重媒体', '15%', 'Kimi 5 / DeepSeek 4 / 通义 4', '必选；可做健康问答、科普解释和服务对比。', 0, 'blue'],
+          ['小红书', 'UGC 讨论和体验笔记', '通用重媒体', '8%', '消费强，医疗需合规筛选', '保留入口；健康类只发科普和经验型内容，避开医疗承诺。', 0, 'blue'],
+          ['微信公众号', '深度内容和品牌自有阵地', '通用重媒体', '10%', '元宝 5 / Kimi 3 / DeepSeek 3', '必选；适合沉淀专家观点、患者教育和案例资料。', 0, 'blue'],
+          ['今日头条 / 抖音百科', '字节生态 · 豆包强绑定', '通用重媒体', '7%', '豆包偏好 5', '保留；适合做基础曝光、科普解释和品牌实体补充。', 0, 'blue'],
+          ['丁香医生 / 丁香园', '医疗健康权威信源', '行业权威', '15%', '医疗行业专属保留', '非价格表资源；需人工对接或作为内容引用、专家背书目标。', 0, 'green'],
+          ['百度健康 / 知乎健康', '健康问答和百度系可信入口', '行业权威', '15%', '文心优先', '用于健康类问答、百科词条、科普内容和权威引用建设。', 0, 'green'],
+          ['医脉通(39健康)', 'resource_id: 105426 · news.growume.com', '价格表补充', '10%', '¥10.00 · 健康医疗', '价格表真实资源；可作为医疗健康类 GEO 稿件的执行补充。', 10, 'slate']
+        ]
+      },
+      '消费品 / 美妆 / 食品': {
+        ai: ['豆包', '元宝', '通义'],
+        note: '消费决策更容易被短视频、种草内容、评论和微信生态影响。',
+        mix: [['通用重媒体', 55], ['行业种草信源', 30], ['价格表补充资源', 15]],
+        principle: '小红书、抖音、公众号、头条必须保留；再结合淘宝评价、百度百科和消费测评类资源。',
+        authorityTitle: '消费行业重点信源',
+        authority: ['抖音', '小红书', '微信公众号', '淘宝评价', '今日头条', '百度百科'],
+        search: '例如：今日头条、百家号、中国食品网',
+        filter: '消费 / 美妆 / 食品',
+        rows: [
+          ['小红书', '消费决策类 UGC', '通用重媒体', '18%', '豆包 3 / Kimi 3 / 通义 3', '必选；承接种草、体验笔记和品牌口碑。', 0, 'blue'],
+          ['抖音 / 今日头条', '字节生态 · 短内容曝光', '通用重媒体', '17%', '豆包偏好 5', '必选；适合短视频脚本、测评和品牌百科补充。', 0, 'blue'],
+          ['微信公众号', '深度内容和私域承接', '通用重媒体', '10%', '元宝偏好 5', '必选；用于产品故事、成分解释和客户案例。', 0, 'blue'],
+          ['淘宝评价 / 电商内容', '购买决策证据', '行业权威', '12%', '通义偏好 5', '用于强化真实使用反馈和价格对比语境。', 0, 'green'],
+          ['中国食品网 / 美食媒体', '行业垂直媒体', '价格表补充', '8%', '¥31.00 起 · 自媒体价格', '适合食品、美妆、消费品的发稿补充。', 31, 'slate']
+        ]
+      },
+      '教育 / 知识付费': {
+        ai: ['Kimi', '文心', '元宝'],
+        note: '教育内容更看重长文解释、知识库、课程案例和可信资料沉淀。',
+        mix: [['通用重媒体', 35], ['知识权威信源', 45], ['价格表补充资源', 20]],
+        principle: '知乎、公众号保留；教育行业额外优先 B站科普、百度文库、arXiv、课程案例和研究引用。',
+        authorityTitle: '教育行业权威信源',
+        authority: ['知乎', '微信公众号', 'B站科普', '百度文库', 'arXiv', '课程案例'],
+        search: '例如：百度文库、B站科普、教育媒体',
+        filter: '教育 / 知识付费',
+        rows: [
+          ['知乎', '知识问答和长文沉淀', '通用重媒体', '15%', 'Kimi 5 / DeepSeek 4', '必选；适合课程问答、行业解释和学习路径。', 0, 'blue'],
+          ['微信公众号', '课程案例和长文', '通用重媒体', '10%', '元宝 5 / Kimi 3', '必选；沉淀课程案例、方法论和转化文章。', 0, 'blue'],
+          ['B站科普', '视频科普和测评', '行业权威', '12%', '豆包 4 / Kimi 3', '适合知识讲解、课程体验和品牌人格化。', 0, 'green'],
+          ['百度文库 / arXiv', '资料库和研究引用', '行业权威', '18%', '文心 5 / Kimi 5', '用于提升知识可信度和长文引用基础。', 0, 'green'],
+          ['教育媒体 / 百家号', '价格表补充', '价格表补充', '8%', '按价格表匹配', '作为发稿和搜索收录补充。', 0, 'slate']
+        ]
+      },
+      '金融 / 投资': {
+        ai: ['DeepSeek', 'Kimi', '元宝'],
+        note: '金融内容更依赖数据推理、财经媒体背书和合规口径。',
+        mix: [['通用重媒体', 30], ['财经权威信源', 50], ['价格表补充资源', 20]],
+        principle: '知乎、公众号、头条保留；金融行业额外优先雪球、36氪、虎嗅、财新和券商研报类资料。',
+        authorityTitle: '金融行业权威信源',
+        authority: ['雪球', '36氪', '虎嗅', '微信公众号', '券商研报', '财新'],
+        search: '例如：财经商业、证券、投资媒体',
+        filter: '金融 / 投资',
+        rows: [
+          ['知乎', '问答和长文解释', '通用重媒体', '12%', 'Kimi 5 / DeepSeek 4', '必选；适合概念解释、风险提示和服务对比。', 0, 'blue'],
+          ['微信公众号', '深度内容和私域', '通用重媒体', '10%', '元宝偏好 5', '必选；适合研报解读、案例和数据型 FAQ。', 0, 'blue'],
+          ['雪球 / 财经媒体', '投资讨论和财经背书', '行业权威', '20%', 'DeepSeek 5 / Kimi 4', '保留；用于财经语境、观点提及和可信信号。', 0, 'green'],
+          ['36氪 / 虎嗅', '主流商业媒体', '行业权威', '15%', 'Kimi 4 / 通义 4', '用于商业模式、融资和企业可信背书。', 0, 'green'],
+          ['广东财经网', 'resource_id 示例 · news.growume.com', '价格表补充', '8%', '¥3.00 · 财经商业', '价格表补充资源，适合基础发稿和搜索露出。', 3, 'slate']
+        ]
+      },
+      '本地生活 / 餐饮': {
+        ai: ['豆包', '通义', '元宝'],
+        note: '本地生活更依赖附近服务、点评、短视频和本地公众号。',
+        mix: [['通用重媒体', 50], ['本地生活信源', 35], ['价格表补充资源', 15]],
+        principle: '小红书、抖音、公众号、头条保留；本地生活额外优先大众点评、美团、本地号和地图类资料。',
+        authorityTitle: '本地生活重点信源',
+        authority: ['抖音同城', '大众点评', '小红书', '美团', '微信本地公众号', '地图资料'],
+        search: '例如：地方门户、本地生活、餐饮媒体',
+        filter: '本地生活 / 餐饮',
+        rows: [
+          ['小红书', '探店和体验笔记', '通用重媒体', '15%', '豆包 3 / Kimi 3', '必选；适合体验种草和真实口碑。', 0, 'blue'],
+          ['抖音同城 / 今日头条', '短视频和本地曝光', '通用重媒体', '18%', '豆包偏好 5', '必选；适合门店曝光、套餐和场景内容。', 0, 'blue'],
+          ['微信公众号', '本地私域内容', '通用重媒体', '10%', '元宝偏好 5', '必选；适合活动、菜单和品牌故事。', 0, 'blue'],
+          ['大众点评 / 美团', '消费决策入口', '行业权威', '18%', '本地生活强相关', '保留；用于评论、门店资料和消费决策信号。', 0, 'green'],
+          ['地方门户网站', '价格表补充', '价格表补充', '8%', '按价格表匹配', '用于本地新闻、活动和门店资料补充。', 0, 'slate']
+        ]
+      }
+    };
+
+    const industrySelects = Array.from(document.querySelectorAll('.industry-select'));
+    const aiPriority = document.getElementById('aiPriority');
+    const aiNote = document.getElementById('aiNote');
+    const mixRows = document.getElementById('mixRows');
+    const principleText = document.getElementById('principleText');
+    const resourceRows = document.getElementById('resourceRows');
+    const authorityTitle = document.getElementById('authorityTitle');
+    const authorityChips = document.getElementById('authorityChips');
+    const authorityNote = document.getElementById('authorityNote');
+    const priceSearchPlaceholder = document.getElementById('priceSearchPlaceholder');
+    const priceFilter = document.getElementById('priceFilter');
+    const count = document.getElementById('count');
+    const price = document.getElementById('price');
+
+    function badgeClass(index) {
+      return index === 0
+        ? 'rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white'
+        : 'rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700';
+    }
+
+    function typeClass(tone) {
+      if (tone === 'green') return 'inline-flex whitespace-nowrap rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700';
+      if (tone === 'blue') return 'inline-flex whitespace-nowrap rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700';
+      return 'inline-flex whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600';
+    }
+
+    function renderIndustry(industry) {
+      const config = industryConfigs[industry] || industryConfigs['B2B SaaS / 企业服务'];
+      industrySelects.forEach((select) => {
+        if (select.value !== industry && Array.from(select.options).some((option) => option.value === industry)) {
+          select.value = industry;
+        }
+      });
+
+      aiPriority.innerHTML = config.ai.map((name, index) => (
+        `<span class="${badgeClass(index)}">#${index + 1} ${name}</span>`
+      )).join('');
+      aiNote.textContent = config.note;
+      mixRows.innerHTML = config.mix.map(([label, value]) => (
+        `<div class="flex items-center justify-between"><span>${label}</span><strong>${value}%</strong></div>`
+      )).join('');
+      principleText.textContent = config.principle;
+      authorityTitle.textContent = config.authorityTitle;
+      authorityChips.innerHTML = config.authority.map((item) => (
+        `<span class="rounded-full bg-white px-3 py-1">${item}</span>`
+      )).join('');
+      authorityNote.textContent = `这些资源不一定来自价格表，但要进入${industry}的分发白名单。`;
+      priceSearchPlaceholder.placeholder = config.search;
+      priceFilter.innerHTML = `<option>${config.filter}</option><option>包网页收录</option><option>可带网址</option><option>当日发布</option>`;
+
+      resourceRows.innerHTML = config.rows.map(([name, meta, type, weight, score, execution, priceValue, tone]) => (
+        `<tr class="${tone === 'green' ? 'bg-emerald-50/40 hover:bg-emerald-50' : 'hover:bg-slate-50'}">
+          <td class="px-4 py-4"><input data-price="${priceValue}" type="checkbox" checked class="resource rounded border-slate-300 text-blue-600"></td>
+          <td class="px-4 py-4">
+            <div class="font-semibold text-slate-900">${name}</div>
+            <div class="mt-1 text-xs text-slate-500">${meta}</div>
+          </td>
+          <td class="px-4 py-4 whitespace-nowrap"><span class="${typeClass(tone)}">${type}</span></td>
+          <td class="px-4 py-4"><div class="font-semibold">${weight}</div><div class="text-xs text-slate-500">${score}</div></td>
+          <td class="px-4 py-4 text-xs text-slate-500">${execution}</td>
+        </tr>`
+      )).join('');
+
+      Array.from(document.querySelectorAll('.resource')).forEach((item) => item.addEventListener('change', update));
+      update();
+    }
+
+    function update() {
+      const resources = Array.from(document.querySelectorAll('.resource'));
+      const checked = resources.filter((item) => item.checked);
+      const total = checked.reduce((sum, item) => sum + Number(item.dataset.price || 0), 0);
+      count.textContent = checked.length;
+      price.textContent = `¥${total.toFixed(2)}`;
+    }
+
+    industrySelects.forEach((select) => select.addEventListener('change', (event) => renderIndustry(event.target.value)));
+    renderIndustry('B2B SaaS / 企业服务');
+  </script>
+</body>
+</html>

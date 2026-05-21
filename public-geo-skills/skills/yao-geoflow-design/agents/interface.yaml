@@ -1,0 +1,24 @@
+interface:
+  display_name: "Yao GEOFlow Design"
+  short_description: "Discover, preview, and edit GEOFlow Laravel Blade themes safely"
+  default_prompt: "Use $yao-geoflow-design to discover GEOFlow Laravel Blade themes, create a preview edit session for a selected theme, or clone a reference style into a GEOFlow-compatible theme without breaking SEO/schema, markdown rendering, image, footer, or route contracts."
+compatibility:
+  canonical_format: "agent-skills"
+  adapter_targets:
+    - "openai"
+    - "claude"
+    - "generic"
+  activation:
+    mode: "manual"
+    paths: []
+  execution:
+    context: "inline"
+    shell: "bash"
+  trust:
+    source_tier: "local"
+    remote_inline_execution: "forbid"
+    remote_metadata_policy: "allow-metadata-only"
+  degradation:
+    openai: "metadata-adapter"
+    claude: "neutral-source-plus-adapter"
+    generic: "neutral-source"

@@ -1,0 +1,84 @@
+{
+  "project": {
+    "name": "客户 GEO 可见性监测",
+    "clientName": "示例品牌",
+    "clientAliases": ["示例品牌", "示例产品", "示例公司"],
+    "competitors": ["竞品A", "竞品B", "竞品C"],
+    "locale": "zh-CN"
+  },
+  "schedule": {
+    "daily": "09:30",
+    "weekly": "Monday 09:30"
+  },
+  "keywords": [
+    {
+      "keyword": "M GEO 是什么",
+      "intent": "品牌认知"
+    },
+    {
+      "keyword": "AI 搜索时代品牌怎么做增长",
+      "intent": "解决方案"
+    },
+    {
+      "keyword": "GEO 和 SEO 有什么区别",
+      "intent": "品类教育"
+    }
+  ],
+  "providers": [
+    {
+      "id": "doubao",
+      "name": "豆包",
+      "enabled": true,
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "apiKeyEnv": "DOUBAO_API_KEY",
+      "model": "doubao-seed-1-6-250615"
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi",
+      "enabled": true,
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "apiKeyEnv": "KIMI_API_KEY",
+      "model": "moonshot-v1-8k"
+    },
+    {
+      "id": "qianwen",
+      "name": "千问",
+      "enabled": true,
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "apiKeyEnv": "QIANWEN_API_KEY",
+      "model": "qwen-plus"
+    },
+    {
+      "id": "yuanbao",
+      "name": "元宝",
+      "enabled": false,
+      "baseUrl": "",
+      "apiKeyEnv": "YUANBAO_API_KEY",
+      "model": "",
+      "notes": "腾讯元宝消费端没有稳定公开发文/问答 API；如通过腾讯混元或网关接入，请填 OpenAI-compatible baseUrl 与 model 后启用。"
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "enabled": true,
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "model": "deepseek-chat"
+    }
+  ],
+  "monitoring": {
+    "sampleCount": 3,
+    "mode": "blind_recommendation_rank_monitor",
+    "termDefinitions": [
+      {
+        "term": "GEO",
+        "definition": "Generative Engine Optimization，生成式引擎优化 / AI搜索优化 / AI回答推荐优化，不是地理信息、测绘、地图、定位、GIS 或投放服务。"
+      }
+    ]
+  },
+  "report": {
+    "title": "AI 搜索可见性监测报告",
+    "outputDir": "data/geo-monitor"
+  }
+}
