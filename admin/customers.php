@@ -873,26 +873,18 @@ $stage_badge_classes = [
                     </label>
                 </div>
             </div>
-            <!-- 竞品名单（数据库管理，监测脚本直接读取） -->
-            <div class="rounded-lg border border-gray-200 p-4" id="competitors-panel">
+            <!-- 竞品名单（新建时纯前端暂存，创建客户后再写库） -->
+            <div class="rounded-lg border border-gray-200 p-4">
                 <p class="mb-3 text-xs font-bold uppercase tracking-wide text-gray-500">竞品名单
-                    <span class="ml-1 font-normal text-gray-400 normal-case">（监测脚本从此处读取，修改后下次运行生效）</span>
+                    <span class="ml-1 font-normal text-gray-400 normal-case">（保存后监测脚本会自动追踪）</span>
                 </p>
-                <div id="cmp-list" class="flex flex-wrap gap-2 mb-3 min-h-[28px]">
-                    <?php foreach ($dbCompetitors as $cmp): ?>
-                        <span class="inline-flex items-center gap-1 rounded-full bg-orange-50 border border-orange-200 px-3 py-1 text-sm text-orange-800" data-cmp-id="<?php echo $cmp['id']; ?>">
-                            <?php echo htmlspecialchars($cmp['competitor']); ?>
-                            <button type="button" onclick="deleteCmp(<?php echo $cmp['id']; ?>, this)" class="text-orange-400 hover:text-red-600 ml-1 font-bold">×</button>
-                        </span>
-                    <?php endforeach; ?>
-                    <?php if (empty($dbCompetitors)): ?>
-                        <span id="cmp-empty" class="text-sm text-gray-400">暂无竞品，添加后监测脚本会自动追踪</span>
-                    <?php endif; ?>
+                <div id="new-cmp-list" class="flex flex-wrap gap-2 mb-3 min-h-[28px]">
+                    <span id="new-cmp-empty" class="text-sm text-gray-400">暂无竞品，添加后监测脚本会自动追踪</span>
                 </div>
                 <div class="flex gap-2">
-                    <input type="text" id="cmp-input" placeholder="输入竞品名，回车添加"
+                    <input type="text" id="new-cmp-input" placeholder="输入竞品名，回车添加"
                            class="flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:ring-indigo-500">
-                    <button type="button" onclick="addCmp()" class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700">添加</button>
+                    <button type="button" onclick="addNewCmp()" class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700">添加</button>
                 </div>
             </div>
             <label class="block">
@@ -1082,6 +1074,37 @@ $stage_badge_classes = [
     }
 
     document.getElementById('cmp-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCmp(); } });
+
+    // ── 新建客户弹窗：竞品纯前端暂存（不调服务端，客户创建后再写库）──────────
+    const _newCmpList = [];
+    function renderNewCmp() {
+        const el = document.getElementById('new-cmp-list');
+        if (!el) return;
+        if (_newCmpList.length === 0) {
+            el.innerHTML = '<span id="new-cmp-empty" class="text-sm text-gray-400">暂无竞品，添加后监测脚本会自动追踪</span>';
+            return;
+        }
+        el.innerHTML = _newCmpList.map((name, idx) => `
+            <span class="inline-flex items-center gap-1 rounded-full bg-orange-50 border border-orange-200 px-3 py-1 text-sm text-orange-800">
+                ${name.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+                <button type="button" onclick="removeNewCmp(${idx})" class="text-orange-400 hover:text-red-600 ml-1 font-bold">×</button>
+            </span>`).join('');
+    }
+    function addNewCmp() {
+        const input = document.getElementById('new-cmp-input');
+        if (!input) return;
+        const name = input.value.trim();
+        if (!name) return;
+        if (_newCmpList.includes(name)) { input.value = ''; return; }
+        _newCmpList.push(name);
+        renderNewCmp();
+        input.value = '';
+    }
+    function removeNewCmp(idx) {
+        _newCmpList.splice(idx, 1);
+        renderNewCmp();
+    }
+    document.getElementById('new-cmp-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addNewCmp(); } });
 
     (function() {
         const searchInput = document.getElementById('customer-search');

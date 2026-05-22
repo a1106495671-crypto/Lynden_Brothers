@@ -1,339 +1,400 @@
 <?php
 /**
- * Step4 内容生成 - 根据策略生成文章并输出
+ * GEO内容生成 - 按关键词一键生成 GEO 优化文章
  */
+
 define('FEISHU_TREASURE', true);
 session_start();
+
 require_once __DIR__ . '/../includes/config.php';
-require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
-require_once __DIR__ . '/../includes/citation_simulator_service.php';
+require_once __DIR__ . '/../includes/functions.php';
+
 require_admin_login();
+session_write_close();
 
-function gc_h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+// ── AJAX: 生成文章 ────────────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'generate') {
+    header('Content-Type: application/json; charset=utf-8');
 
-// 获取客户列表
-$customers = [];
-try {
-    $stmt = $db->query("
-        SELECT DISTINCT k.customer_id,
-               COALESCE((SELECT fact_value FROM geo_brand_facts WHERE customer_id=k.customer_id AND fact_key='brand_name' LIMIT 1), k.customer_id) AS brand_name
-        FROM geo_monitor_keywords k ORDER BY brand_name
-    ");
-    $customers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Throwable $e) {}
+    $keyword  = trim($_POST['keyword']  ?? '');
+    $customer = trim($_POST['customer'] ?? '');
+    $angle    = trim($_POST['angle']    ?? '全面介绍');
+    $platform = trim($_POST['platform'] ?? '通用');
+    $fmt      = trim($_POST['fmt']      ?? '知识科普');
 
-$selectedCid = trim($_GET['customer'] ?? $_POST['customer'] ?? ($customers[0]['customer_id'] ?? ''));
-$action      = $_POST['action'] ?? '';
-$article     = '';
-$articleTitle = '';
-$generateError = '';
-$modelUsed   = '';
-$pushResult  = null;
+    if (!$keyword) { echo json_encode(['error' => '关键词不能为空']); exit; }
 
-// 读取内容提示词列表
-$contentPrompts = [];
-try {
-    $stmtPr = $db->query("SELECT id, name FROM prompts WHERE type='content' ORDER BY id");
-    $contentPrompts = $stmtPr->fetchAll(PDO::FETCH_ASSOC);
-} catch (Throwable $e) {}
+    // 读取品牌信息
+    $brandName = $customer;
+    $masterSentence = '';
+    $coreServices = '';
+    $differentiator = '';
+    try {
+        $sf = $db->prepare("SELECT fact_key, fact_value FROM geo_brand_facts WHERE customer_id = ?");
+        $sf->execute([$customer]);
+        $facts = [];
+        foreach ($sf->fetchAll(PDO::FETCH_ASSOC) as $r) $facts[$r['fact_key']] = $r['fact_value'];
+        $brandName      = $facts['brand_name']      ?? $customer;
+        $masterSentence = $facts['master_sentence']  ?? '';
+        $coreServices   = $facts['core_service']     ?? $facts['core_services'] ?? '';
+        $differentiator = $facts['differentiator']   ?? '';
+    } catch (Throwable $e) {}
 
-// 读取客户品牌信息
-$facts = [];
-$weakKeywords = [];
-if ($selectedCid !== '') {
-    $stmtF = $db->prepare("SELECT fact_key, fact_value FROM geo_brand_facts WHERE customer_id = ?");
-    $stmtF->execute([$selectedCid]);
-    foreach ($stmtF->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $facts[$row['fact_key']] = $row['fact_value'];
+    $platformStyle = [
+        '知乎'     => '专业深度、有数据支撑、适合偏理性读者',
+        '微信公众号' => '温和亲切、适合分享转发',
+        '小红书'   => '轻松活泼、有个人体验感',
+        '今日头条' => '口语化、接地气、有故事感',
+        '通用'     => '专业中文内容，结构清晰',
+    ][$platform] ?? '专业中文内容';
+
+    $brandBlock = '';
+    if ($brandName || $masterSentence || $coreServices) {
+        $brandBlock = "## 品牌信息\n";
+        if ($brandName)       $brandBlock .= "- 品牌名称：{$brandName}\n";
+        if ($masterSentence)  $brandBlock .= "- 品牌定位：{$masterSentence}\n";
+        if ($coreServices)    $brandBlock .= "- 核心服务：{$coreServices}\n";
+        if ($differentiator)  $brandBlock .= "- 差异化优势：{$differentiator}\n";
+        $brandBlock .= "\n";
     }
 
-    // 失守关键词供快速选择
-    $stmtK = $db->prepare("
-        SELECT query_text,
-               ROUND(100.0 * SUM(CASE WHEN brand_mentioned THEN 1 ELSE 0 END) / COUNT(*), 1) AS mention_rate
-        FROM geo_monitor_records
-        WHERE customer_id = ? AND queried_at >= CURRENT_DATE - INTERVAL '7 days'
-        GROUP BY query_text
-        ORDER BY mention_rate ASC LIMIT 15
-    ");
-    $stmtK->execute([$selectedCid]);
-    $weakKeywords = $stmtK->fetchAll(PDO::FETCH_ASSOC);
-}
+    $prompt = <<<PROMPT
+你是专业的GEO（生成式引擎优化）内容撰写专家，专门撰写能被 AI 大模型引用的结构化文章。
 
-$brandName      = $facts['brand_name']      ?? $selectedCid;
-$masterSentence = $facts['master_sentence']  ?? '';
-$coreServices   = $facts['core_services']    ?? '';
+{$brandBlock}## 本篇任务
+- 目标关键词：「{$keyword}」
+- 文章角度：{$angle}
+- 内容格式：{$fmt}
+- 发布平台：{$platform}（{$platformStyle}）
 
-// 生成文章
-if ($action === 'generate' && $selectedCid !== '') {
-    $keyword   = trim($_POST['keyword']   ?? '');
-    $platform  = trim($_POST['platform']  ?? '知乎');
-    $angle     = trim($_POST['angle']     ?? '');
-    $wordCount = (int)($_POST['word_count'] ?? 1000);
-
-    if ($keyword !== '') {
-
-        $platformStyle = [
-            '知乎'     => '专业深度、有数据支撑、引用来源清晰，适合偏理性读者',
-            '今日头条' => '标题抓眼球、开篇直接切重点、段落简短、口语化',
-            '搜狐号'   => '专业观点、图文并茂风格、结构清晰',
-            '微信公众号' => '有温度、场景化叙述、结尾有行动召唤',
-            '小红书'   => '轻松活泼、多用数字和emoji、列表形式、种草感',
-        ][$platform] ?? '专业中文内容';
-
-        // 从提示词库读取模板，未配置时使用内置版本
-        $promptId = intval($_POST['prompt_id'] ?? 0);
-        $promptTemplate = '';
-        if ($promptId > 0) {
-            try {
-                $stmtPT = $db->prepare("SELECT content FROM prompts WHERE id=? AND type='content'");
-                $stmtPT->execute([$promptId]);
-                $promptTemplate = $stmtPT->fetchColumn() ?: '';
-            } catch (Throwable $e) {}
-        }
-        if ($promptTemplate === '') {
-            try {
-                $stmtPT = $db->query("SELECT content FROM prompts WHERE type='content' ORDER BY id LIMIT 1");
-                $promptTemplate = $stmtPT->fetchColumn() ?: '';
-            } catch (Throwable $e) {}
-        }
-        if ($promptTemplate === '') {
-            $promptTemplate = <<<PROMPT
-你是专业的GEO内容撰写专家，深度理解AI引用机制。请为品牌【{{BRAND_NAME}}】撰写一篇高AI引用率的GEO优化文章。
-
-## 品牌信息
-- 品牌定位：{{MASTER_SENTENCE}}
-- 核心服务：{{CORE_SERVICES}}
-
-## 写作要求
-- 目标关键词：「{{KEYWORD}}」
-- 发布平台：{{PLATFORM}}（{{PLATFORM_STYLE}}）
-- 写作角度：{{ANGLE}}
-- 字数要求：{{WORD_COUNT}}字左右
-
-## GEO优化核心规则（Princeton KDD 2024研究实证）
-1. **引用来源**（AI引用率+40%）：每个核心论点须附具体来源，格式如"据[机构]数据显示"
-2. **精确数据**（+37%）：使用精确数字如"转化率提升37%"而非"显著提升"，数据须有出处
-3. **权威引语**（+30%）：引用行业专家或机构观点时注明姓名/机构名
-4. **答案密度**：每个H2段落首句用40-60字完整回答该段核心问题（AI直接提取引用的最优长度）
-5. **结构化格式**：必须包含H2/H3标题、有序/无序列表、至少1个数据对比表格
-6. **FAQ结尾**：文末必须附3-5个"常见问题与解答"，每个答案在50字以内
-7. **品牌植入**：自然植入品牌名【{{BRAND_NAME}}】3-5次，在核心优势处突出差异化
-8. **禁止关键词堆砌**：关键词密度控制在1-2%，堆砌会使AI引用率下降10%
-
-请直接输出完整文章（含标题），不要任何前言和说明。
+## GEO 优化要求
+1. 标题直接包含目标关键词，以问答或"是什么/怎么做/为什么"句式呈现
+2. 第一段直接给出核心答案，不铺垫
+3. 包含至少 3 个可被 AI 引用的具体数据或事实（注明来源）
+4. 包含 1 个 FAQ 板块（至少 3 个 Q&A）
+5. 使用结构化格式（二级标题分节），字数 1000–1500 字
+6. 结尾有明确行动召唤
 PROMPT;
-        }
-        $prompt = str_replace(
-            ['{{BRAND_NAME}}', '{{MASTER_SENTENCE}}', '{{CORE_SERVICES}}',
-             '{{KEYWORD}}', '{{PLATFORM}}', '{{PLATFORM_STYLE}}', '{{ANGLE}}', '{{WORD_COUNT}}'],
-            [$brandName, $masterSentence, $coreServices,
-             $keyword, $platform, $platformStyle, $angle, (string)$wordCount],
-            $promptTemplate
-        );
 
-        require_once __DIR__ . '/../includes/geo_ai_fallback.php';
-        $aiResult  = geo_call_ai_with_fallback($prompt, 3000, 0.75);
-        $article   = $aiResult['content'] ?? '';
-        $modelUsed = $aiResult['model_used'] ?? '';
-        if ($article !== '') {
-            $lines = explode("\n", $article);
-            $articleTitle = ltrim($lines[0] ?? '', '# ');
-        }
-        if ($article === '') {
-            $generateError = $aiResult['error'] ?? '未知错误';
-        }
+    if ($brandName && $brandName !== $customer) {
+        $prompt .= "\n7. 自然植入品牌名【{$brandName}】至少 3 次";
     }
+
+    $prompt .= "\n\n请直接输出完整文章（含标题），不要任何前言和说明。";
+
+    require_once __DIR__ . '/../includes/geo_ai_fallback.php';
+    $result = geo_call_ai_with_fallback($prompt, 3000, 0.72);
+
+    if (!empty($result['error']) && empty($result['content'])) {
+        echo json_encode(['error' => 'AI 调用失败：' . $result['error']]);
+        exit;
+    }
+
+    $content = $result['content'] ?? '';
+    $lines   = explode("\n", $content);
+    $title   = ltrim(trim($lines[0] ?? $keyword), '# ');
+
+    echo json_encode([
+        'ok'         => true,
+        'title'      => $title,
+        'content'    => $content,
+        'model_used' => $result['model_used'] ?? '',
+    ]);
+    exit;
 }
 
-// 推送飞书
-if ($action === 'push_feishu' && !empty($_POST['article'])) {
-    $articleContent = $_POST['article'];
-    $pushTitle      = $_POST['push_title'] ?? '内容草稿';
-    $pushPlatform   = $_POST['push_platform'] ?? '';
+// ── AJAX: 保存草稿 ────────────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save') {
+    header('Content-Type: application/json; charset=utf-8');
 
-    $stmtFsUrl = $db->prepare("SELECT setting_value FROM site_settings WHERE setting_key = 'feishu_monitor_webhook' LIMIT 1");
-    $stmtFsUrl->execute();
-    $webhookUrl = trim((string)($stmtFsUrl->fetchColumn() ?: ''));
+    $keyword  = trim($_POST['keyword']  ?? '');
+    $title    = trim($_POST['title']    ?? '');
+    $content  = trim($_POST['content']  ?? '');
 
-    if ($webhookUrl !== '') {
-        $payload = json_encode([
-            'msg_type' => 'post',
-            'content'  => [
-                'post' => [
-                    'zh_cn' => [
-                        'title'   => "✍️ 待发布文章｜{$pushPlatform}｜" . date('Y-m-d'),
-                        'content' => [
-                            [['tag' => 'text', 'text' => "📌 标题：{$pushTitle}\n📤 目标平台：{$pushPlatform}\n\n"]],
-                            [['tag' => 'text', 'text' => $articleContent]],
-                            [['tag' => 'text', 'text' => "\n\n---\n✅ 审阅后请发布到 {$pushPlatform}"]],
-                        ],
-                    ],
-                ],
-            ],
-        ], JSON_UNESCAPED_UNICODE);
+    if (!$title || !$content) { echo json_encode(['error' => '标题和内容不能为空']); exit; }
 
-        $ch = curl_init($webhookUrl);
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $payload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 10,
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-        ]);
-        $r    = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        $pushResult = $code === 200 ? 'success' : 'fail';
-    } else {
-        $pushResult = 'no_webhook';
-    }
-    $article      = $articleContent;
-    $articleTitle = $pushTitle;
+    // 取第一个作者和分类兜底
+    $author_id   = (int) ($db->query("SELECT id FROM authors ORDER BY id LIMIT 1")->fetchColumn() ?: 0);
+    $category_id = (int) ($db->query("SELECT id FROM categories ORDER BY id LIMIT 1")->fetchColumn() ?: 0);
+
+    $slug    = generate_unique_article_slug($db, $title);
+    $excerpt = mb_substr(strip_tags($content), 0, 200, 'UTF-8');
+
+    $stmt = $db->prepare("
+        INSERT INTO articles
+            (title, slug, content, excerpt, original_keyword, status, review_status,
+             is_ai_generated, author_id, category_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'draft', 'pending', 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ");
+    $ok = $stmt->execute([$title, $slug, $content, $excerpt, $keyword, $author_id ?: null, $category_id ?: null]);
+
+    if (!$ok) { echo json_encode(['error' => '保存失败']); exit; }
+    $newId = db_last_insert_id($db, 'articles');
+    echo json_encode(['ok' => true, 'id' => $newId, 'redirect' => "article-edit.php?id={$newId}"]);
+    exit;
 }
-?>
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>内容生成 · Step4</title>
-<script src="/admin/assets/js/tailwind.play-cdn.js"></script>
-</head>
-<body class="bg-gray-50 min-h-screen">
-<div class="max-w-
-  <?php if ($selectedCid): echo brand_completeness_check($db, $selectedCid); endif; ?>
-5xl mx-auto py-10 px-4">
 
-  <div class="mb-6 flex items-center justify-between">
+// ── GET: 渲染页面 ─────────────────────────────────────────────────────────────
+$customer = trim($_GET['customer'] ?? '');
+$keyword  = trim($_GET['keyword']  ?? '');
+
+if (!$keyword) {
+    header('Location: articles.php');
+    exit;
+}
+
+// 已有文章
+$stmt = $db->prepare("
+    SELECT a.id, a.title, a.status, a.review_status, a.original_keyword, a.created_at
+    FROM articles a
+    WHERE a.deleted_at IS NULL
+      AND (a.original_keyword = ? OR a.title LIKE ? OR a.keywords LIKE ?)
+    ORDER BY a.created_at DESC
+    LIMIT 20
+");
+$like = '%' . $keyword . '%';
+$stmt->execute([$keyword, $like, $like]);
+$existing = $stmt->fetchAll();
+
+function gc_status_badge(string $s, string $r): string {
+    if ($s === 'published')  return '<span class="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">已发布</span>';
+    if ($r === 'rejected')   return '<span class="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">已拒绝</span>';
+    if ($r === 'pending')    return '<span class="px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700">待审核</span>';
+    return '<span class="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">草稿</span>';
+}
+
+$kwE         = htmlspecialchars($keyword,  ENT_QUOTES, 'UTF-8');
+$customerE   = htmlspecialchars($customer, ENT_QUOTES, 'UTF-8');
+$page_title  = 'AI生成 · ' . $kwE;
+$page_header = '
+<div class="flex items-center space-x-4">
+    <a href="javascript:history.back()" class="text-gray-400 hover:text-gray-600">
+        <i data-lucide="arrow-left" class="w-5 h-5"></i>
+    </a>
     <div>
-      <h1 class="text-2xl font-bold text-gray-900">内容生成</h1>
-      <p class="text-gray-500 mt-1">根据策略生成GEO优化文章，推送飞书后手动发布</p>
+        <h1 class="text-2xl font-bold text-gray-900">内容生成</h1>
+        <p class="mt-1 text-sm text-gray-600">' . $kwE . '</p>
     </div>
-    <a href="geo-strategy.php?customer=<?= gc_h($selectedCid) ?>" class="text-sm text-blue-600 hover:underline">← 返回策略</a>
-  </div>
+</div>';
 
-  <?php if ($pushResult !== null): ?>
-  <div class="mb-4 p-3 rounded text-sm <?= $pushResult==='success'?'bg-green-50 text-green-700 border border-green-200':'bg-red-50 text-red-700 border border-red-200' ?>">
-    <?= $pushResult==='success' ? '✅ 文章草稿已推送到飞书，请在飞书中审阅后发布' : ($pushResult==='no_webhook'?'⚠️ 未配置飞书webhook':'❌ 飞书推送失败') ?>
-  </div>
-  <?php endif; ?>
+require_once __DIR__ . '/includes/header.php';
+?>
 
-  <div class="grid grid-cols-5 gap-6">
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-    <!-- 左侧：生成表单 -->
-    <div class="col-span-2">
-      <form method="POST" class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
-        <h2 class="font-semibold text-gray-700">生成参数</h2>
+  <!-- 左：生成表单 + 结果 -->
+  <div class="lg:col-span-2 space-y-6">
 
+    <!-- 生成配置卡 -->
+    <div class="bg-white shadow rounded-lg">
+      <div class="px-6 py-4 border-b border-gray-200">
+        <h3 class="text-base font-medium text-gray-900 flex items-center gap-2">
+          <i data-lucide="zap" class="w-4 h-4 text-blue-500"></i>AI 一键生成
+        </h3>
+      </div>
+      <div class="px-6 py-5 space-y-4">
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">客户</label>
-          <select name="customer" class="w-full border border-gray-300 rounded px-3 py-2 text-sm" onchange="this.form.submit()">
-            <?php foreach ($customers as $c): ?>
-            <option value="<?= gc_h($c['customer_id']) ?>" <?= $c['customer_id']===$selectedCid?'selected':'' ?>><?= gc_h($c['brand_name']) ?></option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">提示词模板</label>
-          <select name="prompt_id" class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-            <?php foreach ($contentPrompts as $cp): ?>
-            <option value="<?= $cp['id'] ?>" <?= (intval($_POST['prompt_id'] ?? 0)===$cp['id'])?'selected':'' ?>>
-              <?= htmlspecialchars($cp['name']) ?>
-            </option>
-            <?php endforeach; ?>
-            <?php if (empty($contentPrompts)): ?>
-            <option value="0">内置 GEO_PROMPT_ENHANCED_V2</option>
-            <?php endif; ?>
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">目标关键词 <span class="text-red-500">*</span></label>
-          <input type="text" name="keyword" value="<?= gc_h($_POST['keyword'] ?? '') ?>" placeholder="如：GEO服务商怎么选" class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-          <?php if (!empty($weakKeywords)): ?>
-          <div class="mt-2 space-y-1">
-            <p class="text-xs text-gray-400">快速填入失守关键词：</p>
-            <?php foreach (array_slice($weakKeywords, 0, 6) as $kw): ?>
-            <button type="button" onclick="document.querySelector('[name=keyword]').value='<?= addslashes($kw['query_text']) ?>'"
-              class="inline-block mr-1 mb-1 px-2 py-0.5 bg-red-50 text-red-600 text-xs rounded border border-red-100 hover:bg-red-100">
-              <?= gc_h($kw['query_text']) ?> (<?= $kw['mention_rate'] ?>%)
-            </button>
-            <?php endforeach; ?>
+          <label class="block text-sm font-medium text-gray-700 mb-1">目标关键词</label>
+          <div class="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-800 font-medium">
+            <i data-lucide="target" class="w-4 h-4 shrink-0"></i>
+            <?php echo $kwE; ?>
           </div>
-          <?php endif; ?>
         </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">发布平台</label>
-          <select name="platform" class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-            <?php foreach (['知乎','今日头条','搜狐号','微信公众号','小红书'] as $p): ?>
-            <option <?= ($_POST['platform']??'')===$p?'selected':'' ?>><?= $p ?></option>
-            <?php endforeach; ?>
-          </select>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">文章角度</label>
+            <select id="angle" class="block w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-blue-500 focus:border-blue-500">
+              <option value="是什么 · 全面解析">是什么 · 全面解析</option>
+              <option value="怎么做 · 实操指南">怎么做 · 实操指南</option>
+              <option value="为什么 · 原因深度">为什么 · 原因深度</option>
+              <option value="对比分析 · 竞品横评">对比分析 · 竞品横评</option>
+              <option value="案例展示 · 成功故事">案例展示 · 成功故事</option>
+              <option value="常见误区 · 纠偏指南">常见误区 · 纠偏指南</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">内容格式</label>
+            <select id="fmt" class="block w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-blue-500 focus:border-blue-500">
+              <option value="知识科普">知识科普</option>
+              <option value="问答式">问答式</option>
+              <option value="案例展示">案例展示</option>
+              <option value="对比分析">对比分析</option>
+              <option value="列表总结">列表总结</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">目标平台</label>
+            <select id="platform" class="block w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-blue-500 focus:border-blue-500">
+              <option value="通用">通用</option>
+              <option value="知乎">知乎</option>
+              <option value="微信公众号">微信公众号</option>
+              <option value="小红书">小红书</option>
+              <option value="今日头条">今日头条</option>
+            </select>
+          </div>
         </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">写作角度</label>
-          <input type="text" name="angle" value="<?= gc_h($_POST['angle'] ?? '') ?>" placeholder="如：从甲方视角，选GEO服务商的5个坑" class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+        <div class="flex items-center gap-3 pt-1">
+          <button id="genBtn" onclick="startGenerate()"
+            class="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            <i data-lucide="zap" class="w-4 h-4 mr-2"></i>开始生成
+          </button>
+          <span id="genStatus" class="text-sm text-gray-500 hidden">
+            <svg class="inline w-4 h-4 mr-1 animate-spin text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+            </svg>
+            AI 生成中，请稍候…
+          </span>
+          <span id="genError" class="text-sm text-red-600 hidden"></span>
         </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">字数要求</label>
-          <select name="word_count" class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-            <option value="800" <?= ($_POST['word_count']??'')==='800'?'selected':'' ?>>800字（短文）</option>
-            <option value="1000" <?= ($_POST['word_count']??'1000')==='1000'?'selected':'' ?>>1000字（标准）</option>
-            <option value="1500" <?= ($_POST['word_count']??'')==='1500'?'selected':'' ?>>1500字（深度）</option>
-            <option value="2000" <?= ($_POST['word_count']??'')==='2000'?'selected':'' ?>>2000字（长文）</option>
-          </select>
-        </div>
-
-        <button type="submit" name="action" value="generate" class="w-full py-2 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700">
-          🤖 生成文章
-        </button>
-      </form>
+      </div>
     </div>
 
-    <!-- 右侧：文章内容 -->
-    <div class="col-span-3">
-      <?php if ($article !== ''): ?>
-      <div class="bg-white rounded-lg border border-gray-200 p-5">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="font-semibold text-gray-700">生成结果</h2>
-          <span class="text-xs text-gray-400"><?= mb_strlen($article) ?> 字</span>
-          <?php if ($modelUsed): ?>
-          <span class="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full border border-blue-100">🤖 <?= htmlspecialchars($modelUsed) ?></span>
-          <?php endif; ?>
+    <!-- 生成结果卡（隐藏，生成后显示） -->
+    <div id="resultCard" class="bg-white shadow rounded-lg hidden">
+      <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <h3 class="text-base font-medium text-gray-900">生成结果</h3>
+        <span id="modelUsed" class="text-xs text-gray-400"></span>
+      </div>
+      <div class="px-6 py-5 space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">标题</label>
+          <input id="resultTitle" type="text"
+            class="block w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-blue-500 focus:border-blue-500">
         </div>
-        <textarea id="articleContent" class="w-full text-sm font-mono text-gray-700 border border-gray-200 rounded p-3 bg-gray-50" rows="22"><?= gc_h($article) ?></textarea>
-
-        <div class="mt-4 flex gap-3">
-          <form method="POST" class="flex-1">
-            <input type="hidden" name="customer" value="<?= gc_h($selectedCid) ?>">
-            <input type="hidden" name="action" value="push_feishu">
-            <input type="hidden" name="article" id="pushArticle" value="<?= gc_h($article) ?>">
-            <input type="hidden" name="push_title" value="<?= gc_h($articleTitle) ?>">
-            <input type="hidden" name="push_platform" value="<?= gc_h($_POST['platform'] ?? '知乎') ?>">
-            <button type="submit" class="w-full py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700">
-              推送到飞书审阅
-            </button>
-          </form>
-          <button onclick="navigator.clipboard.writeText(document.getElementById('articleContent').value)" class="px-4 py-2 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300">
-            复制全文
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">正文（Markdown）</label>
+          <textarea id="resultContent" rows="18"
+            class="block w-full border-gray-300 rounded-md shadow-sm text-sm font-mono focus:ring-blue-500 focus:border-blue-500"></textarea>
+        </div>
+        <div class="flex items-center gap-3">
+          <button onclick="saveDraft()"
+            class="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
+            <i data-lucide="save" class="w-4 h-4 mr-2"></i>保存为草稿并进入编辑
           </button>
+          <button onclick="startGenerate()"
+            class="inline-flex items-center px-4 py-2.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+            <i data-lucide="refresh-cw" class="w-4 h-4 mr-2"></i>重新生成
+          </button>
+          <span id="saveStatus" class="text-sm text-gray-500"></span>
         </div>
       </div>
-      <?php else: ?>
-      <div class="bg-white rounded-lg border border-gray-200 p-10 text-center text-gray-400">
-        <div class="text-4xl mb-3">✍️</div>
-        <p class="text-sm">填写左侧参数，点击「生成文章」</p>
-        <p class="text-xs mt-1">失守关键词直接点击快速填入</p>
+    </div>
+
+  </div>
+
+  <!-- 右：已有文章 -->
+  <div class="space-y-6">
+    <div class="bg-white shadow rounded-lg">
+      <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <h3 class="text-sm font-medium text-gray-900">已有相关文章</h3>
+        <span class="text-xs text-gray-400"><?php echo count($existing); ?> 篇</span>
       </div>
+      <?php if (empty($existing)): ?>
+        <div class="px-6 py-8 text-center text-sm text-gray-400">
+          <i data-lucide="file-x" class="w-8 h-8 mx-auto mb-2 text-gray-200"></i>
+          暂无匹配文章
+        </div>
+      <?php else: ?>
+        <div class="divide-y divide-gray-100">
+          <?php foreach ($existing as $art): ?>
+            <div class="px-4 py-3">
+              <a href="article-view.php?id=<?php echo (int) $art['id']; ?>"
+                 class="text-sm font-medium text-gray-800 hover:text-blue-600 line-clamp-2 block leading-snug">
+                <?php echo htmlspecialchars($art['title'], ENT_QUOTES, 'UTF-8'); ?>
+              </a>
+              <div class="mt-1.5 flex items-center gap-2 text-xs text-gray-400 flex-wrap">
+                <?php echo gc_status_badge($art['status'], $art['review_status']); ?>
+                <span><?php echo date('m-d', strtotime($art['created_at'])); ?></span>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+        <div class="px-4 py-3 border-t border-gray-100">
+          <a href="articles.php?search=<?php echo urlencode($keyword); ?>"
+             class="text-xs text-blue-600 hover:underline">在文章管理中查看全部 →</a>
+        </div>
       <?php endif; ?>
     </div>
-
   </div>
+
 </div>
-</body>
-</html>
+
+<script>
+const KEYWORD  = <?php echo json_encode($keyword); ?>;
+const CUSTOMER = <?php echo json_encode($customer); ?>;
+const ADMIN_PATH = <?php echo json_encode(ADMIN_BASE_PATH); ?>;
+
+function startGenerate() {
+  const btn       = document.getElementById('genBtn');
+  const status    = document.getElementById('genStatus');
+  const errEl     = document.getElementById('genError');
+  const resultCard = document.getElementById('resultCard');
+
+  btn.disabled = true;
+  status.classList.remove('hidden');
+  errEl.classList.add('hidden');
+
+  const body = new URLSearchParams({
+    action:   'generate',
+    keyword:  KEYWORD,
+    customer: CUSTOMER,
+    angle:    document.getElementById('angle').value,
+    fmt:      document.getElementById('fmt').value,
+    platform: document.getElementById('platform').value,
+  });
+
+  fetch(ADMIN_PATH + '/geo-content.php', { method: 'POST', body })
+    .then(r => r.json())
+    .then(data => {
+      btn.disabled = false;
+      status.classList.add('hidden');
+      if (data.error) {
+        errEl.textContent = data.error;
+        errEl.classList.remove('hidden');
+        return;
+      }
+      document.getElementById('resultTitle').value   = data.title   || '';
+      document.getElementById('resultContent').value = data.content || '';
+      document.getElementById('modelUsed').textContent = data.model_used ? '模型：' + data.model_used : '';
+      resultCard.classList.remove('hidden');
+      resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    })
+    .catch(e => {
+      btn.disabled = false;
+      status.classList.add('hidden');
+      errEl.textContent = '请求失败，请重试';
+      errEl.classList.remove('hidden');
+    });
+}
+
+function saveDraft() {
+  const title   = document.getElementById('resultTitle').value.trim();
+  const content = document.getElementById('resultContent').value.trim();
+  const saveStatus = document.getElementById('saveStatus');
+
+  if (!title || !content) { alert('标题和内容不能为空'); return; }
+
+  saveStatus.textContent = '保存中…';
+
+  const body = new URLSearchParams({
+    action:  'save',
+    keyword: KEYWORD,
+    title,
+    content,
+  });
+
+  fetch(ADMIN_PATH + '/geo-content.php', { method: 'POST', body })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) { saveStatus.textContent = '保存失败：' + data.error; return; }
+      window.location.href = ADMIN_PATH + '/' + data.redirect;
+    })
+    .catch(() => { saveStatus.textContent = '保存失败，请重试'; });
+}
+</script>
+
+<?php require_once __DIR__ . '/includes/footer.php'; ?>
