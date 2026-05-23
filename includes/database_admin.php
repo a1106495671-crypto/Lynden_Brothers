@@ -29,6 +29,7 @@ class DatabaseAdmin {
         $this->ensureMobileQuerySchema();
         $this->ensureGeoSemanticSchema();
         $this->ensureAutomationSchema();
+        $this->ensureAiCrawlerSchema();
         $this->insertDefaultData();
         $this->ensureTaskCreationSeedData();
     }
@@ -1104,6 +1105,25 @@ class DatabaseAdmin {
             )
         ");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_mobile_query_customer ON mobile_query_records(customer_id, platform, queried_at)");
+    }
+
+    private function ensureAiCrawlerSchema(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS ai_crawler_logs (
+                id          BIGSERIAL PRIMARY KEY,
+                bot_name    VARCHAR(80)  NOT NULL,
+                bot_company VARCHAR(60)  DEFAULT '',
+                user_agent  TEXT         DEFAULT '',
+                request_path VARCHAR(500) DEFAULT '',
+                article_slug VARCHAR(200) DEFAULT '',
+                ip_address  VARCHAR(45)  DEFAULT '',
+                referer     VARCHAR(500) DEFAULT '',
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_ai_crawler_bot    ON ai_crawler_logs(bot_name)");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_ai_crawler_created ON ai_crawler_logs(created_at)");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_ai_crawler_slug    ON ai_crawler_logs(article_slug)");
     }
 
     private function ensurePgvectorSchema(): void {

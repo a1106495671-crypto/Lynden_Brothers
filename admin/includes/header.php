@@ -46,7 +46,8 @@ $menu_items = [
     'ai-configurator.php' => ['name' => 'AI配置', 'icon' => 'cpu'],
     'site-settings.php' => ['name' => '网站设置', 'icon' => 'settings'],
     'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield'],
-    'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow']
+    'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow'],
+    'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot']
 ];
 
 if ($is_super_admin) {

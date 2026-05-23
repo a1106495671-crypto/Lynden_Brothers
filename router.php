@@ -7,6 +7,7 @@
  */
 
 require_once __DIR__ . '/includes/env_bootstrap.php';
+require_once __DIR__ . '/includes/ai_crawler_logger.php';
 
 // 获取请求的URI
 $requestUri = $_SERVER['REQUEST_URI'];
@@ -21,6 +22,11 @@ $path = rtrim($requestPath, '/');
 // 静态文件直接返回
 if (preg_match('/\.(css|js|txt|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$/', $path)) {
     return false; // 让PHP内置服务器处理静态文件
+}
+
+// AI 爬虫访问记录（仅前端页面，admin/api 不记录）
+if (strpos($path, $adminBasePath) !== 0 && strpos($path, '/api/') !== 0) {
+    ai_crawler_log();
 }
 
 // 上传目录中的脚本文件一律禁止执行
