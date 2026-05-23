@@ -1,0 +1,8 @@
+{
+  "id": "toutiao",
+  "name": "今日头条风格",
+  "description": "密集列表布局，纯文字标题行，适合高频更新的资讯类站点",
+  "author": "GEO System",
+  "version": "1.0.0",
+  "preview_color": "#e8321a"
+}

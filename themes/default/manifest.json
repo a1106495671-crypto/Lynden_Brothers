@@ -1,0 +1,8 @@
+{
+  "id": "default",
+  "name": "默认简洁版",
+  "description": "白底卡片布局，Tailwind CSS，适合内容为主的博客",
+  "author": "GEO System",
+  "version": "1.0.0",
+  "preview_color": "#2563eb"
+}

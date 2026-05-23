@@ -1,0 +1,8 @@
+{
+  "id": "netease",
+  "name": "网易新闻风格",
+  "description": "双栏门户布局，左侧主内容右侧侧边栏，适合内容量大的综合站点",
+  "author": "GEO System",
+  "version": "1.0.0",
+  "preview_color": "#cc0000"
+}

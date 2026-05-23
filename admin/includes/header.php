@@ -51,7 +51,8 @@ $menu_items = [
     'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield'],
     'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow'],
     'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot'],
-    'access-logs.php'        => ['name' => '访问日志',      'icon' => 'activity']
+    'access-logs.php'        => ['name' => '访问日志',      'icon' => 'activity'],
+    'theme-settings.php'     => ['name' => '前台主题',      'icon' => 'layout-template']
 ];
 
 if ($is_super_admin) {
