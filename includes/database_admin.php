@@ -28,6 +28,7 @@ class DatabaseAdmin {
         $this->ensureCustomerSchema();
         $this->ensureMobileQuerySchema();
         $this->ensureGeoSemanticSchema();
+        $this->ensureAutomationSchema();
         $this->insertDefaultData();
         $this->ensureTaskCreationSeedData();
     }
@@ -926,6 +927,56 @@ class DatabaseAdmin {
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_scenario VARCHAR(1)   DEFAULT 'B'");
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_brand_name VARCHAR(200) DEFAULT ''");
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_customer_id VARCHAR(80)  DEFAULT ''");
+    }
+
+    private function ensureAutomationSchema(): void {
+        // 自动化工作流主表
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS automation_workflows (
+                id              BIGSERIAL    PRIMARY KEY,
+                workflow_id     VARCHAR(64)  NOT NULL UNIQUE,
+                brand_name      VARCHAR(200) NOT NULL DEFAULT '',
+                industry        VARCHAR(120) NOT NULL DEFAULT '',
+                website         VARCHAR(200) DEFAULT '',
+                services        TEXT         DEFAULT '',
+                competitors     TEXT         DEFAULT '',
+                positioning     TEXT         DEFAULT '',
+                article_count   INT          NOT NULL DEFAULT 10,
+                status          VARCHAR(20)  NOT NULL DEFAULT 'pending',
+                current_step    VARCHAR(40)  DEFAULT '',
+                customer_id     VARCHAR(80)  DEFAULT '',
+                keyword_library_id BIGINT    DEFAULT NULL,
+                title_library_id   BIGINT    DEFAULT NULL,
+                knowledge_base_id  BIGINT    DEFAULT NULL,
+                task_id         BIGINT       DEFAULT NULL,
+                error_message   TEXT         DEFAULT '',
+                created_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+                completed_at    TIMESTAMP    DEFAULT NULL
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_workflows_status ON automation_workflows(status)");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_workflows_wf_id ON automation_workflows(workflow_id)");
+
+        // 自动化工作流步骤表
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS automation_workflow_steps (
+                id              BIGSERIAL    PRIMARY KEY,
+                workflow_id     VARCHAR(64)  NOT NULL,
+                step_id         VARCHAR(40)  NOT NULL,
+                step_order      INT          NOT NULL DEFAULT 0,
+                status          VARCHAR(20)  NOT NULL DEFAULT 'pending',
+                started_at      TIMESTAMP    DEFAULT NULL,
+                finished_at     TIMESTAMP    DEFAULT NULL,
+                elapsed_seconds INT          DEFAULT NULL,
+                output_data     TEXT         DEFAULT NULL,
+                error_message   TEXT         DEFAULT '',
+                created_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+                updated_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (workflow_id, step_id)
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_steps_wf_id ON automation_workflow_steps(workflow_id)");
     }
 
     private function ensureCustomerSchema(): void {

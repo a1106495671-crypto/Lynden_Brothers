@@ -45,7 +45,8 @@ $menu_items = [
     'materials.php' => ['name' => '素材管理', 'icon' => 'folder'],
     'ai-configurator.php' => ['name' => 'AI配置', 'icon' => 'cpu'],
     'site-settings.php' => ['name' => '网站设置', 'icon' => 'settings'],
-    'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield']
+    'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield'],
+    'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow']
 ];
 
 if ($is_super_admin) {
@@ -254,33 +255,53 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                 </nav>
                 
                 <!-- 右侧用户信息 -->
-                <div class="flex shrink-0 items-center space-x-4">
+                <div class="flex shrink-0 items-center gap-1.5">
                     <!-- 全局搜索 -->
-                    <form action="<?php echo htmlspecialchars(admin_url('search.php')); ?>" method="GET" class="hidden sm:block">
+                    <form action="<?php echo htmlspecialchars(admin_url('search.php')); ?>" method="GET" class="hidden lg:block">
                         <div class="relative">
                             <i data-lucide="search" class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"></i>
                             <input type="text" name="q" value="<?php echo htmlspecialchars($_GET['q'] ?? ''); ?>"
-                                placeholder=""
-                                class="w-44 rounded-md border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-3 text-sm text-gray-700 placeholder-gray-400 transition focus:w-60 focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                placeholder="搜索..."
+                                class="w-36 rounded-md border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-3 text-sm text-gray-700 placeholder-gray-400 transition focus:w-52 focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
                         </div>
                     </form>
-                    <!-- 通知图标 -->
-                    <button class="text-gray-400 hover:text-gray-600 transition-colors duration-200">
-                        <i data-lucide="bell" class="w-5 h-5"></i>
-                    </button>
-                    
+
+                    <!-- 图标组 -->
+                    <div class="flex items-center gap-0.5">
+                        <!-- 搜索 (小屏) -->
+                        <a href="<?php echo htmlspecialchars(admin_url('search.php')); ?>"
+                           class="lg:hidden rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
+                           title="搜索">
+                            <i data-lucide="search" class="w-4.5 h-4.5"></i>
+                        </a>
+                        <!-- 通知 -->
+                        <button class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors" title="通知">
+                            <i data-lucide="bell" class="w-4.5 h-4.5"></i>
+                        </button>
+                        <!-- 自动化工作流 -->
+                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
+                           class="relative rounded-md p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 transition-colors"
+                           title="品牌入驻自动化">
+                            <i data-lucide="workflow" class="w-4.5 h-4.5"></i>
+                            <span id="nav-automation-dot" class="absolute top-1 right-1 hidden h-2 w-2 rounded-full bg-emerald-400 ring-1.5 ring-white animate-pulse"></span>
+                        </a>
+                    </div>
+
+                    <!-- 分隔线 -->
+                    <div class="h-6 w-px bg-gray-200 mx-1"></div>
+
                     <!-- 用户信息 -->
-                    <div class="flex items-center space-x-3">
-                        <div class="text-right">
-                            <div class="text-sm text-gray-600">欢迎，<?php echo htmlspecialchars($current_admin['username'] ?? ($_SESSION['admin_username'] ?? 'Admin')); ?></div>
-                            <div class="text-xs text-gray-400"><?php echo htmlspecialchars($admin_role_label); ?></div>
+                    <div class="flex items-center gap-2">
+                        <div class="text-right hidden md:block">
+                            <div class="text-sm text-gray-600"><?php echo htmlspecialchars($current_admin['username'] ?? ($_SESSION['admin_username'] ?? 'Admin')); ?></div>
+                            <div class="text-[10px] text-gray-400"><?php echo htmlspecialchars($admin_role_label); ?></div>
                         </div>
                         <div class="relative">
-                            <button onclick="toggleUserMenu()" class="flex items-center space-x-1 text-sm text-gray-600 hover:text-gray-900 transition-colors duration-200">
-                                <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                                    <i data-lucide="user" class="w-4 h-4 text-blue-600"></i>
+                            <button onclick="toggleUserMenu()" class="flex items-center gap-1 rounded-md p-1 text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors">
+                                <div class="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center">
+                                    <i data-lucide="user" class="w-3.5 h-3.5 text-blue-600"></i>
                                 </div>
-                                <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                                <i data-lucide="chevron-down" class="w-3.5 h-3.5"></i>
                             </button>
                             
                             <!-- 用户下拉菜单 -->
@@ -323,6 +344,13 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
         <!-- 移动端菜单 -->
         <div id="mobile-menu" class="hidden md:hidden">
             <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3 bg-gray-50 border-t">
+                <!-- 自动化入口 (移动端) -->
+                <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
+                   class="flex items-center gap-2 rounded-md bg-gradient-to-r from-violet-600 to-indigo-600 px-3 py-2.5 text-sm font-semibold text-white transition">
+                    <i data-lucide="workflow" class="w-4 h-4"></i>
+                    品牌入驻自动化
+                </a>
+                <div class="border-t border-gray-200 my-1"></div>
                 <?php foreach ($primary_nav_items as $item): ?>
                     <?php if (($item['type'] ?? 'link') === 'dropdown'): ?>
                         <div class="px-3 pt-3 pb-1 text-xs font-semibold text-gray-400"><?php echo htmlspecialchars($item['name']); ?></div>
