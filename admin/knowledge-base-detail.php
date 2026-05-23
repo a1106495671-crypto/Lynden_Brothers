@@ -92,11 +92,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // 获取使用此知识库的任务
 $related_tasks = [];
 $knowledge_chunk_count = 0;
+$knowledge_chunks_preview = [];
+$knowledge_vector_count = 0;
 try {
     $stmt = $db->prepare("
-        SELECT id, name, status, created_at 
-        FROM tasks 
-        WHERE knowledge_base_id = ? 
+        SELECT id, name, status, created_at
+        FROM tasks
+        WHERE knowledge_base_id = ?
         ORDER BY created_at DESC
     ");
     $stmt->execute([$knowledge_id]);
@@ -105,6 +107,14 @@ try {
     $chunkStmt = $db->prepare("SELECT COUNT(*) FROM knowledge_chunks WHERE knowledge_base_id = ?");
     $chunkStmt->execute([$knowledge_id]);
     $knowledge_chunk_count = (int) $chunkStmt->fetchColumn();
+
+    $vecStmt = $db->prepare("SELECT COUNT(*) FROM knowledge_chunks WHERE knowledge_base_id = ? AND embedding_model_id IS NOT NULL AND embedding_model_id > 0");
+    $vecStmt->execute([$knowledge_id]);
+    $knowledge_vector_count = (int) $vecStmt->fetchColumn();
+
+    $previewStmt = $db->prepare("SELECT chunk_index, content, token_count, embedding_model_id FROM knowledge_chunks WHERE knowledge_base_id = ? ORDER BY chunk_index ASC LIMIT 50");
+    $previewStmt->execute([$knowledge_id]);
+    $knowledge_chunks_preview = $previewStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     // 如果knowledge_base_id字段不存在，忽略错误
 }
@@ -303,6 +313,60 @@ require_once __DIR__ . '/includes/header.php';
         <?php endif; ?>
     </div>
 </div>
+
+<!-- Chunk preview section -->
+<?php if ($knowledge_chunk_count > 0): ?>
+<div class="mt-6 bg-white shadow rounded-lg overflow-hidden">
+    <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <h3 class="text-lg font-medium text-gray-900">
+            知识切片预览
+            <span class="ml-2 text-sm font-normal text-gray-400"><?php echo $knowledge_chunk_count; ?> 个切片，<?php echo $knowledge_vector_count; ?> 个已向量化</span>
+        </h3>
+        <a href="rag-test.php" class="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1">
+            <i data-lucide="flask-conical" class="w-4 h-4"></i> 去检索测试
+        </a>
+    </div>
+    <div class="p-4">
+        <!-- vector coverage bar -->
+        <?php $vec_pct = $knowledge_chunk_count > 0 ? round($knowledge_vector_count / $knowledge_chunk_count * 100) : 0; ?>
+        <div class="flex items-center gap-3 mb-4 text-sm">
+            <span class="text-gray-500 w-16 text-right shrink-0">向量覆盖</span>
+            <div class="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div class="h-full <?php echo $vec_pct >= 90 ? 'bg-green-500' : ($vec_pct > 0 ? 'bg-yellow-400' : 'bg-gray-300'); ?> rounded-full" style="width:<?php echo $vec_pct; ?>%"></div>
+            </div>
+            <span class="text-gray-600 w-10 shrink-0"><?php echo $vec_pct; ?>%</span>
+            <?php if ($vec_pct === 0): ?>
+                <span class="text-xs text-yellow-600 bg-yellow-50 px-2 py-0.5 rounded">词法 fallback 模式</span>
+            <?php elseif ($vec_pct < 100): ?>
+                <span class="text-xs text-yellow-600 bg-yellow-50 px-2 py-0.5 rounded">混合模式</span>
+            <?php else: ?>
+                <span class="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded">全向量检索</span>
+            <?php endif; ?>
+        </div>
+        <!-- chunk list -->
+        <div class="space-y-2 max-h-96 overflow-y-auto pr-1">
+            <?php foreach ($knowledge_chunks_preview as $chunk): ?>
+                <?php $has_vec = !empty($chunk['embedding_model_id']) && (int) $chunk['embedding_model_id'] > 0; ?>
+                <div class="border border-gray-100 rounded-lg p-3 hover:border-gray-200">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <span class="text-xs font-mono text-gray-400">#<?php echo (int) $chunk['chunk_index']; ?></span>
+                        <?php if ($has_vec): ?>
+                            <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">向量</span>
+                        <?php else: ?>
+                            <span class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">词法</span>
+                        <?php endif; ?>
+                        <span class="text-xs text-gray-300"><?php echo (int) $chunk['token_count']; ?> tokens</span>
+                    </div>
+                    <p class="text-sm text-gray-700 leading-relaxed line-clamp-3"><?php echo htmlspecialchars((string) ($chunk['content'] ?? '')); ?></p>
+                </div>
+            <?php endforeach; ?>
+            <?php if ($knowledge_chunk_count > 50): ?>
+                <p class="text-center text-xs text-gray-400 py-2">仅显示前 50 个切片，共 <?php echo $knowledge_chunk_count; ?> 个</p>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <script>
 // 实时字数统计

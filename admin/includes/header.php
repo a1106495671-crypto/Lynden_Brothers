@@ -30,6 +30,7 @@ $menu_items = [
     'geo-panorama.php' => ['name' => '全景诊断', 'icon' => 'scan-search'],
     'geo-intent.php' => ['name' => '意图挖掘', 'icon' => 'search'],
     'geo-knowledge-graph.php' => ['name' => '知识图谱', 'icon' => 'git-branch'],
+    'rag-test.php'            => ['name' => 'RAG 检索测试', 'icon' => 'flask-conical'],
     'geo-roadmap.php' => ['name' => '执行路线图', 'icon' => 'map'],
     'geo-monitor-dashboard.php' => ['name' => '监测大盘', 'icon' => 'activity'],
     'geo-content-queue.php' => ['name' => '生成队列', 'icon' => 'list-checks'],
