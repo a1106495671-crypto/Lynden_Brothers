@@ -256,33 +256,21 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                 
                 <!-- 右侧用户信息 -->
                 <div class="flex shrink-0 items-center gap-1.5">
-                    <!-- 全局搜索 -->
-                    <form action="<?php echo htmlspecialchars(admin_url('search.php')); ?>" method="GET" class="hidden lg:block">
-                        <div class="relative">
-                            <i data-lucide="search" class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"></i>
-                            <input type="text" name="q" value="<?php echo htmlspecialchars($_GET['q'] ?? ''); ?>"
-                                placeholder="搜索..."
-                                class="w-36 rounded-md border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-3 text-sm text-gray-700 placeholder-gray-400 transition focus:w-52 focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                        </div>
-                    </form>
-
                     <!-- 图标组 -->
                     <div class="flex items-center gap-0.5">
-                        <!-- 搜索 (小屏) -->
-                        <a href="<?php echo htmlspecialchars(admin_url('search.php')); ?>"
-                           class="lg:hidden rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
-                           title="搜索">
-                            <i data-lucide="search" class="w-4.5 h-4.5"></i>
-                        </a>
+                        <!-- 搜索 -->
+                        <button onclick="openSearchModal()" class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors" title="搜索">
+                            <i data-lucide="search" class="w-5 h-5"></i>
+                        </button>
                         <!-- 通知 -->
                         <button class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors" title="通知">
-                            <i data-lucide="bell" class="w-4.5 h-4.5"></i>
+                            <i data-lucide="bell" class="w-5 h-5"></i>
                         </button>
                         <!-- 自动化工作流 -->
                         <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
                            class="relative rounded-md p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 transition-colors"
                            title="品牌入驻自动化">
-                            <i data-lucide="workflow" class="w-4.5 h-4.5"></i>
+                            <i data-lucide="workflow" class="w-5 h-5"></i>
                             <span id="nav-automation-dot" class="absolute top-1 right-1 hidden h-2 w-2 rounded-full bg-emerald-400 ring-1.5 ring-white animate-pulse"></span>
                         </a>
                     </div>
@@ -382,6 +370,26 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
         </div>
     </nav>
 
+    <!-- 搜索弹框 -->
+    <div id="search-modal" class="fixed inset-0 z-[60] hidden">
+        <div class="absolute inset-0 bg-gray-900/40 backdrop-blur-sm" onclick="closeSearchModal()"></div>
+        <div class="absolute left-1/2 top-[20%] -translate-x-1/2 w-full max-w-xl px-4">
+            <div class="rounded-xl bg-white shadow-2xl border border-gray-200 overflow-hidden">
+                <form action="<?php echo htmlspecialchars(admin_url('search.php')); ?>" method="GET">
+                    <div class="flex items-center gap-3 px-4 py-3">
+                        <i data-lucide="search" class="h-5 w-5 text-gray-400 shrink-0"></i>
+                        <input type="text" name="q" id="search-modal-input"
+                            placeholder="搜索客户、文章、任务..."
+                            class="flex-1 text-base text-gray-900 placeholder-gray-400 outline-none bg-transparent"
+                            autocomplete="off"
+                            onkeydown="if(event.key==='Escape')closeSearchModal()">
+                        <kbd class="hidden sm:inline-flex items-center rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[10px] font-medium text-gray-400">ESC</kbd>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <?php if (!empty($current_customer_context) && is_array($current_customer_context)): ?>
         <div class="border-b border-slate-200 bg-slate-900 text-white">
             <div class="max-w-7xl mx-auto flex flex-col gap-2 px-4 py-3 text-sm sm:px-6 lg:px-8 md:flex-row md:items-center md:justify-between">
@@ -475,6 +483,24 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
         document.addEventListener('DOMContentLoaded', function() {
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
+            }
+        });
+
+        // 搜索弹框
+        function openSearchModal() {
+            document.getElementById('search-modal').classList.remove('hidden');
+            setTimeout(function() {
+                document.getElementById('search-modal-input').focus();
+            }, 50);
+        }
+        function closeSearchModal() {
+            document.getElementById('search-modal').classList.add('hidden');
+        }
+        // Ctrl/Cmd + K 打开搜索
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                openSearchModal();
             }
         });
 
