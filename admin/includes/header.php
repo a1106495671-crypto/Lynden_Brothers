@@ -39,6 +39,7 @@ $menu_items = [
     'geo-content.php' => ['name' => '内容生成', 'icon' => 'pen-tool'],
     'articles.php' => ['name' => '文章管理', 'icon' => 'file-text'],
     'distribution.php' => ['name' => '媒体分发', 'icon' => 'send'],
+    'distribution-queue.php' => ['name' => '分发队列', 'icon' => 'list-ordered'],
     'sop-center.php' => ['name' => '策略中心', 'icon' => 'book-open-check'],
     'geo-monitor.php' => ['name' => 'GEO监测', 'icon' => 'radar'],
     'competitor-timeline.php' => ['name' => '竞品时间线', 'icon' => 'trending-up'],

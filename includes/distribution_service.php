@@ -255,6 +255,10 @@ function ensure_distribution_schema(PDO $db): void {
         }
     }
 
+    if (!db_column_exists($db, 'media_publish_jobs', 'retry_count')) {
+        $db->exec("ALTER TABLE media_publish_jobs ADD COLUMN retry_count INTEGER DEFAULT 0");
+    }
+
     $db->exec("CREATE INDEX IF NOT EXISTS idx_media_accounts_platform ON media_accounts(platform, status)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_media_accounts_filters ON media_accounts(media_type, portal_source, industry, region, status)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_media_publish_jobs_article ON media_publish_jobs(article_id, created_at DESC)");
@@ -834,6 +838,46 @@ function geo_monitor_inject_article_keywords(PDO $db, int $articleId, string $cu
         }
     }
     return $inserted;
+}
+
+function distribution_job_retry(PDO $db, int $jobId): void {
+    $db->prepare("
+        UPDATE media_publish_jobs
+        SET status = 'queued', error_message = '', remote_url = '',
+            retry_count = retry_count + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    ")->execute([$jobId]);
+}
+
+function distribution_queue_get_jobs(PDO $db, string $status = '', int $limit = 100, int $offset = 0): array {
+    $where = $status !== '' ? "WHERE j.status = " . $db->quote($status) : '';
+    $stmt = $db->prepare("
+        SELECT j.id, j.article_id, j.account_id, j.platform, j.status,
+               j.title, j.remote_url, j.error_message,
+               j.retry_count, j.scheduled_at, j.started_at, j.finished_at,
+               j.created_at, j.updated_at,
+               a.title AS article_title, a.slug AS article_slug,
+               ma.account_name, ma.media_type
+        FROM media_publish_jobs j
+        LEFT JOIN articles a ON j.article_id = a.id
+        LEFT JOIN media_accounts ma ON j.account_id = ma.id
+        $where
+        ORDER BY j.updated_at DESC
+        LIMIT ? OFFSET ?
+    ");
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function distribution_queue_count(PDO $db, string $status = ''): int {
+    if ($status !== '') {
+        $stmt = $db->prepare("SELECT COUNT(*) FROM media_publish_jobs WHERE status = ?");
+        $stmt->execute([$status]);
+        return (int) $stmt->fetchColumn();
+    }
+    return (int) $db->query("SELECT COUNT(*) FROM media_publish_jobs")->fetchColumn();
 }
 
 function distribution_job_meta(string $status): array {
