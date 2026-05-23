@@ -43,6 +43,7 @@ $menu_items = [
     'distribution.php' => ['name' => '媒体分发', 'icon' => 'send'],
     'distribution-queue.php'    => ['name' => '分发队列',   'icon' => 'list-ordered'],
     'channel-site-package.php' => ['name' => '站点包',     'icon' => 'package'],
+    'agent-keys.php'           => ['name' => 'Agent 密钥',  'icon' => 'key-round'],
     'sop-center.php' => ['name' => '策略中心', 'icon' => 'book-open-check'],
     'geo-monitor.php' => ['name' => 'GEO监测', 'icon' => 'radar'],
     'competitor-timeline.php' => ['name' => '竞品时间线', 'icon' => 'trending-up'],
