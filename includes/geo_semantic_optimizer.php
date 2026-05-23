@@ -218,6 +218,24 @@ GEO;
         // 判断是否含FAQ结构
         $hasFaq = (bool) preg_match('/(?:常见问题|FAQ|Q[：:&A]|问[：:])/u', $content);
 
+        // 核心事实（is_core=true）逐字锚定检验
+        $missingCoreFacts = [];
+        foreach ($facts as $f) {
+            if (empty($f['is_core'])) continue;
+            $key   = (string) ($f['fact_key']   ?? '');
+            $label = (string) ($f['fact_label'] ?? $key);
+            $value = trim((string) ($f['fact_value'] ?? ''));
+            // 跳过品牌名、母句、纯元数据字段
+            if ($key === '' || $value === '' || in_array($key, ['brand_name', 'master_sentence', 'contact_name', 'contact_phone'], true)) {
+                continue;
+            }
+            // 取事实值的第一个有意义片段（数字+单位 或 短语，最多20字）做子串匹配
+            $anchor = mb_substr($value, 0, 20, 'UTF-8');
+            if ($anchor !== '' && !str_contains($content, $anchor)) {
+                $missingCoreFacts[] = $label;
+            }
+        }
+
         $issues = [];
         if (!empty($violations)) {
             $issues[] = '红线违规：' . implode('、', array_column($violations, 'text'));
@@ -233,6 +251,9 @@ GEO;
         }
         if ($masterSentence !== '' && !$hasMasterSentence) {
             $issues[] = '品牌母句未逐字出现';
+        }
+        if (!empty($missingCoreFacts)) {
+            $issues[] = '核心事实未出现：' . implode('、', $missingCoreFacts);
         }
 
         return [

@@ -66,6 +66,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // 品牌核心事实（geo_brand_facts）管理
+    if ($action === 'toggle_core') {
+        header('Content-Type: application/json');
+        $factId = (int)($_POST['fact_id'] ?? 0);
+        $isCore = ($_POST['is_core'] ?? '0') === '1';
+        try {
+            $db->prepare("UPDATE geo_brand_facts SET is_core=?, updated_at=NOW() WHERE id=? AND customer_id=?")->execute([$isCore, $factId, $cid]);
+            echo json_encode(['ok' => true]);
+        } catch (Throwable $e) {
+            echo json_encode(['ok' => false, 'err' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    if ($action === 'save_brand_fact') {
+        $factId = (int)($_POST['fact_id'] ?? 0);
+        $factKey   = preg_replace('/[^a-z0-9_]/', '_', strtolower(trim($_POST['fact_key'] ?? '')));
+        $factLabel = trim($_POST['fact_label'] ?? '');
+        $factValue = trim($_POST['fact_value'] ?? '');
+        $isCore    = !empty($_POST['is_core']);
+        if ($factKey && $factLabel && $factValue && $cid) {
+            if ($factId > 0) {
+                $db->prepare("UPDATE geo_brand_facts SET fact_key=?,fact_label=?,fact_value=?,is_core=?,updated_at=NOW() WHERE id=? AND customer_id=?")->execute([$factKey,$factLabel,$factValue,$isCore,$factId,$cid]);
+            } else {
+                $db->prepare("INSERT INTO geo_brand_facts (customer_id,fact_key,fact_label,fact_value,is_core) VALUES (?,?,?,?,?) ON CONFLICT (customer_id,fact_key) DO UPDATE SET fact_label=EXCLUDED.fact_label,fact_value=EXCLUDED.fact_value,is_core=EXCLUDED.is_core,updated_at=NOW()")->execute([$cid,$factKey,$factLabel,$factValue,$isCore]);
+            }
+        }
+        header("Location: ?customer={$cid}&cat={$selectedCat}&tab=facts");
+        exit;
+    }
+
+    if ($action === 'delete_brand_fact') {
+        $factId = (int)($_POST['fact_id'] ?? 0);
+        if ($factId > 0 && $cid) {
+            $db->prepare("DELETE FROM geo_brand_facts WHERE id=? AND customer_id=?")->execute([$factId, $cid]);
+        }
+        header("Location: ?customer={$cid}&cat={$selectedCat}&tab=facts");
+        exit;
+    }
+
     if ($action === 'ai_suggest') {
         header('Content-Type: application/json; charset=utf-8');
         $category = $_POST['category'] ?? 'stat';
@@ -126,6 +166,17 @@ if ($selectedCid) {
     $stmt = $db->prepare("SELECT * FROM geo_brand_knowledge WHERE customer_id=? AND category=? ORDER BY citability_score DESC, created_at DESC");
     $stmt->execute([$selectedCid, $selectedCat]);
     $facts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// 品牌核心事实（geo_brand_facts）
+$brandFacts = [];
+$activeTab = $_GET['tab'] ?? 'knowledge';
+if ($selectedCid) {
+    try {
+        $bfStmt = $db->prepare("SELECT * FROM geo_brand_facts WHERE customer_id=? ORDER BY is_core DESC, sort_order ASC, created_at ASC");
+        $bfStmt->execute([$selectedCid]);
+        $brandFacts = $bfStmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
 }
 
 // Counts per category
@@ -332,5 +383,119 @@ function fillForm(cat, title, content, source, score) {
   document.querySelector('[name=citability_score]').value = score;
   document.getElementById('addForm').scrollIntoView({behavior:'smooth'});
 }
+
+async function toggleCore(factId, checkbox) {
+    const isCore = checkbox.checked ? '1' : '0';
+    const fd = new FormData();
+    fd.append('action', 'toggle_core');
+    fd.append('customer_id', '<?= htmlspecialchars($selectedCid, ENT_QUOTES) ?>');
+    fd.append('fact_id', factId);
+    fd.append('is_core', isCore);
+    const res = await fetch('', {method:'POST', body: fd});
+    const data = await res.json();
+    const row = checkbox.closest('tr');
+    if (data.ok) {
+        row.classList.toggle('bg-indigo-50', checkbox.checked);
+    } else {
+        checkbox.checked = !checkbox.checked;
+        alert('更新失败');
+    }
+}
 </script>
+
+<!-- 品牌核心事实面板 -->
+<div class="max-w-6xl mx-auto px-4 pb-10 mt-8" id="brandFactsPanel">
+  <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-gray-800">品牌核心事实锚点</h2>
+        <p class="text-xs text-gray-400 mt-0.5">
+          标记为「核心」的事实在文章评分时会检验是否逐字出现。母句、服务等关键信息建议标记为核心。
+          <span class="text-indigo-500">当前 <?= count(array_filter($brandFacts, fn($f) => !empty($f['is_core']))) ?> 条核心事实</span>
+        </p>
+      </div>
+      <button onclick="document.getElementById('addBrandFactForm').classList.toggle('hidden')"
+              class="text-sm text-indigo-600 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50">+ 添加事实</button>
+    </div>
+
+    <!-- 添加事实表单 -->
+    <div id="addBrandFactForm" class="hidden px-5 py-4 bg-indigo-50 border-b border-indigo-100">
+      <form method="POST" class="flex flex-wrap items-end gap-3">
+        <input type="hidden" name="action" value="save_brand_fact">
+        <input type="hidden" name="customer_id" value="<?= htmlspecialchars($selectedCid) ?>">
+        <input type="hidden" name="fact_id" value="0">
+        <div>
+          <label class="text-xs text-gray-600 block mb-1">事实标识（英文）</label>
+          <input name="fact_key" placeholder="如 founding_year" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-36" required>
+        </div>
+        <div>
+          <label class="text-xs text-gray-600 block mb-1">显示名称</label>
+          <input name="fact_label" placeholder="如 成立年份" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-28" required>
+        </div>
+        <div class="flex-1 min-w-[200px]">
+          <label class="text-xs text-gray-600 block mb-1">事实内容</label>
+          <input name="fact_value" placeholder="如 2019年成立于上海" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full" required>
+        </div>
+        <div class="flex items-center gap-1.5 mb-1">
+          <input type="checkbox" name="is_core" id="isCoreCbNew" value="1" checked class="rounded">
+          <label for="isCoreCbNew" class="text-xs text-gray-600">标记为核心</label>
+        </div>
+        <button type="submit" class="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-indigo-700">保存</button>
+        <button type="button" onclick="document.getElementById('addBrandFactForm').classList.add('hidden')" class="text-sm text-gray-500 hover:text-gray-700 px-2">取消</button>
+      </form>
+    </div>
+
+    <?php if (empty($brandFacts)): ?>
+    <div class="px-5 py-8 text-center text-sm text-gray-400">
+      暂无品牌事实。<a href="geo-onboard.php" class="text-indigo-500 hover:text-indigo-700">→ 在品牌入驻时自动生成</a>，或在此手动添加。
+    </div>
+    <?php else: ?>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+          <tr>
+            <th class="px-4 py-2.5 text-left w-8">核心</th>
+            <th class="px-4 py-2.5 text-left">标识</th>
+            <th class="px-4 py-2.5 text-left">名称</th>
+            <th class="px-4 py-2.5 text-left">内容</th>
+            <th class="px-4 py-2.5 text-center w-20">操作</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+          <?php foreach ($brandFacts as $bf): $isCore = !empty($bf['is_core']); ?>
+          <tr class="hover:bg-gray-50 <?= $isCore ? 'bg-indigo-50/40' : '' ?>">
+            <td class="px-4 py-2.5 text-center">
+              <input type="checkbox"
+                     <?= $isCore ? 'checked' : '' ?>
+                     onchange="toggleCore(<?= (int)$bf['id'] ?>, this)"
+                     class="rounded accent-indigo-600 cursor-pointer"
+                     title="<?= $isCore ? '取消核心标记' : '标记为核心事实' ?>">
+            </td>
+            <td class="px-4 py-2.5 text-xs text-gray-400 font-mono"><?= htmlspecialchars($bf['fact_key']) ?></td>
+            <td class="px-4 py-2.5 text-xs font-medium text-gray-700">
+              <?= htmlspecialchars($bf['fact_label']) ?>
+              <?php if ($isCore): ?>
+                <span class="ml-1 text-[10px] bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full">核心</span>
+              <?php endif; ?>
+            </td>
+            <td class="px-4 py-2.5 text-xs text-gray-600 max-w-sm">
+              <span class="line-clamp-2"><?= htmlspecialchars($bf['fact_value']) ?></span>
+            </td>
+            <td class="px-4 py-2.5 text-center">
+              <form method="POST" onsubmit="return confirm('确认删除？')" class="inline">
+                <input type="hidden" name="action" value="delete_brand_fact">
+                <input type="hidden" name="customer_id" value="<?= htmlspecialchars($selectedCid) ?>">
+                <input type="hidden" name="fact_id" value="<?= (int)$bf['id'] ?>">
+                <button type="submit" class="text-xs text-red-400 hover:text-red-600">删除</button>
+              </form>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+    <?php endif; ?>
+  </div>
+</div>
+
 <?php require_once __DIR__ . '/includes/footer.php'; ?>

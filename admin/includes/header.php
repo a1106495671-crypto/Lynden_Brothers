@@ -54,7 +54,9 @@ $menu_items = [
     'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow'],
     'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot'],
     'access-logs.php'        => ['name' => '访问日志',      'icon' => 'activity'],
-    'theme-settings.php'     => ['name' => '前台主题',      'icon' => 'layout-template']
+    'theme-settings.php'     => ['name' => '前台主题',      'icon' => 'layout-template'],
+    'geo-scorecard.php'      => ['name' => 'GEO质量看板',   'icon' => 'shield-check'],
+    'geo-content-suggest.php'=> ['name' => 'GEO内容建议',   'icon' => 'lightbulb'],
 ];
 
 if ($is_super_admin) {
@@ -88,6 +90,7 @@ $primary_nav_items = [
             ['page' => 'geo-content.php',      'name' => '内容生成',     'desc' => 'AI一键生成GEO文章'],
             ['page' => 'geo-content-queue.php','name' => '批量生成队列', 'desc' => '策略日历批量生成文章'],
             ['page' => 'articles.php',         'name' => '文章管理',     'desc' => '内容生产与审核'],
+            ['page' => 'geo-scorecard.php',    'name' => 'GEO质量看板',  'desc' => '三维评分分布与低分预警'],
             ['page' => 'distribution.php',     'name' => '媒体分发',     'desc' => '平台铺设与发布'],
         ],
     ],
@@ -99,8 +102,9 @@ $primary_nav_items = [
             ['page' => 'geo-monitor.php',          'name' => 'GEO监测',   'desc' => '关键词引用率实时监测'],
             ['page' => 'competitor-timeline.php',  'name' => '竞品对比',  'desc' => '品牌vs竞品提及率历史曲线'],
             ['page' => 'geo-monitor-dashboard.php','name' => '监测大盘',  'desc' => '多客户数据概览大屏'],
-            ['page' => 'geo-article-impact.php',   'name' => '效果归因',  'desc' => '文章发布前后AI提及率对比'],
-            ['page' => 'geo-roadmap.php',          'name' => '执行路线图','desc' => '进度与优先行动清单'],
+            ['page' => 'geo-article-impact.php',    'name' => '效果归因',  'desc' => '文章发布前后AI提及率对比'],
+            ['page' => 'geo-content-suggest.php',  'name' => '内容补充建议','desc' => '低提及率关键词→自动加入写作队列'],
+            ['page' => 'geo-roadmap.php',           'name' => '执行路线图','desc' => '进度与优先行动清单'],
         ],
     ],
     ['type' => 'link', 'page' => 'ops-dashboard.php', 'name' => '运营', 'icon' => 'layout-dashboard'],
