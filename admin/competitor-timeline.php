@@ -67,8 +67,7 @@ foreach ($competitors as $comp) {
               AND queried_at >= NOW() - INTERVAL '{$weeks} weeks'
             GROUP BY 1 ORDER BY 1
         ");
-        // Reorder: competitor name first for ILIKE, then customer_id
-        $paramsFinal = [$comp, $selectedCid];
+        $paramsFinal = ['%' . $comp . '%', $selectedCid];
         if ($selectedPlatform !== 'all') $paramsFinal[] = $selectedPlatform;
         $stmt->execute($paramsFinal);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -222,7 +221,7 @@ require_once __DIR__ . '/includes/header.php';
       <h3 class="font-semibold text-gray-800 text-sm mb-4">追踪竞品（<?= count($competitors) ?>个）</h3>
       <?php if (empty($competitors)): ?>
         <p class="text-sm text-gray-400">暂未配置竞品</p>
-        <a href="customers.php?id=<?= urlencode($selectedCid) ?>" class="mt-2 inline-block text-sm text-indigo-600">→ 去添加竞品</a>
+        <a href="customers.php?customer_id=<?= urlencode($selectedCid) ?>" class="mt-2 inline-block text-sm text-indigo-600">→ 去添加竞品</a>
       <?php else: ?>
         <div class="space-y-2">
           <?php foreach ($competitors as $i => $comp):
@@ -251,7 +250,7 @@ require_once __DIR__ . '/includes/header.php';
           </div>
           <?php endforeach; ?>
         </div>
-        <a href="customers.php?id=<?= urlencode($selectedCid) ?>" class="mt-3 inline-block text-xs text-indigo-600 hover:text-indigo-800">编辑竞品列表 →</a>
+        <a href="customers.php?customer_id=<?= urlencode($selectedCid) ?>" class="mt-3 inline-block text-xs text-indigo-600 hover:text-indigo-800">编辑竞品列表 →</a>
       <?php endif; ?>
     </div>
   </div>
