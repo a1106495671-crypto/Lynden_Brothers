@@ -247,7 +247,11 @@ function ensure_distribution_schema(PDO $db): void {
         'publish_speed' => "ALTER TABLE media_accounts ADD COLUMN publish_speed VARCHAR(40) DEFAULT ''",
         'link_type' => "ALTER TABLE media_accounts ADD COLUMN link_type VARCHAR(40) DEFAULT ''",
         'price_amount' => "ALTER TABLE media_accounts ADD COLUMN price_amount NUMERIC(10, 2) DEFAULT 0",
-        'can_geo_rank' => "ALTER TABLE media_accounts ADD COLUMN can_geo_rank INTEGER DEFAULT 0",
+        'can_geo_rank'   => "ALTER TABLE media_accounts ADD COLUMN can_geo_rank INTEGER DEFAULT 0",
+        'agent_secret'   => "ALTER TABLE media_accounts ADD COLUMN agent_secret VARCHAR(64) DEFAULT ''",
+        'agent_base_url' => "ALTER TABLE media_accounts ADD COLUMN agent_base_url VARCHAR(500) DEFAULT ''",
+        'site_name'      => "ALTER TABLE media_accounts ADD COLUMN site_name VARCHAR(200) DEFAULT ''",
+        'site_title'     => "ALTER TABLE media_accounts ADD COLUMN site_title VARCHAR(200) DEFAULT ''",
     ];
     foreach ($columnsToAdd as $column => $sql) {
         if (!db_column_exists($db, 'media_accounts', $column)) {
