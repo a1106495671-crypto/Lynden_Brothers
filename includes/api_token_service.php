@@ -153,6 +153,7 @@ class ApiTokenService {
     public function getAvailableScopes(): array {
         return [
             'catalog:read',
+            'catalog:write',
             'tasks:read',
             'tasks:write',
             'jobs:read',

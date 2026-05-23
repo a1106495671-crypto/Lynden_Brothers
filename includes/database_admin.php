@@ -25,9 +25,11 @@ class DatabaseAdmin {
         $this->ensureSopTasksSchema();
         $this->ensureSopNodeStatusSchema();
         $this->ensureGeoMonitorSchema();
+        $this->ensureCustomerSchema();
         $this->ensureMobileQuerySchema();
         $this->ensureGeoSemanticSchema();
         $this->insertDefaultData();
+        $this->ensureTaskCreationSeedData();
     }
     
     public static function getInstance() {
@@ -924,6 +926,100 @@ class DatabaseAdmin {
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_scenario VARCHAR(1)   DEFAULT 'B'");
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_brand_name VARCHAR(200) DEFAULT ''");
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_customer_id VARCHAR(80)  DEFAULT ''");
+    }
+
+    private function ensureCustomerSchema(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS customers (
+                id BIGSERIAL PRIMARY KEY,
+                customer_id VARCHAR(80) NOT NULL UNIQUE,
+                name VARCHAR(200) NOT NULL,
+                domain VARCHAR(200) DEFAULT '',
+                industry VARCHAR(120) DEFAULT '',
+                package_tier VARCHAR(40) DEFAULT '',
+                owner VARCHAR(80) DEFAULT '',
+                service_status VARCHAR(30) DEFAULT 'active',
+                contract_start_date DATE DEFAULT NULL,
+                contract_end_date DATE DEFAULT NULL,
+                contract_amount NUMERIC(12,2) DEFAULT 0,
+                contact_name VARCHAR(100) DEFAULT '',
+                contact_phone VARCHAR(120) DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+
+        $defaults = [
+            ['wenyun-ai-reading', '湖南文韵爱阅读', 'wenyunedu.cn', '教培 / 知识付费', 'growth', '张顾问', 'active', '2026-01-01', '2026-08-01', 58000, '李敏', 'liMin@wenyunedu.cn'],
+            ['dongluoji-mgeo', '董逻辑 MGEO', 'dongluoji.com', 'B2B SaaS / 企业服务', 'dominate', '李策略', 'active', '2025-12-01', '2026-09-15', 128000, '董策', 'dong@dongluoji.com'],
+            ['yimaitong-health', '医脉通健康项目', 'news.growume.com', '医疗 / 健康', 'growth', '王运营', 'active', '2026-01-20', '2026-07-20', 45000, '陈医达', 'chen@yimaitong.net'],
+            ['local-food-sample', '本地生活餐饮样板', 'local-demo.cn', '本地生活 / 餐饮', 'lite', '陈执行', 'paused', '2026-03-01', '2026-06-30', 18000, '吴老板', '13800138000'],
+        ];
+
+        $stmt = $this->pdo->prepare("
+            INSERT INTO customers (
+                customer_id, name, domain, industry, package_tier, owner, service_status,
+                contract_start_date, contract_end_date, contract_amount, contact_name, contact_phone
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (customer_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                domain = EXCLUDED.domain,
+                industry = EXCLUDED.industry,
+                package_tier = EXCLUDED.package_tier,
+                owner = EXCLUDED.owner,
+                updated_at = CURRENT_TIMESTAMP
+        ");
+
+        foreach ($defaults as $customer) {
+            $stmt->execute($customer);
+        }
+    }
+
+    private function ensureTaskCreationSeedData(): void {
+        $activeChatModels = (int) $this->pdo->query("
+            SELECT COUNT(*)
+            FROM ai_models
+            WHERE status = 'active'
+              AND COALESCE(NULLIF(model_type, ''), 'chat') = 'chat'
+        ")->fetchColumn();
+
+        if ($activeChatModels === 0) {
+            $stmt = $this->pdo->prepare("
+                INSERT INTO ai_models (
+                    name, version, api_key, model_id, model_type, api_url,
+                    daily_limit, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'chat', ?, 0, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ");
+            $stmt->execute([
+                '本地占位聊天模型',
+                'local',
+                '',
+                'local-placeholder',
+                'http://127.0.0.1/not-configured',
+            ]);
+        }
+
+        $contentPrompts = (int) $this->pdo->query("SELECT COUNT(*) FROM prompts WHERE type = 'content'")->fetchColumn();
+        if ($contentPrompts === 0) {
+            $stmt = $this->pdo->prepare("INSERT INTO prompts (name, type, content, variables) VALUES (?, 'content', ?, ?)");
+            $stmt->execute([
+                '默认内容生成',
+                "请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇详细的文章。",
+                'title,keyword',
+            ]);
+        }
+
+        $titleLibraries = (int) $this->pdo->query("SELECT COUNT(*) FROM title_libraries")->fetchColumn();
+        if ($titleLibraries === 0) {
+            $stmt = $this->pdo->prepare("INSERT INTO title_libraries (name, title_count, created_at, updated_at) VALUES (?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+            $stmt->execute(['默认标题库']);
+        }
+
+        $authors = (int) $this->pdo->query("SELECT COUNT(*) FROM authors")->fetchColumn();
+        if ($authors === 0) {
+            $stmt = $this->pdo->prepare("INSERT INTO authors (name, bio, created_at, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)");
+            $stmt->execute(['AI编辑', '本地默认作者']);
+        }
     }
 
     private function ensureSopNodeStatusSchema(): void {

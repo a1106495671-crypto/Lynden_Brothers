@@ -16,6 +16,9 @@ require_once __DIR__ . '/../../includes/api_admin_auth_service.php';
 require_once __DIR__ . '/../../includes/catalog_service.php';
 require_once __DIR__ . '/../../includes/task_lifecycle_service.php';
 require_once __DIR__ . '/../../includes/article_service.php';
+require_once __DIR__ . '/../../includes/customer_service.php';
+require_once __DIR__ . '/../../includes/material_service.php';
+require_once __DIR__ . '/../../includes/monitor_api_service.php';
 
 $request = new ApiRequest();
 $requestId = $request->getRequestId();
@@ -33,6 +36,9 @@ try {
     $taskService = new TaskLifecycleService($db);
     $articleService = new ArticleService($db);
     $adminAuthService = new ApiAdminAuthService($db, $tokenService);
+    $customerService = new CustomerService($db);
+    $materialService = new MaterialService($db);
+    $monitorApiService = new MonitorApiService($db);
 
     $segments = $request->getSegments();
     $method = $request->getMethod();
@@ -224,6 +230,150 @@ try {
             } else {
                 throw new ApiException('not_found', '接口不存在', 404);
             }
+        } else {
+            throw new ApiException('not_found', '接口不存在', 404);
+        }
+    } elseif ($segments[0] === 'customers') {
+        if ($method === 'GET' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:read');
+            $responsePayload = api_build_success_payload($customerService->listCustomers(
+                $request->getQueryInt('page', 1),
+                $request->getQueryInt('per_page', 20),
+                ['search' => $request->getQueryString('search'), 'status' => $request->getQueryString('status')]
+            ), $requestId);
+            $statusCode = 200;
+        } elseif ($method === 'POST' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:write');
+            $responsePayload = api_build_success_payload($customerService->createCustomer($body), $requestId);
+            $statusCode = 201;
+        } elseif (count($segments) >= 2) {
+            $customerId = (string) $segments[1];
+            if ($method === 'GET' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:read');
+                $responsePayload = api_build_success_payload($customerService->getCustomer($customerId), $requestId);
+                $statusCode = 200;
+            } elseif ($method === 'PATCH' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:write');
+                $responsePayload = api_build_success_payload($customerService->updateCustomer($customerId, $body), $requestId);
+                $statusCode = 200;
+            } elseif ($method === 'DELETE' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:write');
+                $customerService->deleteCustomer($customerId);
+                $responsePayload = api_build_success_payload(['deleted' => true], $requestId);
+                $statusCode = 200;
+            } else {
+                throw new ApiException('not_found', '接口不存在', 404);
+            }
+        } else {
+            throw new ApiException('not_found', '接口不存在', 404);
+        }
+    } elseif ($segments[0] === 'keyword-libraries') {
+        if ($method === 'GET' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:read');
+            $responsePayload = api_build_success_payload($materialService->listKeywordLibraries(), $requestId);
+            $statusCode = 200;
+        } elseif ($method === 'POST' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:write');
+            $responsePayload = api_build_success_payload($materialService->createKeywordLibrary($body), $requestId);
+            $statusCode = 201;
+        } elseif (count($segments) >= 2 && ctype_digit($segments[1])) {
+            $libId = (int) $segments[1];
+            if ($method === 'GET' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:read');
+                $responsePayload = api_build_success_payload($materialService->getKeywordLibrary($libId), $requestId);
+                $statusCode = 200;
+            } elseif ($method === 'POST' && count($segments) === 3 && $segments[2] === 'keywords') {
+                $auth->requireScope($authContext, 'catalog:write');
+                $responsePayload = api_build_success_payload($materialService->addKeywords($libId, $body['keywords'] ?? []), $requestId);
+                $statusCode = 201;
+            } elseif ($method === 'DELETE' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:write');
+                $materialService->deleteKeywordLibrary($libId);
+                $responsePayload = api_build_success_payload(['deleted' => true], $requestId);
+                $statusCode = 200;
+            } else {
+                throw new ApiException('not_found', '接口不存在', 404);
+            }
+        } else {
+            throw new ApiException('not_found', '接口不存在', 404);
+        }
+    } elseif ($segments[0] === 'title-libraries') {
+        if ($method === 'GET' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:read');
+            $responsePayload = api_build_success_payload($materialService->listTitleLibraries(), $requestId);
+            $statusCode = 200;
+        } elseif ($method === 'POST' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:write');
+            $responsePayload = api_build_success_payload($materialService->createTitleLibrary($body), $requestId);
+            $statusCode = 201;
+        } elseif (count($segments) >= 2 && ctype_digit($segments[1])) {
+            $libId = (int) $segments[1];
+            if ($method === 'GET' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:read');
+                $responsePayload = api_build_success_payload($materialService->getTitleLibrary($libId), $requestId);
+                $statusCode = 200;
+            } elseif ($method === 'POST' && count($segments) === 3 && $segments[2] === 'titles') {
+                $auth->requireScope($authContext, 'catalog:write');
+                $responsePayload = api_build_success_payload($materialService->addTitles($libId, $body['titles'] ?? []), $requestId);
+                $statusCode = 201;
+            } elseif ($method === 'DELETE' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:write');
+                $materialService->deleteTitleLibrary($libId);
+                $responsePayload = api_build_success_payload(['deleted' => true], $requestId);
+                $statusCode = 200;
+            } else {
+                throw new ApiException('not_found', '接口不存在', 404);
+            }
+        } else {
+            throw new ApiException('not_found', '接口不存在', 404);
+        }
+    } elseif ($segments[0] === 'knowledge-bases') {
+        if ($method === 'GET' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:read');
+            $responsePayload = api_build_success_payload($materialService->listKnowledgeBases(), $requestId);
+            $statusCode = 200;
+        } elseif ($method === 'POST' && count($segments) === 1) {
+            $auth->requireScope($authContext, 'catalog:write');
+            $responsePayload = api_build_success_payload($materialService->createKnowledgeBase($body), $requestId);
+            $statusCode = 201;
+        } elseif (count($segments) >= 2 && ctype_digit($segments[1])) {
+            $kbId = (int) $segments[1];
+            if ($method === 'GET' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:read');
+                $responsePayload = api_build_success_payload($materialService->getKnowledgeBase($kbId), $requestId);
+                $statusCode = 200;
+            } elseif ($method === 'PATCH' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:write');
+                $responsePayload = api_build_success_payload($materialService->updateKnowledgeBase($kbId, $body), $requestId);
+                $statusCode = 200;
+            } elseif ($method === 'DELETE' && count($segments) === 2) {
+                $auth->requireScope($authContext, 'catalog:write');
+                $materialService->deleteKnowledgeBase($kbId);
+                $responsePayload = api_build_success_payload(['deleted' => true], $requestId);
+                $statusCode = 200;
+            } else {
+                throw new ApiException('not_found', '接口不存在', 404);
+            }
+        } else {
+            throw new ApiException('not_found', '接口不存在', 404);
+        }
+    } elseif ($segments[0] === 'monitor' && count($segments) >= 2 && $segments[1] === 'keywords') {
+        if ($method === 'GET' && count($segments) === 2) {
+            $auth->requireScope($authContext, 'catalog:read');
+            $customerId = $request->getQueryString('customer_id', '');
+            $responsePayload = api_build_success_payload($monitorApiService->listKeywords($customerId), $requestId);
+            $statusCode = 200;
+        } elseif ($method === 'POST' && count($segments) === 2) {
+            $auth->requireScope($authContext, 'catalog:write');
+            $customerId = trim((string) ($body['customer_id'] ?? ''));
+            $keywords = $body['keywords'] ?? [];
+            $responsePayload = api_build_success_payload($monitorApiService->addKeywords($customerId, $keywords), $requestId);
+            $statusCode = 201;
+        } elseif ($method === 'DELETE' && count($segments) === 3 && ctype_digit($segments[2])) {
+            $auth->requireScope($authContext, 'catalog:write');
+            $monitorApiService->removeKeyword((int) $segments[2]);
+            $responsePayload = api_build_success_payload(['deleted' => true], $requestId);
+            $statusCode = 200;
         } else {
             throw new ApiException('not_found', '接口不存在', 404);
         }

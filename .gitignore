@@ -50,3 +50,5 @@ uploads/images/
 uploads/knowledge/
 uploads/tmp/
 *.zip
+node_modules/
+package-lock.json
