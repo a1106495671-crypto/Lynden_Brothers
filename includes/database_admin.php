@@ -30,6 +30,7 @@ class DatabaseAdmin {
         $this->ensureGeoSemanticSchema();
         $this->ensureAutomationSchema();
         $this->ensureAiCrawlerSchema();
+        $this->ensureAccessLogSchema();
         $this->insertDefaultData();
         $this->ensureTaskCreationSeedData();
     }
@@ -1105,6 +1106,28 @@ class DatabaseAdmin {
             )
         ");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_mobile_query_customer ON mobile_query_records(customer_id, platform, queried_at)");
+    }
+
+    private function ensureAccessLogSchema(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS access_logs (
+                id           BIGSERIAL PRIMARY KEY,
+                request_path VARCHAR(500) DEFAULT '',
+                page_type    VARCHAR(30)  DEFAULT '',
+                article_slug VARCHAR(200) DEFAULT '',
+                ip_address   VARCHAR(45)  DEFAULT '',
+                user_agent   TEXT         DEFAULT '',
+                referer      VARCHAR(500) DEFAULT '',
+                is_bot       BOOLEAN      DEFAULT FALSE,
+                bot_name     VARCHAR(80)  DEFAULT '',
+                bot_company  VARCHAR(60)  DEFAULT '',
+                created_at   TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_access_logs_created ON access_logs(created_at)");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_access_logs_is_bot  ON access_logs(is_bot, created_at)");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_access_logs_path    ON access_logs(request_path)");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_access_logs_slug    ON access_logs(article_slug)");
     }
 
     private function ensureAiCrawlerSchema(): void {

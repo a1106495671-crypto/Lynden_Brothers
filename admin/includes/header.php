@@ -50,7 +50,8 @@ $menu_items = [
     'site-settings.php' => ['name' => '网站设置', 'icon' => 'settings'],
     'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield'],
     'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow'],
-    'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot']
+    'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot'],
+    'access-logs.php'        => ['name' => '访问日志',      'icon' => 'activity']
 ];
 
 if ($is_super_admin) {
