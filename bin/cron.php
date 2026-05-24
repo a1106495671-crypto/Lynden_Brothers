@@ -113,6 +113,7 @@ try {
     cleanupTaskSchedules();
     resetDailyAIUsage();
     autoPublishApprovedArticles();
+    startDueDistributionJobs();
 
     $executionTime = round(microtime(true) - $startTime, 2);
     log_message("轻量调度器执行完成，入队 {$queuedCount} 个任务，跳过 {$skippedCount} 个任务");
@@ -232,5 +233,15 @@ function autoPublishApprovedArticles() {
 
     if ($publishedCount > 0) {
         log_message("自动发布了 {$publishedCount} 篇文章");
+    }
+}
+
+function startDueDistributionJobs() {
+    global $db;
+
+    $limit = max(1, (int) env_value('DISTRIBUTION_CRON_START_LIMIT', 3));
+    $started = distribution_start_queued_jobs_async($db, $limit);
+    if ($started > 0) {
+        log_message("已启动到点媒体分发任务 {$started} 条");
     }
 }

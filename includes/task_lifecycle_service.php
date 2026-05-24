@@ -90,8 +90,9 @@ class TaskLifecycleService {
                     prompt_id, ai_model_id, need_review, publish_interval,
                     author_id, auto_keywords, auto_description, draft_limit,
                     is_loop, status, knowledge_base_id, category_mode, fixed_category_id,
+                    geo_mode, geo_scenario, geo_brand_name, geo_customer_id,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ");
             $stmt->execute([
                 $normalized['name'],
@@ -110,7 +111,11 @@ class TaskLifecycleService {
                 $normalized['status'],
                 $normalized['knowledge_base_id'],
                 $normalized['category_mode'],
-                $normalized['fixed_category_id']
+                $normalized['fixed_category_id'],
+                $normalized['geo_mode'],
+                $normalized['geo_scenario'],
+                $normalized['geo_brand_name'],
+                $normalized['geo_customer_id']
             ]);
 
             $taskId = db_last_insert_id($this->db, 'tasks');
@@ -532,6 +537,43 @@ class TaskLifecycleService {
             }
         } elseif (!$isUpdate) {
             $output['status'] = 'active';
+        }
+
+        if (array_key_exists('geo_mode', $data)) {
+            $output['geo_mode'] = $this->toFlag($data['geo_mode']) ? 'true' : 'false';
+        } elseif (!$isUpdate) {
+            $output['geo_mode'] = 'false';
+        }
+
+        if (array_key_exists('geo_scenario', $data)) {
+            $scenario = strtoupper(trim((string) $data['geo_scenario']));
+            if (!in_array($scenario, ['A', 'B', 'C'], true)) {
+                $fieldErrors['geo_scenario'] = 'GEO写作场景无效';
+            } else {
+                $output['geo_scenario'] = $scenario;
+            }
+        } elseif (!$isUpdate) {
+            $output['geo_scenario'] = 'B';
+        }
+
+        if (array_key_exists('geo_brand_name', $data)) {
+            $output['geo_brand_name'] = mb_substr(trim((string) $data['geo_brand_name']), 0, 200);
+        } elseif (!$isUpdate) {
+            $output['geo_brand_name'] = '';
+        }
+
+        if (array_key_exists('geo_customer_id', $data)) {
+            $geoCustomerId = mb_substr(trim((string) $data['geo_customer_id']), 0, 80);
+            if ($geoCustomerId !== '') {
+                $stmt = $this->db->prepare("SELECT COUNT(*) FROM customers WHERE customer_id = ?");
+                $stmt->execute([$geoCustomerId]);
+                if ((int) $stmt->fetchColumn() === 0) {
+                    $fieldErrors['geo_customer_id'] = '绑定客户不存在';
+                }
+            }
+            $output['geo_customer_id'] = $geoCustomerId;
+        } elseif (!$isUpdate) {
+            $output['geo_customer_id'] = '';
         }
 
         $effectiveCategoryMode = $output['category_mode'] ?? (($data['category_mode'] ?? 'smart') ?: 'smart');

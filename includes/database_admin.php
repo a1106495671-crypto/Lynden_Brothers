@@ -1041,7 +1041,7 @@ class DatabaseAdmin {
                 INSERT INTO ai_models (
                     name, version, api_key, model_id, model_type, api_url,
                     daily_limit, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'chat', ?, 0, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, 'chat', ?, 0, 'inactive', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ");
             $stmt->execute([
                 '本地占位聊天模型',

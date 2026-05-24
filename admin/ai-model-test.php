@@ -3,6 +3,7 @@ define('FEISHU_TREASURE', true);
 session_start();
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/database_admin.php';
+require_once __DIR__ . '/../includes/functions.php';
 require_admin_login();
 
 header('Content-Type: application/json; charset=utf-8');
@@ -22,6 +23,22 @@ $type    = $m['model_type'] ?? 'chat';
 
 if (!$apiKey) { echo json_encode(['ok'=>false,'msg'=>'API Key 为空']); exit; }
 if (!$modelId) { echo json_encode(['ok'=>false,'msg'=>'Model ID 为空']); exit; }
+
+if (strpos($apiUrl, 'token-plan') !== false && str_starts_with($apiKey, 'sk-')) {
+    echo json_encode([
+        'ok' => false,
+        'msg' => '配置不匹配：Token Plan 地址通常需要 tp- 开头的密钥；sk- 密钥请改用 https://api.xiaomimimo.com/v1'
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (strpos($apiUrl, 'api.xiaomimimo.com') !== false && str_starts_with($apiKey, 'tp-')) {
+    echo json_encode([
+        'ok' => false,
+        'msg' => '配置不匹配：tp- 密钥通常需要 Token Plan 的 Base URL，例如 https://token-plan-cn.xiaomimimo.com/v1'
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
 $start = microtime(true);
 

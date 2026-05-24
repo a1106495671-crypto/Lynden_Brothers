@@ -122,10 +122,10 @@ $page_title = '品牌入驻自动化';
                 ['id' => 'titles',      'no' => '03', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
                 ['id' => 'knowledge',   'no' => '04', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
                 ['id' => 'customer',    'no' => '05', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
-                ['id' => 'task',        'no' => '06', 'name' => '创建并启动任务','desc' => '关联标题库与AI模型，启动生成任务',     'icon' => 'zap',              'color' => 'cyan'],
-                ['id' => 'generate',    'no' => '07', 'name' => '等待文章生成',  'desc' => '监控文章生成进度直至完成',           'icon' => 'file-text',        'color' => 'teal'],
-                ['id' => 'distribute',  'no' => '08', 'name' => '分发到媒体',    'desc' => '发布到知乎等媒体平台',               'icon' => 'send',             'color' => 'emerald'],
-                ['id' => 'monitor',     'no' => '09', 'name' => '设置监测',      'desc' => '添加监测关键词，跟踪引用变化',       'icon' => 'activity',         'color' => 'green'],
+                ['id' => 'task',        'no' => '06', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
+                ['id' => 'generate',    'no' => '07', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
+                ['id' => 'distribute',  'no' => '08', 'name' => '启动媒体分发',  'desc' => '发布文章并加入媒体队列，后台持续分发',   'icon' => 'send',             'color' => 'emerald'],
+                ['id' => 'monitor',     'no' => '09', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
             ];
 
             $color_map = [
@@ -206,6 +206,21 @@ $page_title = '品牌入驻自动化';
                 <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">已发布</span>
                     <span class="font-semibold text-gray-900" id="stat-published">--</span>
+                </div>
+            </div>
+            <div class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                <div class="rounded-lg border border-gray-100 bg-white p-3">
+                    <span class="text-gray-400 block mb-1">文章生成队列</span>
+                    <span class="font-semibold text-gray-900" id="runtime-generation">--</span>
+                </div>
+                <div class="rounded-lg border border-gray-100 bg-white p-3">
+                    <span class="text-gray-400 block mb-1">媒体发布队列</span>
+                    <span class="font-semibold text-gray-900" id="runtime-distribution">--</span>
+                    <span class="mt-1 block text-[10px] text-gray-400" id="runtime-next-distribution">--</span>
+                </div>
+                <div class="rounded-lg border border-gray-100 bg-white p-3">
+                    <span class="text-gray-400 block mb-1">GEO监测</span>
+                    <span class="font-semibold text-gray-900" id="runtime-monitor">--</span>
                 </div>
             </div>
         </div>
@@ -331,9 +346,9 @@ const STEP_META = {
     knowledge:  { name: '生成知识库',    icon: 'book-open' },
     customer:   { name: '创建客户',      icon: 'building-2' },
     task:       { name: '创建并启动任务',icon: 'zap' },
-    generate:   { name: '等待文章生成',  icon: 'file-text' },
-    distribute: { name: '分发到媒体',    icon: 'send' },
-    monitor:    { name: '设置监测',      icon: 'activity' },
+    generate:   { name: '首篇文章生成',  icon: 'file-text' },
+    distribute: { name: '启动媒体分发',  icon: 'send' },
+    monitor:    { name: '启动监测',      icon: 'activity' },
 };
 
 let workflowState = {
@@ -341,12 +356,29 @@ let workflowState = {
     currentStep: null,
     steps: {},           // { stepId: { status, startedAt, finishedAt, elapsed, output } }
     brandInfo: null,
+    runtime: null,
     startTime: null,
     logs: [],
 };
 
 let logCount = 0;
 let elapsedTimer = null;
+
+function parsePgTimestamp(value) {
+    if (!value) return null;
+    const normalized = String(value).replace(' ', 'T').replace(/\.\d+$/, '');
+    const time = new Date(normalized).getTime();
+    return Number.isNaN(time) ? null : time;
+}
+
+function parseStepOutput(raw) {
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch (err) {
+        return { raw };
+    }
+}
 
 // ── 弹窗控制 ──────────────────────────────────────────────────────────────────
 function openStartModal() {
@@ -440,48 +472,12 @@ async function pollWorkflowStatus() {
         const data = await resp.json();
 
         if (data.success && data.workflow) {
-            const wf = data.workflow;
-
-            // 更新步骤状态
-            if (wf.steps) {
-                wf.steps.forEach(step => {
-                    const prev = workflowState.steps[step.step_id];
-                    workflowState.steps[step.step_id] = {
-                        status: step.status,
-                        startedAt: step.started_at,
-                        finishedAt: step.finished_at,
-                        elapsed: step.elapsed_seconds,
-                        output: step.output_data ? JSON.parse(step.output_data) : null,
-                        error: step.error_message,
-                    };
-
-                    // 新日志
-                    if (prev && prev.status !== step.status) {
-                        if (step.status === 'running') {
-                            addLog('info', `▶ ${STEP_META[step.step_id]?.name || step.step_id} 开始执行`);
-                        } else if (step.status === 'completed') {
-                            addLog('success', `✓ ${STEP_META[step.step_id]?.name || step.step_id} 完成` + (step.elapsed_seconds ? ` (${step.elapsed_seconds}s)` : ''));
-                        } else if (step.status === 'error') {
-                            addLog('error', `✗ ${STEP_META[step.step_id]?.name || step.step_id} 失败: ${step.error_message || '未知错误'}`);
-                        }
-                    }
-
-                    updateStepUI(step.step_id, workflowState.steps[step.step_id]);
-                });
-            }
-
-            // 更新品牌统计
-            if (wf.stats) {
-                updateBrandStats(wf.stats);
-            }
-
-            // 全局状态
-            workflowState.status = wf.status || 'running';
+            applyWorkflowPayload(data, true);
             updatePipelineProgress();
             updateGlobalStatus();
 
             // 继续轮询
-            if (workflowState.status === 'running') {
+            if (workflowState.status === 'running' || hasBackgroundRuntime()) {
                 pollTimer = setTimeout(pollWorkflowStatus, 2000);
             } else if (workflowState.status === 'completed') {
                 stopElapsedTimer();
@@ -490,6 +486,7 @@ async function pollWorkflowStatus() {
             } else if (workflowState.status === 'error') {
                 stopElapsedTimer();
                 addLog('error', '流程执行出错，请检查日志');
+                pollTimer = setTimeout(pollWorkflowStatus, 10000);
             }
         } else {
             // API 返回错误，继续轮询
@@ -498,6 +495,87 @@ async function pollWorkflowStatus() {
     } catch (err) {
         // 网络错误，继续轮询
         pollTimer = setTimeout(pollWorkflowStatus, 5000);
+    }
+}
+
+function applyWorkflowPayload(data, logChanges) {
+    const wf = data.workflow;
+    workflowState.workflowId = wf.id;
+    workflowState.status = wf.status || 'running';
+    workflowState.currentStep = wf.current_step || null;
+    workflowState.brandInfo = {
+        brand_name: wf.brand_name,
+        industry: wf.industry,
+        website: wf.website || '',
+        services: wf.services || '',
+        competitors: wf.competitors || '',
+        positioning: wf.positioning || '',
+        article_count: wf.article_count || 0,
+    };
+    workflowState.startTime = parsePgTimestamp(wf.created_at) || workflowState.startTime || Date.now();
+
+    STEP_IDS.forEach(id => {
+        if (!workflowState.steps[id]) {
+            workflowState.steps[id] = { status: 'pending' };
+        }
+    });
+
+    if (wf.steps) {
+        wf.steps.forEach(step => {
+            const prev = workflowState.steps[step.step_id];
+            workflowState.steps[step.step_id] = {
+                status: step.status,
+                startedAt: step.started_at,
+                finishedAt: step.finished_at,
+                elapsed: step.elapsed_seconds,
+                output: parseStepOutput(step.output_data),
+                error: step.error_message,
+            };
+
+            if (logChanges && prev && prev.status !== step.status) {
+                if (step.status === 'running') {
+                    addLog('info', `▶ ${STEP_META[step.step_id]?.name || step.step_id} 开始执行`);
+                } else if (step.status === 'completed') {
+                    addLog('success', `✓ ${STEP_META[step.step_id]?.name || step.step_id} 完成` + (step.elapsed_seconds ? ` (${step.elapsed_seconds}s)` : ''));
+                } else if (step.status === 'error') {
+                    addLog('error', `✗ ${STEP_META[step.step_id]?.name || step.step_id} 失败: ${step.error_message || '未知错误'}`);
+                }
+            }
+
+            updateStepUI(step.step_id, workflowState.steps[step.step_id]);
+        });
+    }
+
+    showBrandInfoCard();
+    if (data.stats) {
+        updateBrandStats(data.stats);
+    }
+    if (data.runtime) {
+        updateRuntimeStats(data.runtime, logChanges);
+    }
+}
+
+async function resumeLatestWorkflow() {
+    if (workflowState.workflowId) return;
+
+    try {
+        const resp = await fetch(window.adminUrl('api/automation-status.php?latest=1'));
+        const data = await resp.json();
+        if (!data.success || !data.workflow) return;
+
+        applyWorkflowPayload(data, false);
+        updatePipelineProgress();
+        updateGlobalStatus();
+        addLog('info', '已恢复最近一次工作流：' + data.workflow.id);
+
+        if (workflowState.status === 'running' || hasBackgroundRuntime()) {
+            startElapsedTimer();
+            pollWorkflowStatus();
+        } else if (workflowState.status === 'error' && data.workflow.error_message) {
+            addLog('error', data.workflow.error_message);
+        }
+    } catch (err) {
+        // 恢复失败不影响用户手动启动。
     }
 }
 
@@ -569,15 +647,26 @@ function updatePipelineProgress() {
 
 function updateGlobalStatus() {
     const el = document.getElementById('global-status');
+    const backgroundActive = hasBackgroundRuntime();
     const statusMap = {
         idle:      { text: '就绪',   dot: 'bg-gray-400',   bg: 'bg-gray-100',   textColor: 'text-gray-600' },
         running:   { text: '运行中', dot: 'bg-blue-500 animate-pulse', bg: 'bg-blue-50', textColor: 'text-blue-700' },
+        background:{ text: '后台运行', dot: 'bg-blue-500 animate-pulse', bg: 'bg-blue-50', textColor: 'text-blue-700' },
         completed: { text: '已完成', dot: 'bg-emerald-500', bg: 'bg-emerald-50', textColor: 'text-emerald-700' },
         error:     { text: '出错',   dot: 'bg-red-500',    bg: 'bg-red-50',     textColor: 'text-red-700' },
     };
-    const s = statusMap[workflowState.status] || statusMap.idle;
+    const s = backgroundActive ? statusMap.background : (statusMap[workflowState.status] || statusMap.idle);
     el.className = `inline-flex items-center gap-1.5 rounded-full ${s.bg} px-3 py-1.5 text-xs font-medium ${s.textColor}`;
     el.innerHTML = `<span class="h-2 w-2 rounded-full ${s.dot}"></span>${s.text}`;
+}
+
+function hasBackgroundRuntime() {
+    return workflowState.status === 'completed' && workflowState.runtime && (
+        (workflowState.runtime.generation_pending || 0) > 0 ||
+        (workflowState.runtime.generation_running || 0) > 0 ||
+        (workflowState.runtime.distribution_queued || 0) > 0 ||
+        (workflowState.runtime.distribution_running || 0) > 0
+    );
 }
 
 function showBrandInfoCard() {
@@ -592,6 +681,56 @@ function updateBrandStats(stats) {
     if (stats.titles !== undefined) document.getElementById('stat-titles').textContent = stats.titles;
     if (stats.articles !== undefined) document.getElementById('stat-articles').textContent = stats.articles;
     if (stats.published !== undefined) document.getElementById('stat-published').textContent = stats.published;
+}
+
+let lastRuntimeSignature = '';
+
+function updateRuntimeStats(runtime, logChanges = false) {
+    workflowState.runtime = runtime;
+
+    const generationText = [
+        `待生成 ${runtime.generation_pending || 0}`,
+        `生成中 ${runtime.generation_running || 0}`,
+        `失败 ${runtime.generation_failed || 0}`,
+    ].join(' / ');
+
+    const distributionText = [
+        `待发 ${runtime.distribution_queued || 0}`,
+        `发布中 ${runtime.distribution_running || 0}`,
+        `手动 ${runtime.distribution_manual_queued || 0}`,
+        `成功 ${runtime.distribution_success || 0}`,
+        `失败 ${runtime.distribution_failed || 0}`,
+    ].join(' / ');
+
+    const monitorText = [
+        `关键词 ${runtime.monitor_keywords || 0}`,
+        `记录 ${runtime.monitor_records || 0}`,
+        `提及 ${runtime.monitor_mentions || 0}`,
+    ].join(' / ');
+
+    document.getElementById('runtime-generation').textContent = generationText;
+    document.getElementById('runtime-distribution').textContent = distributionText;
+    document.getElementById('runtime-monitor').textContent = monitorText;
+
+    const nextEl = document.getElementById('runtime-next-distribution');
+    if (runtime.next_distribution_at) {
+        nextEl.textContent = '下次发布：' + String(runtime.next_distribution_at).replace('T', ' ').slice(0, 16);
+    } else {
+        nextEl.textContent = '暂无排队发布时间';
+    }
+
+    const signature = JSON.stringify({
+        gp: runtime.generation_pending || 0,
+        gr: runtime.generation_running || 0,
+        dq: runtime.distribution_queued || 0,
+        dr: runtime.distribution_running || 0,
+        ds: runtime.distribution_success || 0,
+        mr: runtime.monitor_records || 0,
+    });
+    if (logChanges && lastRuntimeSignature && signature !== lastRuntimeSignature) {
+        addLog('info', `后台状态：${generationText}；${distributionText}；${monitorText}`);
+    }
+    lastRuntimeSignature = signature;
 }
 
 // ── 日志系统 ──────────────────────────────────────────────────────────────────
@@ -754,6 +893,8 @@ function runDemo() {
         delay += 1000 + Math.random() * 1000;
     });
 }
+
+document.addEventListener('DOMContentLoaded', resumeLatestWorkflow);
 </script>
 JS;
 

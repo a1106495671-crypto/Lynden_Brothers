@@ -16,6 +16,12 @@ function writeResult(path, payload) {
   fs.writeFileSync(path, JSON.stringify(payload, null, 2));
 }
 
+function toBool(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return !['0', 'false', 'off', 'no'].includes(String(value).trim().toLowerCase());
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -187,11 +193,97 @@ function isLoginUrl(url) {
   return /zhihu\.com\/signin|zhihu\.com\/login/.test(url);
 }
 
+async function isLoginPage(page) {
+  if (isLoginUrl(page.url())) return true;
+  return page.getByText(/登录|密码登录|验证码登录|手机号/).first().isVisible().catch(() => false);
+}
+
+async function fillFirst(page, selectors, value) {
+  if (!value) return false;
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      await locator.waitFor({ state: 'visible', timeout: 1500 });
+      await locator.click({ timeout: 1500 });
+      await locator.fill(String(value), { timeout: 2500 });
+      return true;
+    } catch (error) {
+      // Continue trying alternate login form selectors.
+    }
+  }
+  return false;
+}
+
+async function assistZhihuLogin(page, input, headless) {
+  if (!await isLoginPage(page)) return false;
+
+  await clickByText(page, ['密码登录', '账号密码登录', '手机号登录'], 1500);
+
+  const filledUser = await fillFirst(page, [
+    'input[name="username"]',
+    'input[name="phoneNo"]',
+    'input[type="tel"]',
+    'input[placeholder*="手机号"]',
+    'input[placeholder*="邮箱"]',
+    'input[placeholder*="账号"]',
+    'input[placeholder*="用户名"]',
+  ], input.username || input.accountName || '');
+
+  const filledPassword = await fillFirst(page, [
+    'input[name="password"]',
+    'input[type="password"]',
+    'input[placeholder*="密码"]',
+  ], input.password || '');
+
+  if (filledUser && filledPassword) {
+    await clickByText(page, ['登录', '立即登录'], 2500);
+    await page.waitForTimeout(3000);
+    return true;
+  }
+
+  if (headless) {
+    throw new Error('知乎需要登录，但媒体账号没有可自动填写的账号或密码。请先在媒体账号里保存账号密码，或临时设置 DISTRIBUTION_BROWSER_HEADLESS=false 手动登录一次。');
+  }
+
+  return false;
+}
+
 function defaultWriteUrl() {
   return 'https://zhuanlan.zhihu.com/write';
 }
 
-async function waitForZhihuEditor(page, loginWaitMs) {
+async function openZhihuWritePage(page, input, headless) {
+  if (await isLoginPage(page)) {
+    await assistZhihuLogin(page, input, headless);
+    return;
+  }
+
+  const targetUrl = /zhihu\.com\/creator\/?$/.test(page.url())
+    ? defaultWriteUrl()
+    : String(page.url() || defaultWriteUrl());
+
+  if (!/zhuanlan\.zhihu\.com\/write|zhihu\.com\/creator/.test(targetUrl)) {
+    await page.goto(defaultWriteUrl(), {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    }).catch(() => null);
+    return;
+  }
+
+  if (/zhuanlan\.zhihu\.com\/write/.test(targetUrl)) {
+    return;
+  }
+
+  const clicked = await clickByText(page, ['写文章', '发布内容', '开始创作'], 3000);
+  if (!clicked) {
+    await page.goto(defaultWriteUrl(), {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    }).catch(() => null);
+  }
+}
+
+async function waitForZhihuEditor(page, loginWaitMs, headless, input) {
   const titleSelectors = [
     'textarea[placeholder*="标题"]',
     'input[placeholder*="标题"]',
@@ -208,10 +300,7 @@ async function waitForZhihuEditor(page, loginWaitMs) {
   }
 
   if (!isLoginUrl(page.url())) {
-    await page.goto(defaultWriteUrl(), {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    }).catch(() => null);
+    await openZhihuWritePage(page, input, headless);
   }
 
   const startedAt = Date.now();
@@ -230,10 +319,7 @@ async function waitForZhihuEditor(page, loginWaitMs) {
     }
 
     if (!isLoginUrl(page.url())) {
-      await page.goto(defaultWriteUrl(), {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000,
-      }).catch(() => null);
+      await openZhihuWritePage(page, input, headless);
     }
 
     await page.waitForTimeout(3000);
@@ -243,7 +329,11 @@ async function waitForZhihuEditor(page, loginWaitMs) {
     throw new Error('知乎创作页显示“系统升级中，请稍后再试”，自动发布已停止。等知乎恢复后点“重新执行”即可。');
   }
 
-  throw new Error('等待登录超时。请在自动打开的浏览器里登录知乎后，再回系统点“重新执行”。');
+  if (headless) {
+    throw new Error('知乎登录态不可用，或登录时需要验证码/扫码/滑块验证。后台发布无法人工输入验证码，请临时设置 DISTRIBUTION_BROWSER_HEADLESS=false 完成验证后重试。');
+  }
+
+  throw new Error('等待登录超时。账号密码已尽量自动填写；如页面要求验证码、扫码或滑块，请完成验证后再回系统点“重新执行”。');
 }
 
 async function main() {
@@ -282,9 +372,10 @@ async function notifyPublished(articleId, publishedUrl, status) {
   } catch(e) {}
 }
   const loginWaitMs = Number(input.loginWaitMs || 600000);
+  const headless = toBool(input.headless, true);
   const context = await chromium.launchPersistentContext(input.profileDir, {
     channel: 'chrome',
-    headless: false,
+    headless,
     viewport: { width: 1366, height: 900 },
     args: ['--disable-blink-features=AutomationControlled'],
     ignoreDefaultArgs: ['--enable-automation', '--no-sandbox'],
@@ -296,10 +387,13 @@ async function notifyPublished(articleId, publishedUrl, status) {
   page.setDefaultTimeout(15000);
 
   try {
-    await page.goto(input.publishUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const publishUrl = /zhihu\.com\/creator\/?$/.test(String(input.publishUrl || ''))
+      ? defaultWriteUrl()
+      : (input.publishUrl || defaultWriteUrl());
+    await page.goto(publishUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(2500);
 
-    const titleField = await waitForZhihuEditor(page, loginWaitMs);
+    const titleField = await waitForZhihuEditor(page, loginWaitMs, headless, input);
 
     await titleField.click();
     await titleField.fill(input.title);

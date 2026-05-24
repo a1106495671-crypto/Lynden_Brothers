@@ -225,7 +225,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
 </head>
 <body class="bg-gray-50">
     <!-- 导航栏 -->
-    <nav class="bg-white shadow-sm border-b">
+    <nav class="relative bg-white shadow-sm border-b z-50">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="relative flex h-16 items-center justify-between">
                 <div class="flex shrink-0 items-center">
@@ -234,7 +234,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                 </div>
                     
                 <!-- 主导航菜单 -->
-                <nav class="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-1 whitespace-nowrap md:flex">
+                <nav class="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-1 whitespace-nowrap overflow-visible md:flex">
                         <?php foreach ($primary_nav_items as $item): ?>
                             <?php
                             $is_active = isActiveNavItem($item, $current_page, $sub_page_mapping);

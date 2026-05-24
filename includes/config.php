@@ -214,15 +214,17 @@ function get_active_ai_config(): array {
     try {
         $stmt = $db->query(
             "SELECT api_key, api_url, model_id FROM ai_models
-             WHERE status='active' AND (model_type='chat' OR model_type IS NULL OR model_type='')
-             ORDER BY priority ASC NULLS LAST, id ASC LIMIT 1"
+             WHERE status='active'
+               AND (model_type='chat' OR model_type IS NULL OR model_type='')
+               AND COALESCE(api_key, '') <> ''
+               AND COALESCE(model_id, '') <> ''
+             ORDER BY priority ASC NULLS LAST, id ASC"
         );
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($row) {
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $apiKey = trim(function_exists('decrypt_ai_api_key') ? decrypt_ai_api_key((string)($row['api_key'] ?? '')) : ($row['api_key'] ?? ''));
             $apiUrl = rtrim(trim($row['api_url'] ?? ''), '/');
             $modelId = trim($row['model_id'] ?? '');
-            if ($apiKey && $modelId) {
+            if ($apiKey && $apiUrl && $modelId) {
                 $cache = ['api_key' => $apiKey, 'api_url' => $apiUrl, 'model_id' => $modelId];
                 return $cache;
             }
@@ -483,4 +485,30 @@ function write_log($message, $level = 'INFO') {
     $log_message = "[$timestamp] [$level] $message" . PHP_EOL;
     
     file_put_contents($log_file, $log_message, FILE_APPEND | LOCK_EX);
+}
+
+function log_ai_api_call(array $context): void {
+    $safe = [
+        'time' => date('Y-m-d H:i:s'),
+        'source' => (string) ($context['source'] ?? ''),
+        'model_name' => (string) ($context['model_name'] ?? ''),
+        'model_id' => (string) ($context['model_id'] ?? ''),
+        'api_url' => (string) ($context['api_url'] ?? ''),
+        'http_code' => (int) ($context['http_code'] ?? 0),
+        'ok' => !empty($context['ok']),
+        'prompt_tokens' => isset($context['prompt_tokens']) ? (int) $context['prompt_tokens'] : null,
+        'completion_tokens' => isset($context['completion_tokens']) ? (int) $context['completion_tokens'] : null,
+        'total_tokens' => isset($context['total_tokens']) ? (int) $context['total_tokens'] : null,
+        'error' => mb_substr((string) ($context['error'] ?? ''), 0, 300),
+    ];
+
+    $dir = __DIR__ . '/../bin/logs';
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    file_put_contents(
+        $dir . '/ai_api_calls_' . date('Y-m-d') . '.jsonl',
+        json_encode($safe, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
 }

@@ -219,6 +219,7 @@ try {
                m.model_id,
                COALESCE(NULLIF(m.model_type, ''), 'chat') as model_type,
                m.api_url,
+               m.priority,
                m.daily_limit,
                m.used_today,
                m.total_used,
@@ -512,7 +513,9 @@ require_once __DIR__ . '/includes/header.php';
                         </div>
 
                         <div>
-                            <label for="api_key" class="block text-sm font-medium text-gray-700">API密钥 *</label>
+                            <label for="api_key" class="block text-sm font-medium text-gray-700">
+                                API密钥 <span id="apiKeyRequiredMarker">*</span>
+                            </label>
                             <input type="password" name="api_key" id="api_key" required
                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                                    placeholder="输入API密钥">
@@ -578,6 +581,7 @@ require_once __DIR__ . '/includes/header.php';
             document.getElementById('modelForm').reset();
             document.getElementById('model_type').value = 'chat';
             document.getElementById('api_key').required = true;
+            document.getElementById('apiKeyRequiredMarker').textContent = '*';
             document.getElementById('api_key').placeholder = '输入API密钥';
             document.getElementById('apiKeyHelp').textContent = '创建模型时必填。';
             document.getElementById('api_url').value = 'https://api.tu-zi.com';
@@ -595,8 +599,9 @@ require_once __DIR__ . '/includes/header.php';
             document.getElementById('model_type').value = model.model_type || 'chat';
             document.getElementById('api_key').value = '';
             document.getElementById('api_key').required = false;
-            document.getElementById('api_key').placeholder = '留空则保留当前API密钥';
-            document.getElementById('apiKeyHelp').textContent = '编辑时留空即可保留现有密钥；仅在需要轮换密钥时填写新值。';
+            document.getElementById('apiKeyRequiredMarker').textContent = '';
+            document.getElementById('api_key').placeholder = '已保存；留空则保留当前密钥';
+            document.getElementById('apiKeyHelp').textContent = '出于安全原因不会回显明文密钥。留空表示不修改；只有需要轮换密钥时才填写新值。';
             document.getElementById('api_url').value = model.api_url;
             document.getElementById('daily_limit').value = model.daily_limit;
             document.getElementById('priority').value = model.priority || 10;

@@ -100,8 +100,20 @@ foreach (['kimi', 'deepseek', 'tongyi', 'wenxin', 'doubao', 'yuanbao'] as $pkey)
 }
 
 if (empty($providers)) {
-    gm_log('没有可用的 AI 提供商（未配置或已停用），退出。');
-    exit(1);
+    $fallbackAi = function_exists('get_active_ai_config') ? get_active_ai_config() : [];
+    if (!empty($fallbackAi['api_key']) && !empty($fallbackAi['api_url']) && !empty($fallbackAi['model_id'])) {
+        $providers['default_ai_model'] = [
+            'name' => $fallbackAi['name'] ?? '默认AI模型',
+            'api_key' => $fallbackAi['api_key'],
+            'api_url' => $fallbackAi['api_url'],
+            'model_id' => $fallbackAi['model_id'],
+            'configured' => true,
+        ];
+        gm_log('未配置专用监测提供商，回退使用默认AI模型：' . ($providers['default_ai_model']['name'] ?? 'default'));
+    } else {
+        gm_log('没有可用的 AI 提供商（未配置或已停用），退出。');
+        exit(1);
+    }
 }
 
 gm_log('可用提供商：' . implode(', ', array_keys($providers)));
@@ -305,8 +317,8 @@ foreach ($customers as $customer) {
 gm_log("完成，共写入 {$totalInserted} 条记录。");
 
 // ── 监测数据回填诊断雷达图 ────────────────────────────────────────────────
-foreach ($customers as $cid => $cname) {
-    gm_sync_diagnosis($db, $cid, $cname, $today);
+foreach ($customers as $customer) {
+    gm_sync_diagnosis($db, (string) ($customer['id'] ?? ''), (string) ($customer['name'] ?? ''), $today);
 }
 
 // ── 飞书推送（汇总所有今日 HIGH 级别告警）────────────────────────────────
@@ -1007,6 +1019,12 @@ function gm_verify_accuracy(PDO $db, string $cid, string $cname, string $kw,
  * 不注入搜索上下文的裸 AI 调用（用于内部校验）
  */
 function gm_call_provider_raw(string $pkey, array $pcfg, string $prompt): ?string {
+    if ($pkey === 'default_ai_model') {
+        return gm_call_openai_compatible($pcfg, [
+            ['role' => 'user', 'content' => $prompt],
+        ], 400, 0.1);
+    }
+
     $fields = $pcfg['fields'] ?? [];
     $apiKey = '';
     foreach ($fields as $fkey => $fcfg) {
@@ -1055,6 +1073,16 @@ function gm_call_provider_raw(string $pkey, array $pcfg, string $prompt): ?strin
  * 调用 AI 提供商（含 Bocha 搜索上下文注入）
  */
 function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?string {
+    $searchCtx    = citation_simulator_search_context($query);
+    $systemPrompt = "你是一个中文AI助手。请基于以下实时网络搜索结果回答用户问题。\n\n" . $searchCtx;
+
+    if ($pkey === 'default_ai_model') {
+        return gm_call_openai_compatible($pcfg, [
+            ['role' => 'system', 'content' => $systemPrompt],
+            ['role' => 'user',   'content' => $query],
+        ], 800, 0.3);
+    }
+
     $rawKey = citation_simulator_get_provider_key($pkey, 'api_key');
     if ($rawKey === '') return null;
 
@@ -1083,9 +1111,6 @@ function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?s
     } else {
         $apiKey = $rawKey;
     }
-
-    $searchCtx    = citation_simulator_search_context($query);
-    $systemPrompt = "你是一个中文AI助手。请基于以下实时网络搜索结果回答用户问题。\n\n" . $searchCtx;
 
     $endpointMap = [
         'kimi'     => ['url' => 'https://api.moonshot.cn/v1/chat/completions',                   'model' => 'moonshot-v1-8k'],
@@ -1125,6 +1150,45 @@ function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?s
     curl_close($ch);
 
     if ($raw === false || $code !== 200) return null;
+
+    $data = json_decode($raw, true);
+    return $data['choices'][0]['message']['content'] ?? null;
+}
+
+function gm_call_openai_compatible(array $pcfg, array $messages, int $maxTokens = 800, float $temperature = 0.3): ?string {
+    $apiKey = trim((string) ($pcfg['api_key'] ?? ''));
+    $apiUrl = ai_build_chat_completions_url((string) ($pcfg['api_url'] ?? ''));
+    $modelId = trim((string) ($pcfg['model_id'] ?? ''));
+    if ($apiKey === '' || $apiUrl === '' || $modelId === '') {
+        return null;
+    }
+
+    $payload = json_encode([
+        'model' => $modelId,
+        'messages' => $messages,
+        'max_tokens' => $maxTokens,
+        'temperature' => $temperature,
+    ], JSON_UNESCAPED_UNICODE);
+
+    $ch = curl_init($apiUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ],
+    ]);
+    $raw = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($raw === false || $code !== 200) {
+        gm_log("  [default_ai_model] 调用失败 HTTP {$code}");
+        return null;
+    }
 
     $data = json_decode($raw, true);
     return $data['choices'][0]['message']['content'] ?? null;

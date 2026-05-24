@@ -126,7 +126,7 @@ class AIEngine {
     private function getTaskInfo($task_id) {
         $sql = "
             SELECT t.*, 
-                   am.api_key, am.model_id, am.api_url, am.daily_limit, am.used_today,
+                   am.api_key, am.name AS model_name, am.model_id, am.api_url, am.daily_limit, am.used_today,
                    p.content as prompt_content,
                    kb.content as knowledge_content
             FROM tasks t
@@ -403,6 +403,20 @@ class AIEngine {
         }
         
         $result = json_decode($response, true);
+        if (function_exists('log_ai_api_call')) {
+            log_ai_api_call([
+                'source' => 'article_generation',
+                'model_name' => (string) ($task['model_name'] ?? ''),
+                'model_id' => (string) ($task['model_id'] ?? ''),
+                'api_url' => $api_url,
+                'http_code' => $http_code,
+                'ok' => $http_code === 200 && isset($result['choices'][0]['message']['content']) && trim((string) $result['choices'][0]['message']['content']) !== '',
+                'prompt_tokens' => is_array($result) ? ($result['usage']['prompt_tokens'] ?? null) : null,
+                'completion_tokens' => is_array($result) ? ($result['usage']['completion_tokens'] ?? null) : null,
+                'total_tokens' => is_array($result) ? ($result['usage']['total_tokens'] ?? null) : null,
+                'error' => $http_code === 200 ? '' : mb_substr((string) $response, 0, 300),
+            ]);
+        }
         if (!$result || !isset($result['choices'][0]['message']['content'])) {
             throw new Exception('API响应格式错误：' . $this->buildAIResponseDiagnostic($response, $http_code, $result));
         }

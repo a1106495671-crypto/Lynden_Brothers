@@ -82,16 +82,27 @@ function wf_update_step(PDO $db, string $workflowId, string $stepId, string $sta
     $db->prepare($sql)->execute($params);
 }
 
-// ─── AI 调用封装（带重试） ────────────────────────────────
-function wf_call_ai(string $prompt, int $maxTokens = 3000): string {
+// ─── AI 调用封装（仅允许真实 API 模型）──────────────────────
+function wf_call_ai(string $prompt, int $maxTokens = 3000, string $workflowId = '', string $stage = 'AI生成'): string {
     $result = geo_call_ai_with_fallback($prompt, $maxTokens, 0.7);
+    $GLOBALS['WF_LAST_AI_MODEL'] = $result['model_used'] ?? 'none';
+
     if (!empty($result['error'])) {
         throw new RuntimeException("AI调用失败: " . $result['error']);
     }
     if (empty($result['content'])) {
         throw new RuntimeException("AI返回空内容");
     }
+
+    if ($workflowId !== '') {
+        wf_log($workflowId, "{$stage} 使用模型: " . ($result['model_used'] ?? 'unknown'));
+    }
+
     return $result['content'];
+}
+
+function wf_last_ai_model(): string {
+    return (string) ($GLOBALS['WF_LAST_AI_MODEL'] ?? '');
 }
 
 // ─── 解析 prompt 模板 ────────────────────────────────────
@@ -137,6 +148,96 @@ function wf_parse_titles(string $text): array {
     return array_values(array_unique($titles));
 }
 
+function wf_get_usable_chat_model(PDO $db): ?array {
+    $stmt = $db->query("
+        SELECT id, name, api_key, model_id, api_url
+        FROM ai_models
+        WHERE status = 'active'
+          AND COALESCE(NULLIF(model_type, ''), 'chat') = 'chat'
+          AND COALESCE(api_key, '') <> ''
+          AND COALESCE(model_id, '') <> ''
+        ORDER BY priority ASC NULLS LAST, id ASC
+    ");
+
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $model) {
+        $apiKey = trim(decrypt_ai_api_key((string) ($model['api_key'] ?? '')));
+        $apiUrl = trim((string) ($model['api_url'] ?? ''));
+        if ($apiKey !== '' && $apiUrl !== '' && trim((string) $model['model_id']) !== '') {
+            return $model;
+        }
+    }
+
+    return null;
+}
+
+function wf_get_latest_job_error(PDO $db, int $taskId): string {
+    $stmt = $db->prepare("
+        SELECT status, error_message
+        FROM job_queue
+        WHERE task_id = ?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$taskId]);
+    $job = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$job) {
+        return '没有找到文章生成队列记录，请确认 worker.php 是否正在运行';
+    }
+
+    $status = (string) ($job['status'] ?? 'unknown');
+    $message = trim((string) ($job['error_message'] ?? ''));
+    return $message !== '' ? "{$status}: {$message}" : "最近队列状态：{$status}";
+}
+
+function wf_seed_geo_brand_facts(PDO $db, string $customerId, array $wf): int {
+    if ($customerId === '') {
+        return 0;
+    }
+
+    $brandName = trim((string) ($wf['brand_name'] ?? ''));
+    $industry = trim((string) ($wf['industry'] ?? ''));
+    $services = trim((string) ($wf['services'] ?? ''));
+    $positioning = trim((string) ($wf['positioning'] ?? ''));
+
+    $masterSentence = $positioning;
+    if ($masterSentence === '') {
+        $parts = array_filter([$industry, $services]);
+        $masterSentence = $brandName . ($parts ? '是一家专注于' . implode('、', $parts) . '的品牌。' : '是一个正在进行GEO优化的品牌。');
+    }
+
+    $facts = [
+        ['brand_name', '品牌名称', $brandName, true],
+        ['industry', '所属行业', $industry, true],
+        ['website', '官网', trim((string) ($wf['website'] ?? '')), false],
+        ['core_services', '核心服务', $services, true],
+        ['competitors', '主要竞品', trim((string) ($wf['competitors'] ?? '')), false],
+        ['positioning', '品牌定位', $positioning, true],
+        ['master_sentence', '定位母句', $masterSentence, true],
+    ];
+
+    $stmt = $db->prepare("
+        INSERT INTO geo_brand_facts (customer_id, fact_key, fact_label, fact_value, is_core)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (customer_id, fact_key) DO UPDATE SET
+            fact_label = EXCLUDED.fact_label,
+            fact_value = EXCLUDED.fact_value,
+            is_core = EXCLUDED.is_core,
+            updated_at = CURRENT_TIMESTAMP
+    ");
+
+    $count = 0;
+    foreach ($facts as [$key, $label, $value, $isCore]) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            continue;
+        }
+        $stmt->execute([$customerId, $key, $label, mb_substr($value, 0, 500), $isCore ? 'true' : 'false']);
+        $count++;
+    }
+
+    return $count;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  步骤执行器
 // ═══════════════════════════════════════════════════════════
@@ -154,7 +255,7 @@ function step_collect(PDO $db, array $wf): array {
             . "品牌名称：{$brandName}\n行业：{$industry}\n官网：{$website}\n核心服务：{$wf['services']}\n竞品：{$wf['competitors']}\n定位：{$wf['positioning']}\n\n"
             . "要求：客观中立，不要营销话术，像百科词条。";
 
-    $collected = wf_call_ai($prompt, 1500);
+    $collected = wf_call_ai($prompt, 1500, $wf['workflow_id'], '搜集品牌资料');
 
     // 存入 workflow 以供后续步骤使用
     wf_update_workflow($db, $wf['workflow_id'], [
@@ -163,7 +264,7 @@ function step_collect(PDO $db, array $wf): array {
 
     return [
         'success' => true,
-        'output'  => json_encode(['collected_info' => $collected], JSON_UNESCAPED_UNICODE),
+        'output'  => json_encode(['collected_info' => $collected, 'model_used' => wf_last_ai_model()], JSON_UNESCAPED_UNICODE),
         'data'    => ['collected_info' => $collected]
     ];
 }
@@ -186,7 +287,7 @@ function step_keywords(PDO $db, array $wf): array {
         'positioning'  => $wf['positioning'],
     ]);
 
-    $aiOutput = wf_call_ai($prompt, 3000);
+    $aiOutput = wf_call_ai($prompt, 3000, $wf['workflow_id'], '生成关键词库');
     $keywords = wf_parse_keywords($aiOutput);
 
     if (count($keywords) < 5) {
@@ -210,6 +311,7 @@ function step_keywords(PDO $db, array $wf): array {
             'library_id' => $libraryId,
             'keyword_count' => count($keywords),
             'keywords' => array_slice($keywords, 0, 10), // 只存前10个预览
+            'model_used' => wf_last_ai_model(),
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['keyword_library_id' => $libraryId]
     ];
@@ -232,7 +334,7 @@ function step_titles(PDO $db, array $wf): array {
         'positioning'  => $wf['positioning'],
     ]);
 
-    $aiOutput = wf_call_ai($prompt, 3000);
+    $aiOutput = wf_call_ai($prompt, 3000, $wf['workflow_id'], '生成标题库');
     $titles = wf_parse_titles($aiOutput);
 
     if (count($titles) < 5) {
@@ -257,6 +359,7 @@ function step_titles(PDO $db, array $wf): array {
         'output'  => json_encode([
             'library_id' => $libraryId,
             'title_count' => count($titles),
+            'model_used' => wf_last_ai_model(),
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['title_library_id' => $libraryId]
     ];
@@ -281,7 +384,7 @@ function step_knowledge(PDO $db, array $wf): array {
         'known_materials'=> '',
     ]);
 
-    $knowledgeContent = wf_call_ai($prompt, 4000);
+    $knowledgeContent = wf_call_ai($prompt, 4000, $wf['workflow_id'], '生成知识库');
 
     $materialService = new MaterialService($db);
     $kb = $materialService->createKnowledgeBase([
@@ -298,6 +401,7 @@ function step_knowledge(PDO $db, array $wf): array {
         'output'  => json_encode([
             'knowledge_base_id' => $kbId,
             'char_count' => mb_strlen($knowledgeContent, 'UTF-8'),
+            'model_used' => wf_last_ai_model(),
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['knowledge_base_id' => $kbId]
     ];
@@ -308,22 +412,67 @@ function step_knowledge(PDO $db, array $wf): array {
  */
 function step_customer(PDO $db, array $wf): array {
     $customerService = new CustomerService($db);
-    $customer = $customerService->createCustomer([
-        'name'     => $wf['brand_name'],
-        'industry' => $wf['industry'],
-        'domain'   => $wf['website'],
-    ]);
+    $customer = wf_find_existing_customer($db, $wf);
+    $created = false;
+    if (!$customer) {
+        $customer = $customerService->createCustomer([
+            'name'     => $wf['brand_name'],
+            'industry' => $wf['industry'],
+            'domain'   => $wf['website'],
+        ]);
+        $created = true;
+    }
 
     $customerId = $customer['customer_id'];
+    $factCount = wf_seed_geo_brand_facts($db, $customerId, $wf);
     wf_update_workflow($db, $wf['workflow_id'], ['customer_id' => $customerId]);
 
     return [
         'success' => true,
         'output'  => json_encode([
             'customer_id' => $customerId,
+            'reused_existing_customer' => !$created,
+            'geo_brand_fact_count' => $factCount,
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['customer_id' => $customerId]
     ];
+}
+
+function wf_find_existing_customer(PDO $db, array $wf): ?array {
+    $domain = trim((string) ($wf['website'] ?? ''));
+    $brandName = trim((string) ($wf['brand_name'] ?? ''));
+
+    if ($domain !== '') {
+        $stmt = $db->prepare("
+            SELECT *
+            FROM customers
+            WHERE lower(trim(domain)) = lower(trim(?))
+            ORDER BY CASE WHEN customer_id LIKE 'cust_%' THEN 1 ELSE 0 END ASC, created_at ASC
+            LIMIT 1
+        ");
+        $stmt->execute([$domain]);
+        $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($customer) {
+            return $customer;
+        }
+    }
+
+    if ($brandName !== '') {
+        $stmt = $db->prepare("
+            SELECT *
+            FROM customers
+            WHERE lower(trim(name)) = lower(trim(?))
+            ORDER BY CASE WHEN customer_id LIKE 'cust_%' THEN 1 ELSE 0 END ASC, created_at ASC
+            LIMIT 1
+        ");
+        $stmt->execute([$brandName]);
+        $customer = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($customer) {
+            return $customer;
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -338,11 +487,10 @@ function step_task(PDO $db, array $wf): array {
         throw new RuntimeException("系统中没有 type='content' 的提示词，请先在后台创建");
     }
 
-    // 查找活跃的 AI 模型
-    $stmt = $db->query("SELECT id FROM ai_models WHERE status='active' ORDER BY priority ASC NULLS LAST, id ASC LIMIT 1");
-    $aiModel = $stmt->fetch(PDO::FETCH_ASSOC);
+    // 查找可用的聊天模型，不能选择本地占位或没有 API Key 的模型。
+    $aiModel = wf_get_usable_chat_model($db);
     if (!$aiModel) {
-        throw new RuntimeException("系统中没有活跃的AI模型，请先在后台配置");
+        throw new RuntimeException("系统中没有可用的聊天 AI 模型，请先配置有效 API Key 并保持模型为活跃状态");
     }
 
     $taskService = new TaskLifecycleService($db);
@@ -357,6 +505,10 @@ function step_task(PDO $db, array $wf): array {
         'need_review'       => 0,
         'auto_keywords'     => 1,
         'auto_description'  => 1,
+        'geo_mode'          => 1,
+        'geo_scenario'      => 'B',
+        'geo_brand_name'    => $wf['brand_name'],
+        'geo_customer_id'   => (string) ($wf['customer_id'] ?? ''),
         'status'            => 'active',
     ]);
 
@@ -372,6 +524,13 @@ function step_task(PDO $db, array $wf): array {
         'output'  => json_encode([
             'task_id' => $taskId,
             'draft_limit' => (int) $wf['article_count'],
+            'geo_mode' => true,
+            'geo_scenario' => 'B',
+            'geo_brand_name' => $wf['brand_name'],
+            'geo_customer_id' => (string) ($wf['customer_id'] ?? ''),
+            'model_name' => $aiModel['name'] ?? '',
+            'model_id' => $aiModel['model_id'] ?? '',
+            'api_url' => $aiModel['api_url'] ?? '',
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['task_id' => $taskId]
     ];
@@ -383,6 +542,7 @@ function step_task(PDO $db, array $wf): array {
 function step_generate(PDO $db, array $wf): array {
     $taskId = (int) $wf['task_id'];
     $target = (int) $wf['article_count'];
+    $minToContinue = max(1, (int) env_value('AUTOMATION_MIN_ARTICLES_TO_CONTINUE', min(1, $target)));
     $maxWait = 600; // 最多等10分钟
     $elapsed = 0;
     $interval = 10;
@@ -406,6 +566,28 @@ function step_generate(PDO $db, array $wf): array {
             ];
         }
 
+        if ($count >= $minToContinue) {
+            $queueService = new JobQueueService($db);
+            $hasMoreJobs = $queueService->hasPendingOrRunningJob($taskId);
+            if (!$hasMoreJobs && $count < $target) {
+                $queueService->enqueueTaskJob($taskId);
+                $hasMoreJobs = true;
+            }
+            wf_log($wf['workflow_id'], "文章已生成 {$count}/{$target}，首篇文章已就绪，先进入媒体分发和监测；剩余文章继续由任务队列生成，生成后会自动进入分发队列。");
+
+            return [
+                'success' => true,
+                'output'  => json_encode([
+                    'article_count' => $count,
+                    'target' => $target,
+                    'partial' => true,
+                    'min_to_continue' => $minToContinue,
+                    'has_more_jobs' => $hasMoreJobs,
+                ], JSON_UNESCAPED_UNICODE),
+                'data'    => ['article_count' => $count, 'partial' => true]
+            ];
+        }
+
         // 检查任务是否还有 pending/running 的 job，如果没有且文章不够，补一个
         $queueService = new JobQueueService($db);
         if (!$queueService->hasPendingOrRunningJob($taskId)) {
@@ -417,15 +599,34 @@ function step_generate(PDO $db, array $wf): array {
         wf_log($wf['workflow_id'], "等待文章生成... {$count}/{$target} ({$elapsed}s)");
     }
 
-    // 超时，返回已有数量（不报错，继续后续步骤）
+    // 超时仍未达到目标时，允许已有文章先进入分发/监测；0 篇仍然失败，避免伪完成。
     $stmt = $db->prepare("SELECT COUNT(*) FROM articles WHERE task_id = ? AND deleted_at IS NULL");
     $stmt->execute([$taskId]);
     $count = (int) $stmt->fetchColumn();
 
+    if ($count < $minToContinue) {
+        $latestJobError = wf_get_latest_job_error($db, $taskId);
+        throw new RuntimeException("文章生成超时：已生成 {$count}/{$target}，低于继续流程所需 {$minToContinue} 篇。{$latestJobError}");
+    }
+
+    $queueService = new JobQueueService($db);
+    $hasMoreJobs = $queueService->hasPendingOrRunningJob($taskId);
+    if (!$hasMoreJobs && $count < $target) {
+        $queueService->enqueueTaskJob($taskId);
+        $hasMoreJobs = true;
+    }
+    wf_log($wf['workflow_id'], "文章已生成 {$count}/{$target}，首篇文章已就绪，先进入媒体分发和监测；剩余文章继续由任务队列生成，生成后会自动进入分发队列。");
+
     return [
         'success' => true,
-        'output'  => json_encode(['article_count' => $count, 'target' => $target, 'timeout' => true], JSON_UNESCAPED_UNICODE),
-        'data'    => ['article_count' => $count]
+        'output'  => json_encode([
+            'article_count' => $count,
+            'target' => $target,
+            'partial' => $count < $target,
+            'min_to_continue' => $minToContinue,
+            'has_more_jobs' => $hasMoreJobs,
+        ], JSON_UNESCAPED_UNICODE),
+        'data'    => ['article_count' => $count, 'partial' => $count < $target]
     ];
 }
 
@@ -439,6 +640,10 @@ function step_distribute(PDO $db, array $wf): array {
     $stmt = $db->prepare("SELECT id, status FROM articles WHERE task_id = ? AND deleted_at IS NULL ORDER BY id ASC");
     $stmt->execute([$taskId]);
     $articles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($articles)) {
+        throw new RuntimeException("没有可分发的文章，不能标记分发完成");
+    }
 
     $articleService = new ArticleService($db);
     $published = 0;
@@ -495,15 +700,57 @@ function step_monitor(PDO $db, array $wf): array {
         $monitorService->addKeywords($customerId, $monitorKeywords);
     }
 
+    $monitorRunStarted = wf_start_geo_monitor_run_async($customerId);
+    if ($monitorRunStarted) {
+        wf_log($wf['workflow_id'], "已启动 GEO 监测后台任务：customer={$customerId}");
+    } else {
+        wf_log($wf['workflow_id'], "GEO 监测关键词已添加；未能启动后台监测任务，请检查 bin/geo-monitor-run.php");
+    }
+
     return [
         'success' => true,
         'output'  => json_encode([
             'customer_id' => $customerId,
             'keyword_count' => count($monitorKeywords),
             'keywords' => $monitorKeywords,
+            'monitor_run_started' => $monitorRunStarted,
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['monitor_keywords' => $monitorKeywords]
     ];
+}
+
+function wf_start_geo_monitor_run_async(string $customerId): bool {
+    $customerId = trim($customerId);
+    if ($customerId === '') {
+        return false;
+    }
+
+    $script = realpath(dirname(__DIR__) . '/bin/geo-monitor-run.php') ?: '';
+    if ($script === '') {
+        return false;
+    }
+
+    $runner = env_value('GEO_MONITOR_PHP_RUNNER', '');
+    if ($runner === '') {
+        $runner = PHP_BINARY ?: 'php';
+    }
+
+    $parts = preg_split('/\s+/', trim($runner)) ?: [];
+    $parts = array_values(array_filter($parts, static fn ($part) => $part !== ''));
+    $runnerCommand = empty($parts) ? 'php ' : implode(' ', array_map('escapeshellarg', $parts)) . ' ';
+    $logFile = dirname(__DIR__) . '/bin/logs/geo_monitor_' . date('Y-m-d') . '.log';
+    $logDir = dirname($logFile);
+    if (!is_dir($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+
+    $command = $runnerCommand
+        . escapeshellarg($script) . ' '
+        . '--customer=' . escapeshellarg($customerId) . ' '
+        . '>> ' . escapeshellarg($logFile) . ' 2>&1 &';
+    exec($command);
+
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════
