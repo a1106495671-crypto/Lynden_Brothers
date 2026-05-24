@@ -58,7 +58,8 @@ try {
     $steps = $stepStmt->fetchAll(PDO::FETCH_ASSOC);
 
     // 查询统计数据
-    $stats = ['keywords' => 0, 'titles' => 0, 'articles' => 0, 'published' => 0];
+    $stats = ['diagnoses' => 0, 'keywords' => 0, 'titles' => 0, 'articles' => 0, 'published' => 0];
+    $diagnosis = null;
     $runtime = [
         'generation_pending' => 0,
         'generation_running' => 0,
@@ -89,6 +90,84 @@ try {
             $stats['titles'] = (int) $ts->fetchColumn();
         } catch (Exception $e) {}
     }
+
+    try {
+        if (!empty($workflow['diagnosis_id'])) {
+            $ds = $db->prepare("SELECT COUNT(*) FROM geo_diagnosis_runs WHERE id::text = ?");
+            $ds->execute([(string) $workflow['diagnosis_id']]);
+            $stats['diagnoses'] = (int) $ds->fetchColumn();
+
+            $detailStmt = $db->prepare("
+                SELECT r.id::text AS id,
+                       ROUND(r.overall_score::numeric, 1) AS overall_score,
+                       r.predicted_hit_rate,
+                       r.status,
+                       r.completed_at,
+                       b.name AS brand_name,
+                       b.domain,
+                       b.industry,
+                       (
+                           SELECT COUNT(*)
+                           FROM geo_diagnosis_actions a
+                           WHERE a.diagnosis_id = r.id
+                       ) AS action_count,
+                       (
+                           SELECT d.name
+                           FROM geo_diagnosis_signal_scores s
+                           LEFT JOIN geo_diagnosis_signal_definitions d ON d.signal_key = s.signal_key
+                           WHERE s.diagnosis_id = r.id
+                           ORDER BY s.score ASC
+                           LIMIT 1
+                       ) AS weakest_signal
+                FROM geo_diagnosis_runs r
+                JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+                WHERE r.id::text = ?
+                LIMIT 1
+            ");
+            $detailStmt->execute([(string) $workflow['diagnosis_id']]);
+            $diagnosis = $detailStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } elseif (!empty($workflow['brand_name'])) {
+            $ds = $db->prepare("
+                SELECT COUNT(*)
+                FROM geo_diagnosis_runs r
+                JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+                WHERE b.name = ?
+            ");
+            $ds->execute([(string) $workflow['brand_name']]);
+            $stats['diagnoses'] = (int) $ds->fetchColumn();
+
+            $detailStmt = $db->prepare("
+                SELECT r.id::text AS id,
+                       ROUND(r.overall_score::numeric, 1) AS overall_score,
+                       r.predicted_hit_rate,
+                       r.status,
+                       r.completed_at,
+                       b.name AS brand_name,
+                       b.domain,
+                       b.industry,
+                       (
+                           SELECT COUNT(*)
+                           FROM geo_diagnosis_actions a
+                           WHERE a.diagnosis_id = r.id
+                       ) AS action_count,
+                       (
+                           SELECT d.name
+                           FROM geo_diagnosis_signal_scores s
+                           LEFT JOIN geo_diagnosis_signal_definitions d ON d.signal_key = s.signal_key
+                           WHERE s.diagnosis_id = r.id
+                           ORDER BY s.score ASC
+                           LIMIT 1
+                       ) AS weakest_signal
+                FROM geo_diagnosis_runs r
+                JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+                WHERE b.name = ?
+                ORDER BY r.created_at DESC
+                LIMIT 1
+            ");
+            $detailStmt->execute([(string) $workflow['brand_name']]);
+            $diagnosis = $detailStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+    } catch (Exception $e) {}
 
     if ($workflow['task_id']) {
         try {
@@ -183,12 +262,14 @@ try {
             'positioning'  => $workflow['positioning'],
             'article_count'=> (int) $workflow['article_count'],
             'task_id'      => $workflow['task_id'] ? (int) $workflow['task_id'] : null,
+            'diagnosis_id' => $workflow['diagnosis_id'] ?? '',
             'created_at'   => $workflow['created_at'],
             'completed_at' => $workflow['completed_at'],
             'error_message'=> $workflow['error_message'],
             'steps'        => $steps,
         ],
         'stats' => $stats,
+        'diagnosis' => $diagnosis,
         'runtime' => $runtime,
     ]);
 

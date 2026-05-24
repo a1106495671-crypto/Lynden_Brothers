@@ -12,18 +12,40 @@ require_once __DIR__ . '/../includes/database_admin.php';
 
 require_admin_login();
 
-$currentCustomer        = $_SESSION['current_customer'] ?? [];
-$brandName              = $currentCustomer['name'] ?? '湖南文韵爱阅读';
-$industry               = $currentCustomer['industry'] ?? '教培 / 知识付费';
-$competitorsFromCustomer = $currentCustomer['competitors'] ?? ['心田花开', '楚才教育', '麦田格'];
-$contractEndAt          = $currentCustomer['contract_end_at'] ?? '2026-06-30';
-$serviceStartAt         = $currentCustomer['contract_start_at'] ?? '2026-01-01';
+$currentCustomer = $_SESSION['current_customer'] ?? [];
+$customerId = trim((string) ($_GET['customer'] ?? $_GET['customer_id'] ?? ($currentCustomer['id'] ?? $currentCustomer['customer_id'] ?? '')));
+try {
+    if ($customerId === '') {
+        $customerId = (string) $db->query("SELECT customer_id FROM customers ORDER BY updated_at DESC, id DESC LIMIT 1")->fetchColumn();
+    }
+    if ($customerId !== '') {
+        $stmtCustomer = $db->prepare("SELECT * FROM customers WHERE customer_id = ? LIMIT 1");
+        $stmtCustomer->execute([$customerId]);
+        $dbCustomer = $stmtCustomer->fetch(PDO::FETCH_ASSOC);
+        if ($dbCustomer) {
+            $currentCustomer = array_merge($currentCustomer, [
+                'id' => $dbCustomer['customer_id'],
+                'customer_id' => $dbCustomer['customer_id'],
+                'name' => $dbCustomer['name'],
+                'domain' => $dbCustomer['domain'],
+                'industry' => $dbCustomer['industry'],
+                'contract_start_at' => $dbCustomer['contract_start_date'],
+                'contract_end_at' => $dbCustomer['contract_end_date'],
+                'owner' => $dbCustomer['owner'],
+            ]);
+        }
+    }
+} catch (Throwable $_customerLoad) {}
+
+$brandName              = $currentCustomer['name'] ?? ($customerId !== '' ? $customerId : '未选择客户');
+$industry               = $currentCustomer['industry'] ?? '';
+$competitorsFromCustomer = $currentCustomer['competitors'] ?? [];
+$contractEndAt          = $currentCustomer['contract_end_at'] ?? '';
+$serviceStartAt         = $currentCustomer['contract_start_at'] ?? '';
 $ownerName              = $currentCustomer['owner'] ?? '客户成功';
 
-$customerId   = $currentCustomer['id'] ?? 'default';
-$customerSeed = abs(crc32($customerId));
 $cityName     = trim(($currentCustomer['cities'][0] ?? '') ?: '本地');
-$industryLabel = trim(explode('/', $industry)[0]);
+$industryLabel = trim(explode('/', $industry ?: '行业')[0]);
 
 // Load competitors from DB (authoritative), fall back to session data
 $competitorsFromDb = [];
@@ -35,10 +57,6 @@ try {
 $competitorsList = !empty($competitorsFromDb) ? $competitorsFromDb : $competitorsFromCustomer;
 $comp0 = $competitorsList[0] ?? '竞品A';
 $comp1 = $competitorsList[1] ?? '竞品B';
-
-$sr = static function(int $slot, int $min, int $max) use ($customerSeed): int {
-    return $min + (abs((int) crc32($customerSeed . ':' . $slot)) % ($max - $min + 1));
-};
 
 // ── 真实监测数据（最近 90 天）──────────────────────────────────────────────
 $realByDate  = [];
@@ -128,12 +146,7 @@ try {
     }
 } catch (Throwable $_cse) {}
 
-// ── 趋势计算：有真实数据用真实，没有用 mock ────────────────────────────────
-$brandBase    = $sr(0, 30, 55);
-$brandPeak    = $sr(2, 65, 92);
-$industryBase = $sr(1, 40, 55);
-$industryPeak = $sr(3, 55, 70);
-
+// ── 趋势计算：只使用真实监测数据；没有数据时保持空图和明确提示 ────────────────
 $trendPoints = [];
 $endDate = new DateTimeImmutable('today');
 if ($hasRealData) {
@@ -153,17 +166,9 @@ if ($hasRealData) {
     foreach ($filled as $d => $rate) {
         $trendPoints[] = ['date' => $d, 'brand' => (int)$rate];
     }
-} else {
-    $trendStart = new DateTimeImmutable('2026-02-17');
-    for ($i = 0; $i < 90; $i++) {
-        $progress  = $i / 89;
-        $noise     = ($sr($i + 100, 0, 12) - 6);
-        $brandRate = (int) min(98, max(20, round($brandBase + ($brandPeak - $brandBase) * $progress + $noise * 0.6)));
-        $trendPoints[] = ['date' => $trendStart->modify('+' . $i . ' days')->format('Y-m-d'), 'brand' => $brandRate];
-    }
 }
 
-$latestBrandRate    = end($trendPoints)['brand'];
+$latestBrandRate = $trendPoints ? (int) end($trendPoints)['brand'] : 0;
 // 行业均值：从诊断行业基准表读，无数据时显示 null（不展示假数字）
 $latestIndustryRate = null;
 try {
@@ -203,7 +208,7 @@ try {
     if ($fallVal !== false) $fallPp = round((float)$fallVal, 1);
 } catch (Throwable $_f) {}
 
-// ── AI 对话记录：优先用真实记录，回退 mock ─────────────────────────────────
+// ── AI 对话记录：只展示真实监测回答，不再回退假对话 ────────────────────────
 $convProviderMap = ['kimi'=>'Kimi','deepseek'=>'DeepSeek','tongyi'=>'通义','wenxin'=>'文心','doubao'=>'豆包','yuanbao'=>'元宝'];
 $conversations = [];
 if ($hasRealData) {
@@ -226,38 +231,9 @@ if ($hasRealData) {
         }
     } catch (Throwable $_ce) {}
 }
-if (empty($conversations)) {
-    $platforms = ['豆包', '通义', 'Kimi', 'DeepSeek', '元宝'];
-    $plat0 = $platforms[$sr(80, 0, 4)];
-    $plat1 = $platforms[$sr(81, 0, 4)];
-    $plat2 = $platforms[$sr(82, 0, 4)];
-    $conversations = [
-    [
-        'date'     => '2026-05-03',
-        'question' => $cityName . $industryLabel . '服务商推荐',
-        'platform' => $plat0,
-        'answer'   => '如果在' . $cityName . '选择' . $industryLabel . '服务，可以先看服务体系、团队稳定性和客户反馈。' . $brandName . ' 在行业内有较完整的服务说明，适合需要系统提升的客户。',
-        'citations' => ['知乎问答', '机构官网', '行业媒体', '用户评价'],
-    ],
-    [
-        'date'     => '2026-05-10',
-        'question' => $brandName . '怎么样，值得选吗',
-        'platform' => $plat1,
-        'answer'   => $brandName . ' 在' . $industryLabel . '领域有一定知名度，资料显示其服务体系较为完整，多个案例展示了实际交付成果，适合中长期合作需求。',
-        'citations' => ['知乎问答', '行业公众号', '服务案例'],
-    ],
-    [
-        'date'     => '2026-05-17',
-        'question' => $cityName . $industryLabel . '哪家值得选',
-        'platform' => $plat2,
-        'answer'   => '选择' . $industryLabel . '服务商要看案例深度、长期反馈和第三方评价。' . $brandName . ' 有一定资料可查，持续补充第三方评价将进一步提升 AI 引用稳定性。',
-        'citations' => ['百度百科', '知乎专栏', '微信公众号'],
-    ],
-];
-} // end if (empty($conversations))
 
 $renewalItems = [
-    ['label' => '可见率提升', 'value' => ($hasRealData ? $trendPoints[0]['brand'] . '% → ' . $latestBrandRate . '%' : '监测数据积累中'), 'delta' => $hasRealData ? '+' . $brandRiseTotal . 'pp' : '--', 'green' => $brandRiseTotal > 0],
+    ['label' => '可见率提升', 'value' => ($hasRealData ? $trendPoints[0]['brand'] . '% → ' . $latestBrandRate . '%' : '监测数据积累中'), 'delta' => $hasRealData ? (($brandRiseTotal >= 0 ? '+' : '') . $brandRiseTotal . 'pp') : '--', 'green' => $brandRiseTotal > 0],
     ['label' => '行业均值对比', 'value' => ($latestIndustryRate !== null ? $latestBrandRate . '% vs ' . $latestIndustryRate . '%（行业）' : '行业基准待建立'), 'delta' => $latestIndustryRate !== null ? ($latestBrandRate >= $latestIndustryRate ? '+' . ($latestBrandRate - $latestIndustryRate) . 'pp' : (string)($latestBrandRate - $latestIndustryRate) . 'pp') : '--', 'green' => $latestIndustryRate !== null && $latestBrandRate >= $latestIndustryRate],
     ['label' => 'AI对话证据', 'value' => count($conversations) . ' 条', 'delta' => '含原话与来源', 'green' => count($conversations) > 0],
     ['label' => '已覆盖AI平台', 'value' => $sourceCurrent . ' / 6 个', 'delta' => '目标覆盖全部6平台', 'green' => $sourceCurrent >= 5],
@@ -294,6 +270,9 @@ if (empty($topAlerts)) {
 
 // 下月行动项：从真实告警和平台覆盖推导
 $nextActions = [];
+if (!$hasRealData) {
+    $nextActions[] = '先完成一次GEO监测：当前月报没有真实监测记录，无法计算趋势和AI对话证据';
+}
 if ($sourceCurrent < 6) {
     $nextActions[] = '补全AI平台覆盖：当前 ' . $sourceCurrent . '/6 个平台有效提及，目标覆盖全部6个';
 }
@@ -384,9 +363,12 @@ $reportPeriod = date('Y年m月');
         </div>
         <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
             <p class="text-sm leading-7 text-gray-700">
-                本月监测显示，<strong><?php echo htmlspecialchars($brandName); ?></strong> AI 可见率从 <?php echo $trendPoints[0]['brand']; ?>% 上升至 <strong><?php echo $latestBrandRate; ?>%</strong>，提升 <strong><?php echo $brandRiseTotal; ?> 个百分点</strong>，已超出行业均值（<?php echo $latestIndustryRate; ?>%）。
-                引用来源数当前 <?php echo $sourceCurrent; ?> 个，距强势阈值 20 个仍有提升空间。
-                共采集到 <?php echo count($conversations); ?> 条 AI 原话证据，覆盖推荐型、评价型和决策型三类高意向问题。
+                <?php if ($hasRealData): ?>
+                    本月监测显示，<strong><?php echo htmlspecialchars($brandName); ?></strong> AI 可见率从 <?php echo $trendPoints[0]['brand']; ?>% 变化至 <strong><?php echo $latestBrandRate; ?>%</strong>，变动 <strong><?php echo ($brandRiseTotal >= 0 ? '+' : '') . $brandRiseTotal; ?> 个百分点</strong><?php echo $latestIndustryRate !== null ? '，行业基准为 ' . $latestIndustryRate . '%' : '，行业基准待建立'; ?>。
+                    当前覆盖 AI 平台 <?php echo $sourceCurrent; ?> 个，共采集到 <?php echo count($conversations); ?> 条真实 AI 原话证据。
+                <?php else: ?>
+                    当前客户还没有可用于月报的真实 GEO 监测记录。本报告仅展示已存在的客户、文章、告警与行动项，不生成虚假趋势或 AI 原话。
+                <?php endif; ?>
             </p>
         </div>
     </section>
@@ -395,6 +377,11 @@ $reportPeriod = date('Y年m月');
     <section class="mb-10">
         <h2 class="mb-5 text-xl font-bold text-gray-900">二、AI 引用原话证据</h2>
         <div class="space-y-4">
+            <?php if (empty($conversations)): ?>
+            <div class="print-card rounded-xl border border-dashed border-gray-300 bg-white p-6 text-sm text-gray-500">
+                暂无真实 AI 原话证据。请先在 GEO 监测中完成至少一次关键词监测，系统会把模型回答、品牌提及和引用线索写入月报。
+            </div>
+            <?php endif; ?>
             <?php foreach ($conversations as $idx => $conv): ?>
             <div class="print-card rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
                 <div class="flex flex-wrap items-center gap-3">
@@ -433,46 +420,42 @@ $reportPeriod = date('Y年m月');
                 </thead>
                 <tbody class="divide-y divide-gray-100">
                     <?php
-                    // Brand row real data
-                    $brandAppearances = $brandMentioned30 ?: $sr(40, 20, 45);
-                    // Comp0 real data
+                    $brandAppearances = $brandMentioned30;
                     $comp0Stats = $competitorStats[$comp0] ?? null;
-                    $comp0Rate  = $comp0Stats ? $comp0Stats['mention_rate']     : $sr(21, 55, 88);
-                    $comp0Apps  = $comp0Stats ? $comp0Stats['records_appeared'] : $sr(41, 15, 35);
-                    // Comp1 real data
+                    $comp0Rate  = $comp0Stats ? $comp0Stats['mention_rate'] : null;
+                    $comp0Apps  = $comp0Stats ? $comp0Stats['records_appeared'] : null;
                     $comp1Stats = $competitorStats[$comp1] ?? null;
-                    $comp1Rate  = $comp1Stats ? $comp1Stats['mention_rate']     : $sr(31, 38, 70);
-                    $comp1Apps  = $comp1Stats ? $comp1Stats['records_appeared'] : $sr(42, 8, 25);
-                    // Brand dominance text
-                    $brandWinComp0 = $latestBrandRate > $comp0Rate;
-                    $brandWinComp1 = $latestBrandRate > $comp1Rate;
+                    $comp1Rate  = $comp1Stats ? $comp1Stats['mention_rate'] : null;
+                    $comp1Apps  = $comp1Stats ? $comp1Stats['records_appeared'] : null;
+                    $brandWinComp0 = $comp0Rate !== null && $latestBrandRate > $comp0Rate;
+                    $brandWinComp1 = $comp1Rate !== null && $latestBrandRate > $comp1Rate;
                     ?>
                     <tr class="bg-emerald-50">
                         <td class="px-5 py-4 font-semibold text-emerald-700"><?php echo htmlspecialchars($brandName); ?> <span class="ml-1 rounded-full bg-emerald-200 px-2 py-0.5 text-xs">本品牌</span></td>
                         <td class="px-5 py-4 text-right font-bold text-emerald-700"><?php echo $latestBrandRate; ?>%</td>
                         <td class="px-5 py-4 text-right text-gray-900"><?php echo $brandAppearances; ?></td>
-                        <td class="px-5 py-4 text-right text-gray-900"><?php echo number_format($sr(50, 15, 35) / 10, 1); ?></td>
-                        <td class="px-5 py-4 text-gray-700">已超行业均值，权威来源数仍需提升</td>
+                        <td class="px-5 py-4 text-right text-gray-900">—</td>
+                        <td class="px-5 py-4 text-gray-700"><?php echo $hasRealData ? '来自近30天真实监测记录' : '暂无真实监测数据'; ?></td>
                     </tr>
                     <tr>
                         <td class="px-5 py-4 text-gray-900"><?php echo htmlspecialchars($comp0); ?></td>
-                        <td class="px-5 py-4 text-right <?php echo $brandWinComp0 ? 'text-gray-500' : 'text-red-600 font-semibold'; ?>"><?php echo $comp0Rate; ?>%</td>
-                        <td class="px-5 py-4 text-right text-gray-600"><?php echo $comp0Apps; ?></td>
-                        <td class="px-5 py-4 text-right text-gray-600"><?php echo number_format($sr(51, 22, 45) / 10, 1); ?></td>
-                        <td class="px-5 py-4 text-gray-500"><?php echo $brandWinComp0 ? '本月新进推荐型问题引用集，需关注' : '超过本品牌，需紧急应对'; ?></td>
+                        <td class="px-5 py-4 text-right <?php echo $comp0Rate !== null && !$brandWinComp0 ? 'text-red-600 font-semibold' : 'text-gray-500'; ?>"><?php echo $comp0Rate !== null ? $comp0Rate . '%' : '—'; ?></td>
+                        <td class="px-5 py-4 text-right text-gray-600"><?php echo $comp0Apps !== null ? $comp0Apps : '—'; ?></td>
+                        <td class="px-5 py-4 text-right text-gray-600">—</td>
+                        <td class="px-5 py-4 text-gray-500"><?php echo $comp0Rate === null ? '暂无竞品出现记录' : ($brandWinComp0 ? '低于本品牌，继续观察' : '超过本品牌，需补充对比内容'); ?></td>
                     </tr>
                     <tr>
                         <td class="px-5 py-4 text-gray-900"><?php echo htmlspecialchars($comp1); ?></td>
-                        <td class="px-5 py-4 text-right <?php echo $brandWinComp1 ? 'text-gray-500' : 'text-red-600 font-semibold'; ?>"><?php echo $comp1Rate; ?>%</td>
-                        <td class="px-5 py-4 text-right text-gray-600"><?php echo $comp1Apps; ?></td>
-                        <td class="px-5 py-4 text-right text-gray-600"><?php echo number_format($sr(52, 30, 55) / 10, 1); ?></td>
-                        <td class="px-5 py-4 text-gray-500"><?php echo $brandWinComp1 ? '本地问题曝光稳定，综合排名弱于本品牌' : '超过本品牌，需紧急应对'; ?></td>
+                        <td class="px-5 py-4 text-right <?php echo $comp1Rate !== null && !$brandWinComp1 ? 'text-red-600 font-semibold' : 'text-gray-500'; ?>"><?php echo $comp1Rate !== null ? $comp1Rate . '%' : '—'; ?></td>
+                        <td class="px-5 py-4 text-right text-gray-600"><?php echo $comp1Apps !== null ? $comp1Apps : '—'; ?></td>
+                        <td class="px-5 py-4 text-right text-gray-600">—</td>
+                        <td class="px-5 py-4 text-gray-500"><?php echo $comp1Rate === null ? '暂无竞品出现记录' : ($brandWinComp1 ? '低于本品牌，继续观察' : '超过本品牌，需补充对比内容'); ?></td>
                     </tr>
                     <tr class="bg-gray-50">
                         <td class="px-5 py-4 text-gray-500">行业均值</td>
-                        <td class="px-5 py-4 text-right text-gray-500"><?php echo $latestIndustryRate; ?>%</td>
-                        <td class="px-5 py-4 text-right text-gray-500"><?php echo $sr(63, 10, 20); ?></td>
-                        <td class="px-5 py-4 text-right text-gray-500"><?php echo number_format($sr(64, 35, 50) / 10, 1); ?></td>
+                        <td class="px-5 py-4 text-right text-gray-500"><?php echo $latestIndustryRate !== null ? $latestIndustryRate . '%' : '—'; ?></td>
+                        <td class="px-5 py-4 text-right text-gray-500">—</td>
+                        <td class="px-5 py-4 text-right text-gray-500">—</td>
                         <td class="px-5 py-4 text-gray-400">基准线参考</td>
                     </tr>
                 </tbody>
@@ -531,8 +514,12 @@ $reportPeriod = date('Y年m月');
                 <div class="flex-1">
                     <p class="text-base font-semibold text-blue-900">合同到期日：<?php echo htmlspecialchars($contractEndAt); ?></p>
                     <p class="mt-3 text-sm leading-7 text-gray-700">
-                        本月服务期间，<?php echo htmlspecialchars($brandName); ?> AI 可见率整体呈上升趋势，核心词已稳定进入引用集。
-                        当前阶段的核心风险是来源数量（<?php echo $sourceCurrent; ?>/20）和单周波动，建议通过持续的信源补充和内容优化来巩固优势。
+                        <?php if ($hasRealData): ?>
+                        本月服务期间，<?php echo htmlspecialchars($brandName); ?> 已积累真实 AI 监测记录，可见率当前为 <?php echo $latestBrandRate; ?>%。
+                        当前阶段的核心风险是平台覆盖（<?php echo $sourceCurrent; ?>/6）和低提及关键词，建议通过持续的信源补充和内容优化来巩固优势。
+                        <?php else: ?>
+                        当前还缺少真实 AI 监测记录，暂不输出续费效果结论。建议先完成监测、文章发布和引用证据采集，再生成正式月报。
+                        <?php endif; ?>
                         续费后优先执行：扩充权威信源、完成竞品压制专项、建立季度复盘机制。
                     </p>
                     <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">

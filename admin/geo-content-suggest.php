@@ -31,8 +31,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_q
                 customer_id VARCHAR(100),
                 keyword TEXT,
                 title TEXT DEFAULT '',
-                priority INT DEFAULT 5,
+                priority VARCHAR(5) DEFAULT 'P1',
                 week_num INT DEFAULT 0,
+                platform VARCHAR(50) DEFAULT '',
+                angle TEXT DEFAULT '',
+                content_format VARCHAR(50) DEFAULT '',
                 status VARCHAR(20) DEFAULT 'pending',
                 article_title TEXT DEFAULT '',
                 article_content TEXT DEFAULT '',
@@ -40,8 +43,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_q
                 created_at TIMESTAMP DEFAULT NOW(),
                 processed_at TIMESTAMP
             )");
-            $stmt = $db->prepare("INSERT INTO geo_content_queue (customer_id, keyword, title, source, priority) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING");
-            $stmt->execute([$cid, $keyword, '针对关键词「'.$keyword.'」补充GEO优化文章', 'monitor_suggest', 8]);
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS title TEXT DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS angle TEXT DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS content_format VARCHAR(50) DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN status SET DEFAULT 'pending'");
+            $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN priority SET DEFAULT 'P1'");
+            $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN created_at SET DEFAULT NOW()");
+            $stmt = $db->prepare("INSERT INTO geo_content_queue (customer_id, keyword, title, source, priority, status, created_at) VALUES (?,?,?,?,?,'pending',NOW()) ON CONFLICT DO NOTHING");
+            $stmt->execute([$cid, $keyword, '针对关键词「'.$keyword.'」补充GEO优化文章', 'monitor_suggest', 'P0']);
             $message = "success:{$keyword}";
         } catch (Throwable $e) {
             $message = "error:" . $e->getMessage();
@@ -61,14 +72,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add_a
         try {
             $db->exec("CREATE TABLE IF NOT EXISTS geo_content_queue (
                 id SERIAL PRIMARY KEY, customer_id VARCHAR(100), keyword TEXT, title TEXT DEFAULT '',
-                priority INT DEFAULT 5, week_num INT DEFAULT 0, status VARCHAR(20) DEFAULT 'pending',
+                priority VARCHAR(5) DEFAULT 'P1', week_num INT DEFAULT 0, platform VARCHAR(50) DEFAULT '',
+                angle TEXT DEFAULT '', content_format VARCHAR(50) DEFAULT '', status VARCHAR(20) DEFAULT 'pending',
                 article_title TEXT DEFAULT '', article_content TEXT DEFAULT '',
                 source VARCHAR(50) DEFAULT 'monitor_suggest', created_at TIMESTAMP DEFAULT NOW(), processed_at TIMESTAMP
             )");
-            $stmt = $db->prepare("INSERT INTO geo_content_queue (customer_id, keyword, title, source, priority) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS title TEXT DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS angle TEXT DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS content_format VARCHAR(50) DEFAULT ''");
+            $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN status SET DEFAULT 'pending'");
+            $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN priority SET DEFAULT 'P1'");
+            $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN created_at SET DEFAULT NOW()");
+            $stmt = $db->prepare("INSERT INTO geo_content_queue (customer_id, keyword, title, source, priority, status, created_at) VALUES (?,?,?,?,?,'pending',NOW()) ON CONFLICT DO NOTHING");
             foreach ($keywords as $kw) {
                 $kw = trim($kw);
-                if ($kw) { $stmt->execute([$cid, $kw, '针对关键词「'.$kw.'」补充GEO优化文章', 'monitor_suggest', 8]); $added++; }
+                if ($kw) { $stmt->execute([$cid, $kw, '针对关键词「'.$kw.'」补充GEO优化文章', 'monitor_suggest', 'P0']); $added++; }
             }
         } catch (Throwable $e) {}
     }

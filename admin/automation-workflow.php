@@ -118,14 +118,15 @@ $page_title = '品牌入驻自动化';
             <?php
             $steps = [
                 ['id' => 'collect',     'no' => '01', 'name' => '搜集品牌资料',  'desc' => '搜索官网与媒体报道，整理品牌基本信息', 'icon' => 'search',           'color' => 'blue'],
-                ['id' => 'keywords',    'no' => '02', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
-                ['id' => 'titles',      'no' => '03', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
-                ['id' => 'knowledge',   'no' => '04', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
-                ['id' => 'customer',    'no' => '05', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
-                ['id' => 'task',        'no' => '06', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
-                ['id' => 'generate',    'no' => '07', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
-                ['id' => 'distribute',  'no' => '08', 'name' => '启动媒体分发',  'desc' => '发布文章并加入媒体队列，后台持续分发',   'icon' => 'send',             'color' => 'emerald'],
-                ['id' => 'monitor',     'no' => '09', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
+                ['id' => 'diagnosis',   'no' => '02', 'name' => '生成雷达诊断',  'desc' => '生成六维GEO权威性基线评分',          'icon' => 'radar',            'color' => 'violet'],
+                ['id' => 'keywords',    'no' => '03', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
+                ['id' => 'titles',      'no' => '04', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
+                ['id' => 'knowledge',   'no' => '05', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
+                ['id' => 'customer',    'no' => '06', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
+                ['id' => 'task',        'no' => '07', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
+                ['id' => 'generate',    'no' => '08', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
+                ['id' => 'distribute',  'no' => '09', 'name' => '启动媒体分发',  'desc' => '发布文章并加入媒体队列，后台持续分发',   'icon' => 'send',             'color' => 'emerald'],
+                ['id' => 'monitor',     'no' => '10', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
             ];
 
             $color_map = [
@@ -190,7 +191,11 @@ $page_title = '品牌入驻自动化';
                     <p class="text-xs text-gray-500" id="brand-industry">--</p>
                 </div>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                <div class="rounded-lg bg-gray-50 p-3">
+                    <span class="text-gray-400 block mb-1">诊断</span>
+                    <span class="font-semibold text-gray-900" id="stat-diagnoses">--</span>
+                </div>
                 <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">关键词</span>
                     <span class="font-semibold text-gray-900" id="stat-keywords">--</span>
@@ -206,6 +211,19 @@ $page_title = '品牌入驻自动化';
                 <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">已发布</span>
                     <span class="font-semibold text-gray-900" id="stat-published">--</span>
+                </div>
+            </div>
+            <div id="diagnosis-detail" class="mt-3 hidden rounded-lg border border-violet-100 bg-violet-50 p-3 text-xs">
+                <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <span class="text-violet-500 block mb-1">雷达诊断结果</span>
+                        <span class="font-semibold text-gray-900" id="diagnosis-summary">--</span>
+                        <span class="ml-2 text-gray-500" id="diagnosis-extra"></span>
+                    </div>
+                    <a id="diagnosis-link" href="#" class="inline-flex items-center gap-1 text-violet-700 font-medium hover:text-violet-900">
+                        查看诊断报告
+                        <i data-lucide="arrow-right" class="h-3 w-3"></i>
+                    </a>
                 </div>
             </div>
             <div class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
@@ -338,9 +356,10 @@ $page_title = '品牌入驻自动化';
 $additional_js = <<<'JS'
 <script>
 // ── 状态管理 ──────────────────────────────────────────────────────────────────
-const STEP_IDS = ['collect','keywords','titles','knowledge','customer','task','generate','distribute','monitor'];
+const STEP_IDS = ['collect','diagnosis','keywords','titles','knowledge','customer','task','generate','distribute','monitor'];
 const STEP_META = {
     collect:    { name: '搜集品牌资料',  icon: 'search' },
+    diagnosis:  { name: '生成雷达诊断',  icon: 'radar' },
     keywords:   { name: '生成关键词库',  icon: 'tags' },
     titles:     { name: '生成标题库',    icon: 'heading' },
     knowledge:  { name: '生成知识库',    icon: 'book-open' },
@@ -356,6 +375,7 @@ let workflowState = {
     currentStep: null,
     steps: {},           // { stepId: { status, startedAt, finishedAt, elapsed, output } }
     brandInfo: null,
+    diagnosis: null,
     runtime: null,
     startTime: null,
     logs: [],
@@ -549,9 +569,12 @@ function applyWorkflowPayload(data, logChanges) {
     showBrandInfoCard();
     if (data.stats) {
         updateBrandStats(data.stats);
+        updateLiveStepSummaries();
     }
+    updateDiagnosisDetail(data.diagnosis || null);
     if (data.runtime) {
         updateRuntimeStats(data.runtime, logChanges);
+        updateLiveStepSummaries();
     }
 }
 
@@ -587,6 +610,7 @@ function updateStepUI(stepId, stepData) {
     const iconWrap = document.getElementById('step-icon-' + stepId);
     const statusEl = document.getElementById('step-status-' + stepId);
     const metaEl = document.getElementById('step-meta-' + stepId);
+    const outputEl = document.getElementById('step-output-' + stepId);
 
     if (!card) return;
 
@@ -633,7 +657,25 @@ function updateStepUI(stepId, stepData) {
         metaEl.querySelector('span:first-child').innerHTML = '<i data-lucide="clock" class="h-3 w-3"></i> ' + sec + 's';
     }
 
+    if (outputEl) {
+        outputEl.textContent = renderStepOutputSummary(stepId, stepData.output);
+    }
+
     if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function renderStepOutputSummary(stepId, output) {
+    if (!output || typeof output !== 'object') return '';
+    if (stepId === 'diagnosis') {
+        const score = output.overall_score !== undefined && output.overall_score !== null ? `评分 ${output.overall_score}` : '';
+        const rate = output.predicted_hit_rate || '';
+        return [score, rate].filter(Boolean).join(' · ');
+    }
+    if (stepId === 'keywords' && output.keyword_count !== undefined) return `${output.keyword_count} 个`;
+    if (stepId === 'titles' && output.title_count !== undefined) return `${output.title_count} 个`;
+    if (stepId === 'generate' && output.article_count !== undefined) return `${output.article_count} 篇`;
+    if (stepId === 'monitor' && output.keyword_count !== undefined) return `${output.keyword_count} 词`;
+    return '';
 }
 
 function updatePipelineProgress() {
@@ -677,10 +719,63 @@ function showBrandInfoCard() {
 }
 
 function updateBrandStats(stats) {
+    workflowState.stats = stats;
+    if (stats.diagnoses !== undefined) document.getElementById('stat-diagnoses').textContent = stats.diagnoses;
     if (stats.keywords !== undefined) document.getElementById('stat-keywords').textContent = stats.keywords;
     if (stats.titles !== undefined) document.getElementById('stat-titles').textContent = stats.titles;
     if (stats.articles !== undefined) document.getElementById('stat-articles').textContent = stats.articles;
     if (stats.published !== undefined) document.getElementById('stat-published').textContent = stats.published;
+}
+
+function updateLiveStepSummaries() {
+    const stats = workflowState.stats || {};
+    const runtime = workflowState.runtime || {};
+    const set = (id, text) => {
+        const el = document.getElementById('step-output-' + id);
+        if (el) el.textContent = text || '';
+    };
+
+    if (stats.articles !== undefined) {
+        const queue = (runtime.generation_pending || 0) + (runtime.generation_running || 0);
+        const failed = runtime.generation_failed || 0;
+        set('generate', `已生成 ${stats.articles || 0} 篇` + (queue || failed ? ` · 队列 ${queue} · 失败 ${failed}` : ''));
+    }
+
+    const autoQueue = (runtime.distribution_queued || 0) + (runtime.distribution_running || 0);
+    const manual = runtime.distribution_manual_queued || 0;
+    const success = runtime.distribution_success || 0;
+    const failed = runtime.distribution_failed || 0;
+    if (autoQueue || manual || success || failed) {
+        set('distribute', `自动待发 ${autoQueue} · 手动 ${manual} · 成功 ${success} · 失败 ${failed}`);
+    }
+
+    if (runtime.monitor_keywords !== undefined) {
+        set('monitor', `关键词 ${runtime.monitor_keywords || 0} · 记录 ${runtime.monitor_records || 0} · 提及 ${runtime.monitor_mentions || 0}`);
+    }
+}
+
+function updateDiagnosisDetail(diagnosis) {
+    workflowState.diagnosis = diagnosis || null;
+    const box = document.getElementById('diagnosis-detail');
+    if (!box) return;
+
+    if (!diagnosis || !diagnosis.id) {
+        box.classList.add('hidden');
+        return;
+    }
+
+    const score = diagnosis.overall_score !== null && diagnosis.overall_score !== undefined
+        ? Number(diagnosis.overall_score).toFixed(1).replace(/\.0$/, '')
+        : '--';
+    const hitRate = diagnosis.predicted_hit_rate || '命中率待估';
+    const weakest = diagnosis.weakest_signal ? `短板：${diagnosis.weakest_signal}` : '';
+    const actions = diagnosis.action_count !== undefined ? `优化动作 ${diagnosis.action_count} 个` : '';
+
+    document.getElementById('diagnosis-summary').textContent = `评分 ${score} / 100 · ${hitRate}`;
+    document.getElementById('diagnosis-extra').textContent = [weakest, actions].filter(Boolean).join(' · ');
+    document.getElementById('diagnosis-link').href = window.adminUrl('geo-diagnosis.php?id=' + encodeURIComponent(diagnosis.id));
+    box.classList.remove('hidden');
+    if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 let lastRuntimeSignature = '';

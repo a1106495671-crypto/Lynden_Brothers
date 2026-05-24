@@ -1,7 +1,7 @@
 <?php
 /**
  * 品牌入驻自动化 - 后台 Worker
- * 顺序执行 automation_workflow_steps 中的 9 个步骤
+ * 顺序执行 automation_workflow_steps 中的 10 个步骤
  *
  * 用法:
  *   php bin/automation_worker.php <workflow_id>   # 执行指定工作流
@@ -23,6 +23,7 @@ require_once $projectRoot . '/includes/customer_service.php';
 require_once $projectRoot . '/includes/task_lifecycle_service.php';
 require_once $projectRoot . '/includes/article_service.php';
 require_once $projectRoot . '/includes/monitor_api_service.php';
+require_once $projectRoot . '/includes/geo_diagnosis_service.php';
 
 set_time_limit(0);
 ini_set('memory_limit', '512M');
@@ -189,6 +190,55 @@ function wf_get_latest_job_error(PDO $db, int $taskId): string {
     return $message !== '' ? "{$status}: {$message}" : "最近队列状态：{$status}";
 }
 
+function wf_get_step_output(PDO $db, string $workflowId, string $stepId): array {
+    $stmt = $db->prepare("
+        SELECT output_data
+        FROM automation_workflow_steps
+        WHERE workflow_id = ? AND step_id = ?
+        LIMIT 1
+    ");
+    $stmt->execute([$workflowId, $stepId]);
+    $raw = (string) ($stmt->fetchColumn() ?: '');
+    if ($raw === '') {
+        return [];
+    }
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+function wf_map_diagnosis_industry(string $industry): string {
+    $industry = trim($industry);
+    $available = geo_diagnosis_industries();
+    if (in_array($industry, $available, true)) {
+        return $industry;
+    }
+
+    $map = [
+        'geo' => 'GEO服务商',
+        'ai营销' => 'AI营销服务',
+        '营销' => 'AI营销服务',
+        'saas' => 'B2B SaaS',
+        '企业服务' => '企业服务',
+        'b2b' => 'B2B专业服务',
+        '教育' => '教育',
+        '教培' => '教育',
+        '医疗' => '医疗',
+        '健康' => '医疗',
+        '金融' => '金融',
+        '本地生活' => '本地生活',
+        '消费' => '消费品',
+    ];
+
+    $lower = mb_strtolower($industry, 'UTF-8');
+    foreach ($map as $needle => $mapped) {
+        if (mb_strpos($lower, mb_strtolower($needle, 'UTF-8')) !== false) {
+            return $mapped;
+        }
+    }
+
+    return 'B2B SaaS';
+}
+
 function wf_seed_geo_brand_facts(PDO $db, string $customerId, array $wf): int {
     if ($customerId === '') {
         return 0;
@@ -314,6 +364,43 @@ function step_keywords(PDO $db, array $wf): array {
             'model_used' => wf_last_ai_model(),
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['keyword_library_id' => $libraryId]
+    ];
+}
+
+/**
+ * Step 2: 生成雷达诊断
+ */
+function step_diagnosis(PDO $db, array $wf): array {
+    $collected = wf_get_step_output($db, (string) $wf['workflow_id'], 'collect');
+    $collectedInfo = trim((string) ($collected['collected_info'] ?? ''));
+
+    $evidenceParts = array_filter([
+        '品牌资料：' . $collectedInfo,
+        '核心服务：' . trim((string) ($wf['services'] ?? '')),
+        '主要竞品：' . trim((string) ($wf['competitors'] ?? '')),
+        '品牌定位：' . trim((string) ($wf['positioning'] ?? '')),
+    ], static fn ($part) => trim(str_replace(['品牌资料：', '核心服务：', '主要竞品：', '品牌定位：'], '', $part)) !== '');
+
+    $diagnosisId = geo_diagnosis_create($db, [
+        'brand_name' => (string) ($wf['brand_name'] ?? ''),
+        'domain' => (string) ($wf['website'] ?? ''),
+        'industry' => wf_map_diagnosis_industry((string) ($wf['industry'] ?? '')),
+        'email' => '',
+        'evidence' => implode("\n", $evidenceParts),
+    ]);
+
+    wf_update_workflow($db, (string) $wf['workflow_id'], ['diagnosis_id' => $diagnosisId]);
+
+    $report = geo_diagnosis_latest($db, $diagnosisId);
+    return [
+        'success' => true,
+        'output' => json_encode([
+            'diagnosis_id' => $diagnosisId,
+            'overall_score' => $report ? round((float) ($report['overall_score'] ?? 0), 1) : null,
+            'industry' => $report['industry'] ?? wf_map_diagnosis_industry((string) ($wf['industry'] ?? '')),
+            'predicted_hit_rate' => $report['predicted_hit_rate'] ?? '',
+        ], JSON_UNESCAPED_UNICODE),
+        'data' => ['diagnosis_id' => $diagnosisId],
     ];
 }
 
@@ -760,6 +847,7 @@ function wf_start_geo_monitor_run_async(string $customerId): bool {
 function wf_execute_step(PDO $db, array $wf, string $stepId): array {
     switch ($stepId) {
         case 'collect':    return step_collect($db, $wf);
+        case 'diagnosis':  return step_diagnosis($db, $wf);
         case 'keywords':   return step_keywords($db, $wf);
         case 'titles':     return step_titles($db, $wf);
         case 'knowledge':  return step_knowledge($db, $wf);

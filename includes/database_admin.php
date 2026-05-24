@@ -517,10 +517,10 @@ class DatabaseAdmin {
 
             $promptStmt = $this->pdo->prepare("INSERT INTO prompts (name, type, content, variables) VALUES (?, ?, ?, ?)");
             foreach ([
-                ['默认标题生成', 'title', "请根据关键词\"{{keyword}}\"生成5个吸引人的文章标题。要求：\n1. 标题要有吸引力和点击欲望\n2. 包含关键词但不生硬\n3. 字数控制在15-30字之间\n4. 适合SEO优化\n5. 符合中文表达习惯\n\n请直接输出标题列表，每行一个标题。", 'keyword'],
-                ['默认内容生成', 'content', "请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇详细的文章。\n\n要求：\n1. 文章结构清晰，包含引言、正文和结论\n2. 内容丰富，字数在800-1500字之间\n3. 自然融入关键词，避免堆砌\n4. 使用Markdown格式，包含适当的标题层级\n5. 内容要有价值，对读者有帮助\n\n{{#if Knowledge}}参考知识：\n{{Knowledge}}{{/if}}\n\n请开始写作：", 'title,keyword,Knowledge'],
-                ['默认关键词提取', 'keyword', "请从以下文章内容中提取5-10个最重要的关键词，用逗号分隔：\n\n{{content}}", 'content'],
-                ['默认描述生成', 'description', "请为以下文章内容生成一个简洁的描述，长度控制在120-160字符以内，适合用作SEO描述：\n\n{{content}}", 'content'],
+                ['默认标题生成', 'title', "请根据关键词\"{{keyword}}\"生成8个GEO内容标题。\n\n要求：\n1. 覆盖定义、标准、流程、成本、风险、对比、案例、FAQ等不同意图\n2. 标题要像用户会问AI助手的问题，不要标题党\n3. 每个标题必须包含关键词或自然变体\n4. 字数控制在15-35字\n\n每行一个标题，不要编号。", 'keyword'],
+                ['默认内容生成', 'content', "你是一名中文GEO内容编辑。请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇证据型知识文章。\n\n{{#if Knowledge}}## 可用品牌/知识资料\n{{Knowledge}}\n{{/if}}\n\n要求：\n1. 开头100字内直接回答问题，不写泛泛引言\n2. 必须包含判断标准、事实与证据、适合与不适合、FAQ、下一步验证清单\n3. 没有证据的数据不能编造，必须标注当前资料未提供\n4. 禁止最好、第一、领先、顶级、保证效果等无法证明的营销词\n5. 使用Markdown格式，字数1200-1800字\n\n请直接输出完整文章，不要额外解释。", 'title,keyword,Knowledge'],
+                ['默认关键词提取', 'keyword', "请从以下文章中提取5-8个GEO监测关键词，用逗号分隔。\n\n{{content}}\n\n要求：优先提取用户会问AI助手的问题式关键词，覆盖品牌词、品类词、场景词、决策词；不要提取过宽泛的词。", 'content'],
+                ['默认描述生成', 'description', "请为以下文章生成一段适合GEO和搜索摘要的描述。\n\n{{content}}\n\n要求：120-160字；说明文章回答的问题、适用人群和可验证价值；不要使用夸张营销词。", 'content'],
             ] as $prompt) {
                 $promptStmt->execute($prompt);
             }
@@ -947,6 +947,7 @@ class DatabaseAdmin {
                 status          VARCHAR(20)  NOT NULL DEFAULT 'pending',
                 current_step    VARCHAR(40)  DEFAULT '',
                 customer_id     VARCHAR(80)  DEFAULT '',
+                diagnosis_id    VARCHAR(64)  DEFAULT '',
                 keyword_library_id BIGINT    DEFAULT NULL,
                 title_library_id   BIGINT    DEFAULT NULL,
                 knowledge_base_id  BIGINT    DEFAULT NULL,
@@ -957,6 +958,7 @@ class DatabaseAdmin {
                 completed_at    TIMESTAMP    DEFAULT NULL
             )
         ");
+        $this->pdo->exec("ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS diagnosis_id VARCHAR(64) DEFAULT ''");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_workflows_status ON automation_workflows(status)");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_workflows_wf_id ON automation_workflows(workflow_id)");
 
@@ -1057,8 +1059,8 @@ class DatabaseAdmin {
             $stmt = $this->pdo->prepare("INSERT INTO prompts (name, type, content, variables) VALUES (?, 'content', ?, ?)");
             $stmt->execute([
                 '默认内容生成',
-                "请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇详细的文章。",
-                'title,keyword',
+                "你是一名中文GEO内容编辑。请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇证据型知识文章。必须包含直接答案、判断标准、事实与证据、适合与不适合、FAQ、下一步验证清单；没有证据的数据不能编造。{{#if Knowledge}}\n\n参考知识：{{Knowledge}}{{/if}}\n\n请直接输出完整文章。",
+                'title,keyword,Knowledge',
             ]);
         }
 
