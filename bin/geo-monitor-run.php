@@ -721,10 +721,10 @@ function gm_generate_and_push_draft(PDO $db, array $alert, string $webhookUrl): 
     $masterSentence = $facts['master_sentence'] ?? '';
     $coreServices = $facts['core_services'] ?? '';
 
-    // 用 DeepSeek 生成文章草稿
-    $apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-    if ($apiKey === '') {
-        gm_log("[Step6] DeepSeek API Key 未配置，跳过草稿生成");
+    // 用激活模型生成文章草稿
+    $aiCfg = get_active_ai_config();
+    if (empty($aiCfg['api_key'])) {
+        gm_log("[Step6] AI API Key 未配置，跳过草稿生成");
         return;
     }
 
@@ -747,13 +747,17 @@ function gm_generate_and_push_draft(PDO $db, array $alert, string $webhookUrl): 
 PROMPT;
 
     $payload = json_encode([
-        'model'    => 'deepseek-chat',
+        'model'    => $aiCfg['model_id'],
         'messages' => [['role' => 'user', 'content' => $prompt]],
         'max_tokens'  => 2000,
         'temperature' => 0.7,
     ], JSON_UNESCAPED_UNICODE);
 
-    $ch = curl_init('https://api.deepseek.com/chat/completions');
+    $aiApiUrl = rtrim($aiCfg['api_url'], '/');
+    if (!str_ends_with($aiApiUrl, '/chat/completions')) {
+        $aiApiUrl .= '/chat/completions';
+    }
+    $ch = curl_init($aiApiUrl);
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $payload,
@@ -761,7 +765,7 @@ PROMPT;
         CURLOPT_TIMEOUT        => 60,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey,
+            'Authorization: Bearer ' . $aiCfg['api_key'],
         ],
     ]);
     $raw  = curl_exec($ch);
@@ -769,7 +773,7 @@ PROMPT;
     curl_close($ch);
 
     if ($code !== 200) {
-        gm_log("[Step6] DeepSeek 生成失败，HTTP {$code}");
+        gm_log("[Step6] AI 生成失败，HTTP {$code}");
         return;
     }
 

@@ -36,9 +36,9 @@ $stmtFs = $db->prepare("SELECT setting_value FROM site_settings WHERE setting_ke
 $stmtFs->execute();
 $webhookUrl = trim((string)($stmtFs->fetchColumn() ?: ''));
 
-$apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-if ($apiKey === '') {
-    sc_log('DeepSeek API Key 未配置，退出');
+$aiCfg = get_active_ai_config();
+if (empty($aiCfg['api_key'])) {
+    sc_log('AI API Key 未配置，退出');
     exit(1);
 }
 
@@ -151,13 +151,17 @@ foreach ($customers as $customer) {
 PROMPT;
 
     $payload = json_encode([
-        'model'       => 'deepseek-chat',
+        'model'       => $aiCfg['model_id'],
         'messages'    => [['role' => 'user', 'content' => $prompt]],
         'max_tokens'  => 3000,
         'temperature' => 0.6,
     ], JSON_UNESCAPED_UNICODE);
 
-    $ch = curl_init('https://api.deepseek.com/chat/completions');
+    $aiApiUrl = rtrim($aiCfg['api_url'], '/');
+    if (!str_ends_with($aiApiUrl, '/chat/completions')) {
+        $aiApiUrl .= '/chat/completions';
+    }
+    $ch = curl_init($aiApiUrl);
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $payload,
@@ -165,7 +169,7 @@ PROMPT;
         CURLOPT_TIMEOUT        => 60,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey,
+            'Authorization: Bearer ' . $aiCfg['api_key'],
         ],
     ]);
     $raw  = curl_exec($ch);
@@ -173,7 +177,7 @@ PROMPT;
     curl_close($ch);
 
     if ($code !== 200) {
-        sc_log("{$cname} DeepSeek生成失败，HTTP {$code}");
+        sc_log("{$cname} AI生成失败，HTTP {$code}");
         continue;
     }
 

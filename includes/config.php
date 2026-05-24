@@ -203,6 +203,75 @@ function decrypt_ai_api_key($stored_api_key) {
     return decrypt_sensitive_value($stored_api_key);
 }
 
+/**
+ * 获取当前激活的 AI 模型配置（从 ai_models 表读取优先级最高的活跃模型）
+ * 返回 ['api_key' => ..., 'api_url' => ..., 'model_id' => ...] 或空数组
+ */
+function get_active_ai_config(): array {
+    global $db;
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    try {
+        $stmt = $db->query(
+            "SELECT api_key, api_url, model_id FROM ai_models
+             WHERE status='active' AND (model_type='chat' OR model_type IS NULL OR model_type='')
+             ORDER BY priority ASC NULLS LAST, id ASC LIMIT 1"
+        );
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row) {
+            $apiKey = trim(function_exists('decrypt_ai_api_key') ? decrypt_ai_api_key((string)($row['api_key'] ?? '')) : ($row['api_key'] ?? ''));
+            $apiUrl = rtrim(trim($row['api_url'] ?? ''), '/');
+            $modelId = trim($row['model_id'] ?? '');
+            if ($apiKey && $modelId) {
+                $cache = ['api_key' => $apiKey, 'api_url' => $apiUrl, 'model_id' => $modelId];
+                return $cache;
+            }
+        }
+    } catch (Throwable $e) {}
+    $cache = [];
+    return $cache;
+}
+
+/**
+ * 统一 AI 调用函数（读取当前激活模型，自动 fallback）
+ */
+function geo_call_ai(string $prompt, int $maxTokens = 3000, float $temperature = 0.7): array {
+    $cfg = get_active_ai_config();
+    if (empty($cfg['api_key'])) {
+        return ['content' => '', 'model_used' => 'none', 'error' => 'no_api_key'];
+    }
+    $apiUrl = $cfg['api_url'];
+    if (!str_ends_with($apiUrl, '/chat/completions') && !str_ends_with($apiUrl, '/completions')) {
+        $apiUrl .= '/chat/completions';
+    }
+    $payload = json_encode([
+        'model'       => $cfg['model_id'],
+        'messages'    => [['role' => 'user', 'content' => $prompt]],
+        'max_tokens'  => $maxTokens,
+        'temperature' => $temperature,
+    ], JSON_UNESCAPED_UNICODE);
+    $ch = curl_init($apiUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $payload,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_HTTPHEADER     => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $cfg['api_key'],
+        ],
+    ]);
+    $raw  = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($code === 200) {
+        $data = json_decode($raw, true);
+        $content = $data['choices'][0]['message']['content'] ?? '';
+        return ['content' => $content, 'model_used' => $cfg['model_id'], 'error' => null];
+    }
+    return ['content' => '', 'model_used' => 'none', 'error' => "HTTP {$code}"];
+}
+
 function apply_curl_network_defaults($ch) {
     if (!is_resource($ch) && !($ch instanceof CurlHandle)) {
         return;

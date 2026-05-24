@@ -139,35 +139,10 @@ if ($selectedCid !== '' && $action === 'generate') {
 只输出表格和执行建议，不要其他前言。
 PROMPT;
 
-    // 7. 调用 DeepSeek
-    $apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-    if ($apiKey !== '') {
-        $payload = json_encode([
-            'model'       => 'deepseek-chat',
-            'messages'    => [['role' => 'user', 'content' => $prompt]],
-            'max_tokens'  => 3000,
-            'temperature' => 0.6,
-        ], JSON_UNESCAPED_UNICODE);
-
-        $ch = curl_init('https://api.deepseek.com/chat/completions');
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $payload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 60,
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $apiKey,
-            ],
-        ]);
-        $raw  = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($code === 200) {
-            $data       = json_decode($raw, true);
-            $strategyMd = $data['choices'][0]['message']['content'] ?? '';
-        }
+    // 7. 调用AI生成策略
+    $aiResult = geo_call_ai($prompt, 3000, 0.6);
+    if (empty($aiResult['error'])) {
+        $strategyMd = $aiResult['content'];
     }
 
     $strategy = compact('brandName', 'weakSignals', 'weakKeywords', 'alerts', 'strategyMd');

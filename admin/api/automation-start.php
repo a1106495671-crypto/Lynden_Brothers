@@ -94,6 +94,18 @@ try {
         WHERE workflow_id = ? AND step_id = 'collect'
     ")->execute([$workflowId]);
 
+    // 启动后台 worker 执行工作流
+    $workerScript = dirname(__DIR__, 2) . '/bin/automation_worker.php';
+    $logFile = dirname(__DIR__, 2) . '/bin/logs/automation_' . date('Y-m-d') . '.log';
+    $logDir = dirname($logFile);
+    if (!is_dir($logDir)) {
+        @mkdir($logDir, 0755, true);
+    }
+
+    $cmd = 'php ' . escapeshellarg($workerScript) . ' ' . escapeshellarg($workflowId)
+         . ' >> ' . escapeshellarg($logFile) . ' 2>&1 &';
+    exec($cmd);
+
     echo json_encode([
         'success'     => true,
         'workflow_id' => $workflowId,

@@ -217,32 +217,12 @@ P2（季度规划）：3-4条
 只输出报告正文，不要前言。
 PROMPT;
 
-    $apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-    $payload = json_encode([
-        'model' => 'deepseek-chat',
-        'messages' => [['role' => 'user', 'content' => $prompt]],
-        'max_tokens' => 4000,
-        'temperature' => 0.4,
-    ], JSON_UNESCAPED_UNICODE);
-
-    $ch = curl_init('https://api.deepseek.com/chat/completions');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $payload,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 120,
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json', 'Authorization: Bearer '.$apiKey],
-    ]);
-    $raw  = curl_exec($ch);
-    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($code === 200) {
-        $data = json_decode($raw, true);
-        $reportMd = $data['choices'][0]['message']['content'] ?? '';
+    $aiResult = geo_call_ai($prompt, 4000, 0.4);
+    if (empty($aiResult['error'])) {
+        $reportMd = $aiResult['content'];
         $report = compact('brandName','platformStats','kwStats','compOverall','totalRecords','signals','alerts','reportMd','competitors');
     } else {
-        $genError = "DeepSeek API 失败 HTTP {$code}";
+        $genError = "AI API 失败: {$aiResult['error']}";
     }
 }
 

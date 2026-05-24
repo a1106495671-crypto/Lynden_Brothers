@@ -139,13 +139,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 score是可引用性评分1-5，5最高。
 PROMPT;
 
-        $apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-        $payload = json_encode(['model' => 'deepseek-chat', 'messages' => [['role' => 'user', 'content' => $prompt]], 'max_tokens' => 1500, 'temperature' => 0.7], JSON_UNESCAPED_UNICODE);
-        $ch = curl_init('https://api.deepseek.com/chat/completions');
-        curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $payload, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 60, CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $apiKey]]);
-        $raw = curl_exec($ch); curl_close($ch);
-        $data = json_decode($raw, true);
-        $content2 = $data['choices'][0]['message']['content'] ?? '';
+        $aiResult = geo_call_ai($prompt, 1500, 0.7);
+        $content2 = $aiResult['content'];
         if (preg_match('/\{.*\}/s', $content2, $m)) {
             $result = json_decode($m[0], true);
             echo json_encode(['ok' => true, 'suggestions' => $result['suggestions'] ?? []]);

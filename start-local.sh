@@ -49,4 +49,15 @@ if [ -z "$(PGPASSWORD="${DB_PASSWORD_VALUE}" "${POSTGRES_BIN_DIR}/psql" -h "${DB
     PGPASSWORD="${DB_PASSWORD_VALUE}" "${POSTGRES_BIN_DIR}/createdb" -h "${DB_HOST_VALUE}" -p "${DB_PORT_VALUE}" -U "${DB_USER_VALUE}" "${DB_NAME_VALUE}"
 fi
 
+# 启动后台文章生成 worker
+mkdir -p "${PROJECT_DIR}/bin/logs"
+WORKER_PID_FILE="${PROJECT_DIR}/.local/worker.pid"
+if [ -f "${WORKER_PID_FILE}" ] && kill -0 "$(cat "${WORKER_PID_FILE}")" 2>/dev/null; then
+    echo "worker.php 已在运行 (PID: $(cat "${WORKER_PID_FILE}"))"
+else
+    nohup php "${PROJECT_DIR}/bin/worker.php" >> "${PROJECT_DIR}/bin/logs/worker.log" 2>&1 &
+    echo $! > "${WORKER_PID_FILE}"
+    echo "worker.php 已启动 (PID: $!)"
+fi
+
 exec "${FRANKENPHP_BIN}" run --config "${CADDYFILE_PATH}"

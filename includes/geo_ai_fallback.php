@@ -25,7 +25,7 @@ function geo_call_ai_with_fallback(string $prompt, int $maxTokens = 3000, float 
     foreach ($models as $m) {
         $apiKey  = trim(function_exists('decrypt_ai_api_key') ? decrypt_ai_api_key((string)($m['api_key'] ?? '')) : ($m['api_key'] ?? ''));
         $modelId = trim($m['model_id'] ?? '');
-        $apiUrl  = rtrim(trim($m['api_url'] ?? 'https://api.deepseek.com'), '/');
+        $apiUrl  = rtrim(trim($m['api_url'] ?? ''), '/');
         if (!$apiKey || !$modelId) continue;
         if (!str_ends_with($apiUrl, '/chat/completions') && !str_ends_with($apiUrl, '/completions')) {
             $apiUrl .= '/chat/completions';
@@ -67,27 +67,26 @@ function geo_call_ai_with_fallback(string $prompt, int $maxTokens = 3000, float 
         }
     }
 
-    // Final fallback: DeepSeek via site_settings
-    return geo_ai_deepseek_fallback($prompt, $maxTokens, $temperature);
+    // Final fallback: 从 ai_models 表读取激活模型
+    return geo_ai_db_fallback($prompt, $maxTokens, $temperature);
 }
 
-function geo_ai_deepseek_fallback(string $prompt, int $maxTokens, float $temperature): array {
-    $apiKey = '';
-    try {
-        if (function_exists('citation_simulator_get_provider_key')) {
-            $apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-        }
-    } catch (Throwable $e) {}
-    if (!$apiKey) {
+function geo_ai_db_fallback(string $prompt, int $maxTokens, float $temperature): array {
+    $cfg = get_active_ai_config();
+    if (empty($cfg['api_key'])) {
         return ['content' => '', 'model_used' => 'none', 'error' => 'no_api_key'];
     }
+    $apiUrl = $cfg['api_url'];
+    if (!str_ends_with($apiUrl, '/chat/completions') && !str_ends_with($apiUrl, '/completions')) {
+        $apiUrl .= '/chat/completions';
+    }
     $payload = json_encode([
-        'model'       => 'deepseek-chat',
+        'model'       => $cfg['model_id'],
         'messages'    => [['role' => 'user', 'content' => $prompt]],
         'max_tokens'  => $maxTokens,
         'temperature' => $temperature,
     ], JSON_UNESCAPED_UNICODE);
-    $ch = curl_init('https://api.deepseek.com/chat/completions');
+    $ch = curl_init($apiUrl);
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $payload,
@@ -95,7 +94,7 @@ function geo_ai_deepseek_fallback(string $prompt, int $maxTokens, float $tempera
         CURLOPT_TIMEOUT        => 90,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey,
+            'Authorization: Bearer ' . $cfg['api_key'],
         ],
     ]);
     $raw  = curl_exec($ch);
@@ -104,7 +103,7 @@ function geo_ai_deepseek_fallback(string $prompt, int $maxTokens, float $tempera
     if ($code === 200) {
         $data    = json_decode($raw, true);
         $content = $data['choices'][0]['message']['content'] ?? '';
-        return ['content' => $content, 'model_used' => 'DeepSeek(fallback)', 'error' => null];
+        return ['content' => $content, 'model_used' => $cfg['model_id'], 'error' => null];
     }
     return ['content' => '', 'model_used' => 'none', 'error' => "HTTP {$code}"];
 }

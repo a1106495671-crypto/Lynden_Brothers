@@ -1,27 +1,17 @@
 <?php
 
 // AI_INSIGHTS_PATCHED
-function geo_weekly_ai_insight(array $metricText, string $apiKey): string {
-    if (!$apiKey) return '';
+function geo_weekly_ai_insight(array $metricText, string $apiKey = ''): string {
+    $cfg = get_active_ai_config();
+    if (empty($cfg['api_key'])) return '';
     $prompt = "你是GEO顾问，请根据以下客户本周数据，用中文写出：\n1. 本周最重要的1-2个发现（30字内每条）\n2. 下周优先行动建议（3条，每条20字内，以「・」开头）\n\n数据摘要：\n" . implode("\n", $metricText) . "\n\n直接输出，不要多余的说明。";
-    $payload = json_encode(['model'=>'deepseek-chat','messages'=>[['role'=>'user','content'=>$prompt]],'max_tokens'=>300,'temperature'=>0.5]);
-    $ch = curl_init('https://api.deepseek.com/v1/chat/completions');
-    
-    // Build metric summary for AI
-    $metricLines = [];
-    if (!empty($thisWeekRate)) $metricLines[] = '平均提及率：' . $thisWeekRate . '% (上周:' . ($lastWeekRate ?? '无') . '%)';
-    if (!empty($worstKws)) {
-        foreach ($worstKws as $kw) $metricLines[] = '低提及词「' . $kw['query_text'] . '」' . $kw['rate'] . '%';
+    $payload = json_encode(['model'=>$cfg['model_id'],'messages'=>[['role'=>'user','content'=>$prompt]],'max_tokens'=>300,'temperature'=>0.5]);
+    $apiUrl = rtrim($cfg['api_url'], '/');
+    if (!str_ends_with($apiUrl, '/chat/completions')) {
+        $apiUrl .= '/chat/completions';
     }
-    if (!empty($highAlerts)) $metricLines[] = '高级告警：' . $highAlerts . '条';
-    if (!empty($articlesThisWeek)) $metricLines[] = '本周发文：' . $articlesThisWeek . '篇';
-    $aiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-    $aiInsight = (!empty($metricLines) && $aiKey) ? geo_weekly_ai_insight($metricLines, $aiKey) : '';
-    if ($aiInsight) {
-        $reportText .= "\n\n🤖 AI洞察：\n" . $aiInsight;
-    }
-
-    curl_setopt_array($ch, [CURLOPT_POST=>true, CURLOPT_POSTFIELDS=>$payload, CURLOPT_RETURNTRANSFER=>true, CURLOPT_TIMEOUT=>20, CURLOPT_HTTPHEADER=>['Content-Type: application/json','Authorization: Bearer '.$apiKey]]);
+    $ch = curl_init($apiUrl);
+    curl_setopt_array($ch, [CURLOPT_POST=>true, CURLOPT_POSTFIELDS=>$payload, CURLOPT_RETURNTRANSFER=>true, CURLOPT_TIMEOUT=>20, CURLOPT_HTTPHEADER=>['Content-Type: application/json','Authorization: Bearer '.$cfg['api_key']]]);
     $resp = curl_exec($ch);
     curl_close($ch);
     if (!$resp) return '';

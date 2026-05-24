@@ -67,15 +67,9 @@ P0=高频高优先，P1=中优先，P2=可选。
 gap_count=covered=false的问题总数，p0_count=priority=P0的问题总数。
 PROMPT;
 
-    $apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-    $payload = json_encode(['model' => 'deepseek-chat', 'messages' => [['role' => 'user', 'content' => $prompt]], 'max_tokens' => 4000, 'temperature' => 0.7], JSON_UNESCAPED_UNICODE);
-    $ch = curl_init('https://api.deepseek.com/chat/completions');
-    curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $payload, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 90, CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $apiKey]]);
-    $raw = curl_exec($ch); $code = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
-    if ($code !== 200) { echo json_encode(['error' => "API失败 HTTP {$code}"]); exit; }
-
-    $data = json_decode($raw, true);
-    $content = $data['choices'][0]['message']['content'] ?? '';
+    $aiResult = geo_call_ai($prompt, 4000, 0.7);
+    if (!empty($aiResult['error'])) { echo json_encode(['error' => "API失败: {$aiResult['error']}"]); exit; }
+    $content = $aiResult['content'];
     if (preg_match('/\{.*\}/s', $content, $m)) {
         $result = json_decode($m[0], true);
         if ($result) {
