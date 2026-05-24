@@ -81,6 +81,10 @@ $page_title = '品牌入驻自动化';
                 <i data-lucide="play" class="h-4 w-4"></i>
                 启动自动化
             </button>
+            <button id="btn-resume" onclick="resumeFromError()" class="hidden inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:shadow-xl hover:shadow-amber-500/30 active:scale-[0.98]">
+                <i data-lucide="rotate-ccw" class="h-4 w-4"></i>
+                继续处理
+            </button>
         </div>
     </div>
 </div>
@@ -602,6 +606,42 @@ async function resumeLatestWorkflow() {
     }
 }
 
+async function resumeFromError() {
+    if (!workflowState.workflowId || workflowState.status !== 'error') return;
+
+    const btn = document.getElementById('btn-resume');
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader-2" class="h-4 w-4 animate-spin"></i>恢复中...';
+    lucide.createIcons({ nodes: [btn] });
+
+    try {
+        const resp = await fetch(window.adminUrl('api/automation-resume.php'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workflow_id: workflowState.workflowId }),
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            addLog('info', '已从失败步骤继续执行');
+            workflowState.status = 'running';
+            updateGlobalStatus();
+            startElapsedTimer();
+            pollWorkflowStatus();
+        } else {
+            addLog('error', '恢复失败: ' + (data.error || '未知错误'));
+            showToast('恢复失败: ' + (data.error || '请稍后重试'), 'error');
+        }
+    } catch (err) {
+        addLog('error', '恢复请求失败: ' + err.message);
+        showToast('网络错误，请稍后重试', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="rotate-ccw" class="h-4 w-4"></i>继续处理';
+        lucide.createIcons({ nodes: [btn] });
+    }
+}
+
 // ── UI 更新 ───────────────────────────────────────────────────────────────────
 
 function updateStepUI(stepId, stepData) {
@@ -689,6 +729,7 @@ function updatePipelineProgress() {
 
 function updateGlobalStatus() {
     const el = document.getElementById('global-status');
+    const btnResume = document.getElementById('btn-resume');
     const backgroundActive = hasBackgroundRuntime();
     const statusMap = {
         idle:      { text: '就绪',   dot: 'bg-gray-400',   bg: 'bg-gray-100',   textColor: 'text-gray-600' },
@@ -700,6 +741,13 @@ function updateGlobalStatus() {
     const s = backgroundActive ? statusMap.background : (statusMap[workflowState.status] || statusMap.idle);
     el.className = `inline-flex items-center gap-1.5 rounded-full ${s.bg} px-3 py-1.5 text-xs font-medium ${s.textColor}`;
     el.innerHTML = `<span class="h-2 w-2 rounded-full ${s.dot}"></span>${s.text}`;
+
+    // 出错时显示「从失败处继续」按钮
+    if (workflowState.status === 'error' && workflowState.workflowId) {
+        btnResume.classList.remove('hidden');
+    } else {
+        btnResume.classList.add('hidden');
+    }
 }
 
 function hasBackgroundRuntime() {

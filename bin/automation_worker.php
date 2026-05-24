@@ -421,7 +421,7 @@ function step_titles(PDO $db, array $wf): array {
         'positioning'  => $wf['positioning'],
     ]);
 
-    $aiOutput = wf_call_ai($prompt, 3000, $wf['workflow_id'], '生成标题库');
+    $aiOutput = wf_call_ai($prompt, 4096, $wf['workflow_id'], '生成标题库');
     $titles = wf_parse_titles($aiOutput);
 
     if (count($titles) < 5) {
@@ -471,7 +471,7 @@ function step_knowledge(PDO $db, array $wf): array {
         'known_materials'=> '',
     ]);
 
-    $knowledgeContent = wf_call_ai($prompt, 4000, $wf['workflow_id'], '生成知识库');
+    $knowledgeContent = wf_call_ai($prompt, 6144, $wf['workflow_id'], '生成知识库');
 
     $materialService = new MaterialService($db);
     $kb = $materialService->createKnowledgeBase([
@@ -936,14 +936,49 @@ function wf_run(PDO $db, string $workflowId): void {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  Resume: 从失败步骤继续执行
+// ═══════════════════════════════════════════════════════════
+
+function wf_resume(PDO $db, string $workflowId): void {
+    $wf = wf_get_workflow($db, $workflowId);
+    if (!$wf) {
+        wf_log($workflowId, "工作流不存在");
+        return;
+    }
+    if ($wf['status'] !== 'error') {
+        wf_log($workflowId, "工作流状态为 {$wf['status']}，无需恢复");
+        return;
+    }
+
+    // 将所有 error 步骤重置为 pending
+    $stmt = $db->prepare(
+        "UPDATE automation_workflow_steps SET status = 'pending', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE workflow_id = ? AND status = 'error'"
+    );
+    $stmt->execute([$workflowId]);
+    $resetCount = $stmt->rowCount();
+    wf_log($workflowId, "已重置 {$resetCount} 个失败步骤为 pending");
+
+    // 更新工作流状态为 running
+    wf_update_workflow($db, $workflowId, ['status' => 'running', 'error_message' => null]);
+
+    // 复用 wf_run 从头遍历（已完成的会自动跳过）
+    wf_run($db, $workflowId);
+}
+
+// ═══════════════════════════════════════════════════════════
 //  主入口
 // ═══════════════════════════════════════════════════════════
 
 $targetWorkflowId = $argv[1] ?? null;
+$isResume = in_array('--resume', $argv);
 
 if ($targetWorkflowId) {
-    // 执行指定工作流
-    wf_run($db, $targetWorkflowId);
+    // 执行或恢复指定工作流
+    if ($isResume) {
+        wf_resume($db, $targetWorkflowId);
+    } else {
+        wf_run($db, $targetWorkflowId);
+    }
 } else {
     // 轮询所有 running 状态的工作流
     $stmt = $db->prepare("SELECT workflow_id FROM automation_workflows WHERE status = 'running' ORDER BY created_at ASC");

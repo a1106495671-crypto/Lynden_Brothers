@@ -49,7 +49,7 @@ function geo_call_ai_with_fallback(string $prompt, int $maxTokens = 3000, float 
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $payload,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 90,
+            CURLOPT_TIMEOUT        => 180,
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . $apiKey,
@@ -148,7 +148,7 @@ function geo_ai_db_fallback(string $prompt, int $maxTokens, float $temperature):
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $payload,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_TIMEOUT        => 180,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: application/json',
             'Authorization: Bearer ' . $cfg['api_key'],
