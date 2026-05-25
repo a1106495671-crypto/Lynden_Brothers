@@ -58,7 +58,7 @@ try {
     $steps = $stepStmt->fetchAll(PDO::FETCH_ASSOC);
 
     // 查询统计数据
-    $stats = ['diagnoses' => 0, 'keywords' => 0, 'titles' => 0, 'articles' => 0, 'published' => 0];
+    $stats = ['diagnoses' => 0, 'keywords' => 0, 'titles' => 0, 'knowledge_graph' => 0, 'intent_questions' => 0, 'articles' => 0, 'published' => 0];
     $diagnosis = null;
     $runtime = [
         'generation_pending' => 0,
@@ -230,6 +230,18 @@ try {
 
     $customerId = (string) ($workflow['customer_id'] ?? '');
     if ($customerId !== '') {
+        try {
+            $kg = $db->prepare("SELECT COUNT(*) FROM geo_brand_knowledge WHERE customer_id = ?");
+            $kg->execute([$customerId]);
+            $stats['knowledge_graph'] = (int) $kg->fetchColumn();
+        } catch (Exception $e) {}
+
+        try {
+            $iq = $db->prepare("SELECT COUNT(*) FROM geo_intent_questions WHERE customer_id = ?");
+            $iq->execute([$customerId]);
+            $stats['intent_questions'] = (int) $iq->fetchColumn();
+        } catch (Exception $e) {}
+
         try {
             $mk = $db->prepare("SELECT COUNT(*) FROM geo_monitor_keywords WHERE customer_id = ? AND enabled = TRUE");
             $mk->execute([$customerId]);

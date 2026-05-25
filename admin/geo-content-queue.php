@@ -41,6 +41,7 @@ $selectedCid = $_GET['customer'] ?? ($customers[0]['customer_id'] ?? '');
 
 // AJAX: generate one article
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'generate_one') {
+    set_time_limit(120);
     header('Content-Type: application/json; charset=utf-8');
     $qid = (int)($_POST['queue_id'] ?? 0);
     if (!$qid) { echo json_encode(['error' => 'invalid id']); exit; }

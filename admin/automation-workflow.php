@@ -44,6 +44,9 @@ $page_title = '品牌入驻自动化';
     .step-card:nth-child(7) { animation-delay: 0.3s; }
     .step-card:nth-child(8) { animation-delay: 0.35s; }
     .step-card:nth-child(9) { animation-delay: 0.4s; }
+    .step-card:nth-child(10) { animation-delay: 0.45s; }
+    .step-card:nth-child(11) { animation-delay: 0.5s; }
+    .step-card:nth-child(12) { animation-delay: 0.55s; }
     /* 日志滚动 */
     .log-scroll::-webkit-scrollbar { width: 6px; }
     .log-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -121,16 +124,18 @@ $page_title = '品牌入驻自动化';
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="steps-container">
             <?php
             $steps = [
-                ['id' => 'collect',     'no' => '01', 'name' => '搜集品牌资料',  'desc' => '搜索官网与媒体报道，整理品牌基本信息', 'icon' => 'search',           'color' => 'blue'],
-                ['id' => 'diagnosis',   'no' => '02', 'name' => '生成雷达诊断',  'desc' => '生成六维GEO权威性基线评分',          'icon' => 'radar',            'color' => 'violet'],
-                ['id' => 'keywords',    'no' => '03', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
-                ['id' => 'titles',      'no' => '04', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
-                ['id' => 'knowledge',   'no' => '05', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
-                ['id' => 'customer',    'no' => '06', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
-                ['id' => 'task',        'no' => '07', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
-                ['id' => 'generate',    'no' => '08', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
-                ['id' => 'distribute',  'no' => '09', 'name' => '启动媒体分发',  'desc' => '发布文章并加入媒体队列，后台持续分发',   'icon' => 'send',             'color' => 'emerald'],
-                ['id' => 'monitor',     'no' => '10', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
+                ['id' => 'collect',          'no' => '01', 'name' => '搜集品牌资料',  'desc' => '搜索官网与媒体报道，整理品牌基本信息', 'icon' => 'search',           'color' => 'blue'],
+                ['id' => 'diagnosis',        'no' => '02', 'name' => '生成雷达诊断',  'desc' => '生成六维GEO权威性基线评分',          'icon' => 'radar',            'color' => 'violet'],
+                ['id' => 'keywords',         'no' => '03', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
+                ['id' => 'titles',           'no' => '04', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
+                ['id' => 'knowledge',        'no' => '05', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
+                ['id' => 'customer',         'no' => '06', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
+                ['id' => 'knowledge_graph',  'no' => '07', 'name' => '生成知识图谱',  'desc' => '为五类结构化知识生成可引用的品牌事实条目', 'icon' => 'network',          'color' => 'fuchsia'],
+                ['id' => 'intent_mining',    'no' => '08', 'name' => '意图挖掘',      'desc' => '从7个维度挖掘用户真实问题，发现覆盖空白', 'icon' => 'crosshair',        'color' => 'rose'],
+                ['id' => 'task',             'no' => '09', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
+                ['id' => 'generate',         'no' => '10', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
+                ['id' => 'distribute',       'no' => '11', 'name' => '启动媒体分发',  'desc' => '发布文章并加入媒体队列，后台持续分发',   'icon' => 'send',             'color' => 'emerald'],
+                ['id' => 'monitor',          'no' => '12', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
             ];
 
             $color_map = [
@@ -142,6 +147,8 @@ $page_title = '品牌入驻自动化';
                 'cyan'    => ['bg' => 'bg-cyan-50',    'border' => 'border-cyan-200',    'icon' => 'bg-cyan-100 text-cyan-600',    'badge' => 'bg-cyan-600',    'ring' => 'ring-cyan-500/20'],
                 'teal'    => ['bg' => 'bg-teal-50',    'border' => 'border-teal-200',    'icon' => 'bg-teal-100 text-teal-600',    'badge' => 'bg-teal-600',    'ring' => 'ring-teal-500/20'],
                 'emerald' => ['bg' => 'bg-emerald-50', 'border' => 'border-emerald-200', 'icon' => 'bg-emerald-100 text-emerald-600','badge' => 'bg-emerald-600','ring' => 'ring-emerald-500/20'],
+                'fuchsia' => ['bg' => 'bg-fuchsia-50', 'border' => 'border-fuchsia-200', 'icon' => 'bg-fuchsia-100 text-fuchsia-600', 'badge' => 'bg-fuchsia-600', 'ring' => 'ring-fuchsia-500/20'],
+                'rose'    => ['bg' => 'bg-rose-50',    'border' => 'border-rose-200',    'icon' => 'bg-rose-100 text-rose-600',    'badge' => 'bg-rose-600',    'ring' => 'ring-rose-500/20'],
                 'green'   => ['bg' => 'bg-green-50',   'border' => 'border-green-200',   'icon' => 'bg-green-100 text-green-600',  'badge' => 'bg-green-600',  'ring' => 'ring-green-500/20'],
             ];
 
@@ -195,7 +202,7 @@ $page_title = '品牌入驻自动化';
                     <p class="text-xs text-gray-500" id="brand-industry">--</p>
                 </div>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+            <div class="grid grid-cols-4 md:grid-cols-7 gap-3 text-xs">
                 <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">诊断</span>
                     <span class="font-semibold text-gray-900" id="stat-diagnoses">--</span>
@@ -207,6 +214,14 @@ $page_title = '品牌入驻自动化';
                 <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">标题</span>
                     <span class="font-semibold text-gray-900" id="stat-titles">--</span>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-3">
+                    <span class="text-gray-400 block mb-1">知识图谱</span>
+                    <span class="font-semibold text-gray-900" id="stat-knowledge-graph">--</span>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-3">
+                    <span class="text-gray-400 block mb-1">意图问题</span>
+                    <span class="font-semibold text-gray-900" id="stat-intent-questions">--</span>
                 </div>
                 <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">文章</span>
@@ -360,18 +375,20 @@ $page_title = '品牌入驻自动化';
 $additional_js = <<<'JS'
 <script>
 // ── 状态管理 ──────────────────────────────────────────────────────────────────
-const STEP_IDS = ['collect','diagnosis','keywords','titles','knowledge','customer','task','generate','distribute','monitor'];
+const STEP_IDS = ['collect','diagnosis','keywords','titles','knowledge','customer','knowledge_graph','intent_mining','task','generate','distribute','monitor'];
 const STEP_META = {
-    collect:    { name: '搜集品牌资料',  icon: 'search' },
-    diagnosis:  { name: '生成雷达诊断',  icon: 'radar' },
-    keywords:   { name: '生成关键词库',  icon: 'tags' },
-    titles:     { name: '生成标题库',    icon: 'heading' },
-    knowledge:  { name: '生成知识库',    icon: 'book-open' },
-    customer:   { name: '创建客户',      icon: 'building-2' },
-    task:       { name: '创建并启动任务',icon: 'zap' },
-    generate:   { name: '首篇文章生成',  icon: 'file-text' },
-    distribute: { name: '启动媒体分发',  icon: 'send' },
-    monitor:    { name: '启动监测',      icon: 'activity' },
+    collect:         { name: '搜集品牌资料',  icon: 'search' },
+    diagnosis:       { name: '生成雷达诊断',  icon: 'radar' },
+    keywords:        { name: '生成关键词库',  icon: 'tags' },
+    titles:          { name: '生成标题库',    icon: 'heading' },
+    knowledge:       { name: '生成知识库',    icon: 'book-open' },
+    customer:        { name: '创建客户',      icon: 'building-2' },
+    knowledge_graph: { name: '生成知识图谱',  icon: 'network' },
+    intent_mining:   { name: '意图挖掘',      icon: 'crosshair' },
+    task:            { name: '创建并启动任务',icon: 'zap' },
+    generate:        { name: '首篇文章生成',  icon: 'file-text' },
+    distribute:      { name: '启动媒体分发',  icon: 'send' },
+    monitor:         { name: '启动监测',      icon: 'activity' },
 };
 
 let workflowState = {
@@ -771,6 +788,8 @@ function updateBrandStats(stats) {
     if (stats.diagnoses !== undefined) document.getElementById('stat-diagnoses').textContent = stats.diagnoses;
     if (stats.keywords !== undefined) document.getElementById('stat-keywords').textContent = stats.keywords;
     if (stats.titles !== undefined) document.getElementById('stat-titles').textContent = stats.titles;
+    if (stats.knowledge_graph !== undefined) document.getElementById('stat-knowledge-graph').textContent = stats.knowledge_graph;
+    if (stats.intent_questions !== undefined) document.getElementById('stat-intent-questions').textContent = stats.intent_questions;
     if (stats.articles !== undefined) document.getElementById('stat-articles').textContent = stats.articles;
     if (stats.published !== undefined) document.getElementById('stat-published').textContent = stats.published;
 }
@@ -799,6 +818,24 @@ function updateLiveStepSummaries() {
 
     if (runtime.monitor_keywords !== undefined) {
         set('monitor', `关键词 ${runtime.monitor_keywords || 0} · 记录 ${runtime.monitor_records || 0} · 提及 ${runtime.monitor_mentions || 0}`);
+    }
+
+    // 知识图谱统计（从步骤输出中读取）
+    const kgStep = workflowState.steps?.knowledge_graph;
+    if (kgStep?.output?.total_inserted) {
+        const cats = kgStep.output.by_category || {};
+        const catNames = {stat:'数据',case:'案例',credential:'资质',capability:'能力',claim:'主张'};
+        const parts = Object.entries(cats).map(([k,v]) => `${catNames[k]||k} ${v}`).join(' · ');
+        set('knowledge_graph', `共 ${kgStep.output.total_inserted} 条` + (parts ? `：${parts}` : ''));
+    }
+
+    // 意图挖掘统计（从步骤输出中读取）
+    const imStep = workflowState.steps?.intent_mining;
+    if (imStep?.output?.total_questions) {
+        const dims = imStep.output.by_dimension || {};
+        const ga = imStep.output.gap_analysis || {};
+        const gapText = ga.gap_count ? ` · 空白 ${ga.gap_count}` : '';
+        set('intent_mining', `共 ${imStep.output.total_questions} 个问题${gapText}`);
     }
 }
 
@@ -1022,6 +1059,8 @@ function runDemo() {
             // 更新统计
             if (id === 'keywords') updateBrandStats({ keywords: 32 });
             if (id === 'titles') updateBrandStats({ titles: 20 });
+            if (id === 'knowledge_graph') updateBrandStats({ knowledge_graph: 22 });
+            if (id === 'intent_mining') updateBrandStats({ intent_questions: 28 });
             if (id === 'generate') updateBrandStats({ articles: 10 });
             if (id === 'distribute') updateBrandStats({ published: 8 });
 

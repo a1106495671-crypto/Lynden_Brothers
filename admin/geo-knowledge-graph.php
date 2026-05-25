@@ -34,6 +34,7 @@ $message = '';
 
 // Handle actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    set_time_limit(120);
     $action = $_POST['action'] ?? '';
     $cid = trim($_POST['customer_id'] ?? '');
 

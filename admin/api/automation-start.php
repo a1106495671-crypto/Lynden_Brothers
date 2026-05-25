@@ -67,16 +67,18 @@ try {
 
     // 创建所有步骤记录
     $steps = [
-        ['collect',    1],
-        ['diagnosis',  2],
-        ['keywords',   3],
-        ['titles',     4],
-        ['knowledge',  5],
-        ['customer',   6],
-        ['task',       7],
-        ['generate',   8],
-        ['distribute', 9],
-        ['monitor',    10],
+        ['collect',          1],
+        ['diagnosis',        2],
+        ['keywords',         3],
+        ['titles',           4],
+        ['knowledge',        5],
+        ['customer',         6],
+        ['knowledge_graph',  7],
+        ['intent_mining',    8],
+        ['task',             9],
+        ['generate',        10],
+        ['distribute',      11],
+        ['monitor',         12],
     ];
 
     $stepStmt = $db->prepare("

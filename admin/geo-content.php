@@ -15,6 +15,7 @@ session_write_close();
 
 // ── AJAX: 生成文章 ────────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'generate') {
+    set_time_limit(120);
     header('Content-Type: application/json; charset=utf-8');
 
     $keyword  = trim($_POST['keyword']  ?? '');

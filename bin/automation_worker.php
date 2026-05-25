@@ -563,7 +563,228 @@ function wf_find_existing_customer(PDO $db, array $wf): ?array {
 }
 
 /**
- * Step 6: 创建并启动任务
+ * Step 6.5: 生成品牌知识图谱
+ */
+function step_knowledge_graph(PDO $db, array $wf): array {
+    $customerId = trim((string) ($wf['customer_id'] ?? ''));
+    if ($customerId === '') {
+        throw new RuntimeException("客户尚未创建，无法生成知识图谱");
+    }
+
+    $templatePath = dirname(__DIR__) . '/prompts/knowledge_graph.md';
+    if (!file_exists($templatePath)) {
+        throw new RuntimeException("知识图谱模板不存在: {$templatePath}");
+    }
+
+    $collected = wf_get_step_output($db, (string) $wf['workflow_id'], 'collect');
+    $collectedInfo = trim((string) ($collected['collected_info'] ?? ''));
+
+    $template = file_get_contents($templatePath);
+    $prompt = wf_fill_template($template, [
+        'brand_name'    => $wf['brand_name'],
+        'industry'      => $wf['industry'],
+        'website'       => $wf['website'],
+        'core_services' => $wf['services'],
+        'competitors'   => $wf['competitors'],
+        'positioning'   => $wf['positioning'],
+        'collected_info'=> $collectedInfo ?: '暂无额外资料',
+    ]);
+
+    $aiOutput = wf_call_ai($prompt, 6144, $wf['workflow_id'], '生成品牌知识图谱');
+
+    // 解析 JSON 输出
+    $parsed = null;
+    if (preg_match('/\{[\s\S]*"knowledge"[\s\S]*\}/', $aiOutput, $m)) {
+        $parsed = json_decode($m[0], true);
+    }
+    if (!$parsed || empty($parsed['knowledge']) || !is_array($parsed['knowledge'])) {
+        throw new RuntimeException("AI返回的知识图谱数据格式无效，请重试");
+    }
+
+    $categories = ['stat', 'case', 'credential', 'capability', 'claim'];
+    $inserted = 0;
+    $byCategory = [];
+
+    $stmt = $db->prepare("
+        INSERT INTO geo_brand_knowledge (customer_id, category, title, content, source, citability_score)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ");
+
+    foreach ($parsed['knowledge'] as $item) {
+        $cat = trim((string) ($item['category'] ?? ''));
+        $title = trim((string) ($item['title'] ?? ''));
+        $content = trim((string) ($item['content'] ?? ''));
+        $source = trim((string) ($item['source'] ?? ''));
+        $score = max(1, min(5, (int) ($item['citability_score'] ?? 3)));
+
+        if (!in_array($cat, $categories, true) || $title === '' || $content === '') {
+            continue;
+        }
+
+        $stmt->execute([$customerId, $cat, mb_substr($title, 0, 200), $content, mb_substr($source, 0, 200), $score]);
+        $inserted++;
+        $byCategory[$cat] = ($byCategory[$cat] ?? 0) + 1;
+    }
+
+    if ($inserted < 5) {
+        throw new RuntimeException("AI生成的有效知识条目过少（仅{$inserted}条），请重试");
+    }
+
+    wf_log($wf['workflow_id'], "知识图谱生成完成：{$inserted} 条，分布：" . json_encode($byCategory, JSON_UNESCAPED_UNICODE));
+
+    return [
+        'success' => true,
+        'output'  => json_encode([
+            'customer_id' => $customerId,
+            'total_inserted' => $inserted,
+            'by_category' => $byCategory,
+            'model_used' => wf_last_ai_model(),
+        ], JSON_UNESCAPED_UNICODE),
+        'data' => ['knowledge_graph_count' => $inserted]
+    ];
+}
+
+/**
+ * Step 7.5: 生成意图挖掘
+ */
+function step_intent_mining(PDO $db, array $wf): array {
+    $customerId = trim((string) ($wf['customer_id'] ?? ''));
+    if ($customerId === '') {
+        throw new RuntimeException("客户尚未创建，无法进行意图挖掘");
+    }
+
+    $templatePath = dirname(__DIR__) . '/prompts/intent_mining.md';
+    if (!file_exists($templatePath)) {
+        throw new RuntimeException("意图挖掘模板不存在: {$templatePath}");
+    }
+
+    // 加载品牌事实
+    $stmt = $db->prepare("SELECT fact_key, fact_value FROM geo_brand_facts WHERE customer_id=?");
+    $stmt->execute([$customerId]);
+    $facts = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) $facts[$r['fact_key']] = $r['fact_value'];
+
+    $brandName      = $facts['brand_name'] ?? $wf['brand_name'];
+    $industry       = $facts['industry'] ?? $wf['industry'];
+    $coreServices   = $facts['core_services'] ?? $facts['core_service'] ?? $wf['services'];
+    $masterSentence = $facts['master_sentence'] ?? $wf['positioning'];
+    $differentiator = $facts['differentiator'] ?? '';
+    $targetClient   = $facts['target_client'] ?? '';
+
+    // 已监测关键词（新客户通常为空）
+    $stmtKw = $db->prepare("
+        SELECT query_text, COUNT(*) AS total,
+               SUM(CASE WHEN brand_mentioned THEN 1 ELSE 0 END) AS hits
+        FROM geo_monitor_records
+        WHERE customer_id=? AND queried_at >= CURRENT_DATE - INTERVAL '29 days'
+        GROUP BY query_text ORDER BY hits DESC
+    ");
+    $stmtKw->execute([$customerId]);
+    $kwData = $stmtKw->fetchAll(PDO::FETCH_ASSOC);
+    $existingKwText = '';
+    foreach ($kwData as $kw) {
+        $rate = $kw['total'] > 0 ? round($kw['hits'] / $kw['total'] * 100, 1) : 0;
+        $existingKwText .= "- 「{$kw['query_text']}」提及率 {$rate}%（{$kw['hits']}/{$kw['total']}）\n";
+    }
+    if (empty($existingKwText)) $existingKwText = "暂无监测数据\n";
+
+    // 已发布文章（新客户通常为空）
+    $stmtArt = $db->prepare("
+        SELECT a.title FROM articles a
+        JOIN tasks t ON t.id = a.task_id
+        WHERE t.geo_customer_id = ? AND a.deleted_at IS NULL
+        ORDER BY a.created_at DESC LIMIT 30
+    ");
+    $stmtArt->execute([$customerId]);
+    $articles = $stmtArt->fetchAll(PDO::FETCH_COLUMN);
+    $articleText = !empty($articles) ? implode("\n", array_map(fn($a) => "- {$a}", $articles)) : "暂无已发布文章\n";
+
+    // 品牌事实摘要
+    $factSummary = '';
+    foreach (['brand_name','industry','core_service','core_services','master_sentence','differentiator','target_client','website'] as $fk) {
+        if (!empty($facts[$fk])) $factSummary .= "- {$fk}: {$facts[$fk]}\n";
+    }
+
+    // 加载 prompt 模板
+    $template = file_get_contents($templatePath);
+    $prompt = wf_fill_template($template, [
+        'brand_name'       => $brandName,
+        'master_sentence'  => $masterSentence,
+        'core_services'    => $coreServices,
+        'differentiator'   => $differentiator ?: '待补充',
+        'target_client'    => $targetClient ?: '待补充',
+        'industry'         => $industry,
+        'existing_keywords'=> $existingKwText,
+        'existing_articles'=> $articleText,
+        'brand_facts_summary'=> $factSummary ?: '暂无',
+    ]);
+
+    $aiOutput = wf_call_ai($prompt, 6144, $wf['workflow_id'], '意图挖掘');
+
+    // 解析 JSON
+    $content = trim($aiOutput);
+    $content = preg_replace('/^```(?:json)?\s*/i', '', $content);
+    $content = preg_replace('/\s*```$/', '', $content);
+    $content = trim($content);
+
+    $parsed = null;
+    if (preg_match('/\{[\s\S]*\}/', $content, $m)) {
+        $parsed = json_decode($m[0], true);
+    }
+    if (!$parsed || empty($parsed['themes']) || !is_array($parsed['themes'])) {
+        throw new RuntimeException("AI返回的意图挖掘数据格式无效，请重试");
+    }
+
+    // 清空旧数据并写入
+    $db->prepare("DELETE FROM geo_intent_questions WHERE customer_id=?")->execute([$customerId]);
+    $ins = $db->prepare("INSERT INTO geo_intent_questions
+        (customer_id, theme, question, intent_type, priority, covered, reason, suggested_action, dimension)
+        VALUES (?,?,?,?,?,?,?,?,?)");
+
+    $totalQuestions = 0;
+    $byDimension = [];
+
+    foreach ($parsed['themes'] as $theme) {
+        foreach (($theme['questions'] ?? []) as $q) {
+            $dim = $theme['dimension'] ?? $q['intent'] ?? '';
+            $ins->execute([
+                $customerId,
+                $theme['name'],
+                $q['q'],
+                $q['intent'] ?? $dim,
+                $q['priority'] ?? 'P1',
+                ($q['covered'] ?? false) ? 1 : 0,
+                $q['reason'] ?? '',
+                $q['suggested_action'] ?? '',
+                $dim,
+            ]);
+            $totalQuestions++;
+            $byDimension[$dim] = ($byDimension[$dim] ?? 0) + 1;
+        }
+    }
+
+    if ($totalQuestions < 10) {
+        throw new RuntimeException("AI生成的有效意图问题过少（仅{$totalQuestions}条），请重试");
+    }
+
+    $gapAnalysis = $parsed['gap_analysis'] ?? [];
+    wf_log($wf['workflow_id'], "意图挖掘完成：{$totalQuestions} 个问题，维度分布：" . json_encode($byDimension, JSON_UNESCAPED_UNICODE));
+
+    return [
+        'success' => true,
+        'output'  => json_encode([
+            'customer_id'     => $customerId,
+            'total_questions' => $totalQuestions,
+            'by_dimension'    => $byDimension,
+            'gap_analysis'    => $gapAnalysis,
+            'model_used'      => wf_last_ai_model(),
+        ], JSON_UNESCAPED_UNICODE),
+        'data' => ['intent_question_count' => $totalQuestions]
+    ];
+}
+
+/**
+ * Step 8: 创建并启动任务
  */
 function step_task(PDO $db, array $wf): array {
     // 查找默认 content prompt
@@ -846,16 +1067,18 @@ function wf_start_geo_monitor_run_async(string $customerId): bool {
 
 function wf_execute_step(PDO $db, array $wf, string $stepId): array {
     switch ($stepId) {
-        case 'collect':    return step_collect($db, $wf);
-        case 'diagnosis':  return step_diagnosis($db, $wf);
-        case 'keywords':   return step_keywords($db, $wf);
-        case 'titles':     return step_titles($db, $wf);
-        case 'knowledge':  return step_knowledge($db, $wf);
-        case 'customer':   return step_customer($db, $wf);
-        case 'task':       return step_task($db, $wf);
-        case 'generate':   return step_generate($db, $wf);
-        case 'distribute': return step_distribute($db, $wf);
-        case 'monitor':    return step_monitor($db, $wf);
+        case 'collect':          return step_collect($db, $wf);
+        case 'diagnosis':        return step_diagnosis($db, $wf);
+        case 'keywords':         return step_keywords($db, $wf);
+        case 'titles':           return step_titles($db, $wf);
+        case 'knowledge':        return step_knowledge($db, $wf);
+        case 'customer':         return step_customer($db, $wf);
+        case 'knowledge_graph':  return step_knowledge_graph($db, $wf);
+        case 'intent_mining':    return step_intent_mining($db, $wf);
+        case 'task':             return step_task($db, $wf);
+        case 'generate':         return step_generate($db, $wf);
+        case 'distribute':       return step_distribute($db, $wf);
+        case 'monitor':          return step_monitor($db, $wf);
         default:
             throw new RuntimeException("未知步骤: {$stepId}");
     }

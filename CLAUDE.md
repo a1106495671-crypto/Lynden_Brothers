@@ -158,6 +158,7 @@ docker-compose up -d --build
 - 2026-05-24：`includes/citation_simulator_service.php` 的真实反查模式已改为“不静默降级”：选择真实反查时必须有已配置且启用的 provider；API 调用失败、缺 key 或解析不到引用源会直接报错，不再用本地 stub 补齐排行榜。只有明确选择本地/估算模式时才使用本地推演数据。
 - 2026-05-24：自动化页诊断步骤已存在，但用户反馈看不明显。已增强 `admin/api/automation-status.php` 返回 `diagnosis` 详情（分数、命中率、短板信号、动作数、报告 ID），并在 `admin/automation-workflow.php` 的品牌信息卡展示雷达诊断结果和”查看诊断报告”链接；步骤卡也会显示诊断评分摘要。当前最新 workflow `wf_20260524125211_f7bde77a` 诊断 ID 为 `470cde9b-6745-43fc-9bd4-68398df8606b`，分数 45.0，命中率等级 low。
 - 2026-05-24：重写 GEO 全景诊断模块。新建 `prompts/panorama_diagnosis.md` 独立 prompt 模板，替换原来 `admin/api/panorama-generate.php` 中的内联 prompt；新 prompt 增加了 5 条反幻觉原则（只用数据说话、标注数据缺失、区分事实与推断、不说空话、竞品只用实际出现的），输出结构从 5 章扩展到 6 章（新增关键词诊断分层），每章有更严格的格式和内容要求；API 端现在返回 `prompt_used` 字段供前端展示。`admin/geo-panorama.php` 前端 UI 全面重设计：统计卡用环形图展示提及率、平台/关键词/竞品三列卡用色点和徽章、报告区用渐变头部和导出按钮、底部可折叠展示发送给 AI 的完整 prompt（黑底代码块风格）。
+- 2026-05-24：重写 GEO 意图挖掘模块。新建 `prompts/intent_mining.md` 独立 prompt 模板，替换 `admin/geo-intent.php` 中的内联 prompt；新 prompt 从 6 维度扩展到 7 维度（新增「风险质疑」），要求 AI 输出 `reason`（为什么重要）和 `suggested_action`（建议内容形式），并严格基于品牌事实和已有监测/文章数据判断覆盖状态。意图挖掘现在读取 `geo_monitor_records`（近 30 天关键词提及率）和 `articles`（已发布文章标题）作为覆盖判断依据，不再让 AI 凭空猜测。数据库 `geo_intent_questions` 表新增 `reason`、`suggested_action`、`dimension` 三个字段。前端 UI 增加：5 卡统计（总数/空白/P0/覆盖率/主题数）、意图维度 × 优先级矩阵、筛选栏（全部/空白/已覆盖/P0/P1/P2/各维度）、每条问题展示理由和建议行动、可折叠 prompt 预览、点击「空白」可切换覆盖状态。
 
 ### 待办
 
