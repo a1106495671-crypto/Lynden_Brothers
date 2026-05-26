@@ -242,6 +242,25 @@ function wf_get_step_output(PDO $db, string $workflowId, string $stepId): array 
     return is_array($data) ? $data : [];
 }
 
+function wf_try_lock(PDO $db, string $workflowId): bool {
+    try {
+        $stmt = $db->prepare("SELECT pg_try_advisory_lock(hashtext(?))");
+        $stmt->execute(['automation_workflow:' . $workflowId]);
+        return filter_var($stmt->fetchColumn(), FILTER_VALIDATE_BOOLEAN);
+    } catch (Throwable $e) {
+        return true;
+    }
+}
+
+function wf_unlock(PDO $db, string $workflowId): void {
+    try {
+        $stmt = $db->prepare("SELECT pg_advisory_unlock(hashtext(?))");
+        $stmt->execute(['automation_workflow:' . $workflowId]);
+    } catch (Throwable $e) {
+        // Ignore unlock failures; unsupported databases will have skipped locking.
+    }
+}
+
 function wf_map_diagnosis_industry(string $industry): string {
     $industry = trim($industry);
     $available = geo_diagnosis_industries();
@@ -262,6 +281,9 @@ function wf_map_diagnosis_industry(string $industry): string {
         '健康' => '医疗',
         '金融' => '金融',
         '本地生活' => '本地生活',
+        '餐饮' => '本地生活',
+        '茶饮' => '本地生活',
+        '饮品' => '本地生活',
         '消费' => '消费品',
     ];
 
@@ -428,6 +450,10 @@ function step_diagnosis(PDO $db, array $wf): array {
     wf_update_workflow($db, (string) $wf['workflow_id'], ['diagnosis_id' => $diagnosisId]);
 
     $report = geo_diagnosis_latest($db, $diagnosisId);
+    $signals = is_array($report['signals'] ?? null) ? $report['signals'] : [];
+    $firstMetric = is_array($signals[0]['raw_metric'] ?? null) ? $signals[0]['raw_metric'] : [];
+    $dataSource = !empty($firstMetric['search_provider']) ? 'real_search' : 'estimated';
+
     return [
         'success' => true,
         'output' => json_encode([
@@ -435,6 +461,7 @@ function step_diagnosis(PDO $db, array $wf): array {
             'overall_score' => $report ? round((float) ($report['overall_score'] ?? 0), 1) : null,
             'industry' => $report['industry'] ?? wf_map_diagnosis_industry((string) ($wf['industry'] ?? '')),
             'predicted_hit_rate' => $report['predicted_hit_rate'] ?? '',
+            'data_source' => $dataSource,
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['diagnosis_id' => $diagnosisId],
     ];
@@ -1140,6 +1167,12 @@ function wf_run(PDO $db, string $workflowId): void {
         return;
     }
 
+    if (!wf_try_lock($db, $workflowId)) {
+        wf_log($workflowId, "已有 worker 正在执行该工作流，跳过本次启动");
+        return;
+    }
+
+    try {
     wf_log($workflowId, "开始执行工作流 - 品牌: {$wf['brand_name']}");
 
     // 获取所有步骤
@@ -1196,6 +1229,9 @@ function wf_run(PDO $db, string $workflowId): void {
         'completed_at' => date('Y-m-d H:i:s'),
     ]);
     wf_log($workflowId, "🎉 工作流全部完成！品牌 [{$wf['brand_name']}] 入驻成功");
+    } finally {
+        wf_unlock($db, $workflowId);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════

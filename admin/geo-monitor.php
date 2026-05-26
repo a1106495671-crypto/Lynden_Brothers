@@ -9,6 +9,7 @@ session_start();
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
+require_once __DIR__ . '/../includes/geo_monitor_alert_service.php';
 
 require_admin_login();
 
@@ -106,6 +107,10 @@ if (!empty($competitorsFromDb)) {
 $comp0 = $competitorsFromCustomer[0] ?? '竞品A';
 $comp1 = $competitorsFromCustomer[1] ?? '竞品B';
 
+try {
+    geo_monitor_refresh_alerts($db, $customerId, $brandName, $competitorsFromCustomer);
+} catch (Throwable $_refreshAlerts) {}
+
 // ── 内容收录：关键词生命周期数据（真实） ──────────────────────────────────
 $kwLifecycle = [];
 try {
@@ -202,6 +207,7 @@ try {
     $realAlerts = $stmtAlerts->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $_ae) {}
 $hasRealAlerts = !empty($realAlerts);
+$realAlertCount = count($realAlerts);
 
 // 确定性随机辅助：给定索引和范围，返回稳定整数
 $sr = static function(int $slot, int $min, int $max) use ($customerSeed): int {
@@ -622,10 +628,10 @@ require_once __DIR__ . '/includes/header.php';
             <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo max(1, count($competitorsFromCustomer)); ?> 个</div>
             <p class="mt-1 text-xs text-gray-400">当前追踪竞品数量</p>
         </div>
-        <div class="rounded-xl border border-red-200 <?php echo count($alerts) > 0 ? 'bg-red-50' : 'bg-white'; ?> p-5 shadow-sm">
-            <p class="text-sm font-semibold <?php echo count($alerts) > 0 ? 'text-red-700' : 'text-gray-500'; ?>">异常告警</p>
-            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo count($alerts); ?> 项</div>
-            <p class="mt-1 text-xs <?php echo count($alerts) > 0 ? 'text-red-500' : 'text-gray-400'; ?>"><?php echo count($alerts) > 0 ? '点击异常告警 tab 查看详情' : '暂无异常'; ?></p>
+        <div class="rounded-xl border border-red-200 <?php echo $realAlertCount > 0 ? 'bg-red-50' : 'bg-white'; ?> p-5 shadow-sm">
+            <p class="text-sm font-semibold <?php echo $realAlertCount > 0 ? 'text-red-700' : 'text-gray-500'; ?>">异常告警</p>
+            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo $realAlertCount; ?> 项</div>
+            <p class="mt-1 text-xs <?php echo $realAlertCount > 0 ? 'text-red-500' : 'text-gray-400'; ?>"><?php echo $realAlertCount > 0 ? '点击异常告警 tab 查看详情' : '暂无真实告警'; ?></p>
         </div>
         <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <p class="text-sm font-semibold text-gray-500">续费证据包</p>
@@ -842,13 +848,23 @@ require_once __DIR__ . '/includes/header.php';
             <div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
                 <div class="lg:col-span-3 grid grid-cols-1 gap-4 xl:grid-cols-2">
                     <?php
-                    // 优先使用真实告警；无数据时显示 mock（并标注）
-                    $displayAlerts = $hasRealAlerts ? $realAlerts : $alerts;
+                    // 只展示真实告警；无数据时展示空状态，避免演示样例混淆业务判断。
+                    $displayAlerts = $realAlerts;
                     $isRealAlertData = $hasRealAlerts;
                     ?>
                     <?php if (!$isRealAlertData): ?>
-                        <div class="xl:col-span-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                            暂无真实告警数据，以下为演示样例。每日监测脚本积累数据后自动替换。
+                        <div class="xl:col-span-2 rounded-xl border border-gray-200 bg-white p-8 text-center">
+                            <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                                <i data-lucide="check-circle-2" class="h-6 w-6"></i>
+                            </div>
+                            <h3 class="mt-4 text-lg font-bold text-gray-900">暂无真实异常告警</h3>
+                            <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-gray-600">
+                                当前客户有 <?php echo (int) $realMonitorData['total']; ?> 条监测记录、<?php echo count($platformStats); ?> 个平台统计，但还没有触发竞品超越或命中率异常。告警只会在每日监测脚本写入 <code class="rounded bg-gray-100 px-1">geo_monitor_alerts</code> 后出现。
+                            </p>
+                            <div class="mt-5 flex flex-wrap justify-center gap-3 text-sm">
+                                <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="rounded-lg border border-gray-300 bg-white px-4 py-2 font-semibold text-gray-700 hover:bg-gray-50">检查客户关键词</a>
+                                <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="rounded-lg bg-slate-900 px-4 py-2 font-semibold text-white hover:bg-slate-700">刷新监测页</a>
+                            </div>
                         </div>
                     <?php endif; ?>
                     <?php foreach ($displayAlerts as $alert): ?>
@@ -864,6 +880,11 @@ require_once __DIR__ . '/includes/header.php';
                         if ($isRealAlertData) {
                             $alertTitle = match($alert['alert_type'] ?? '') {
                                 'competitor_surpass' => '竞品「' . htmlspecialchars($alert['competitor_name'], ENT_QUOTES, 'UTF-8') . '」超越品牌',
+                                'keyword_zero_visibility' => '关键词「' . htmlspecialchars($alert['keyword'], ENT_QUOTES, 'UTF-8') . '」零可见',
+                                'core_rate_low' => '核心关键词平均提及率过低',
+                                'source_diversity_low' => '品牌提及来源覆盖不足',
+                                'visibility_drop' => '品牌提及率周环比下跌',
+                                'accuracy_low' => 'AI 回答语义准确度不足',
                                 default              => htmlspecialchars($alert['alert_type'] ?? '', ENT_QUOTES, 'UTF-8'),
                             };
                             $alertDesc = htmlspecialchars($alert['detail'] ?? '', ENT_QUOTES, 'UTF-8');
@@ -896,6 +917,30 @@ require_once __DIR__ . '/includes/header.php';
                                 </div>
                                 <div class="mt-3 rounded-lg bg-white/80 p-3 text-sm text-gray-700">
                                     <span class="font-semibold">建议处置：</span>针对关键词「<?php echo htmlspecialchars($alert['keyword'] ?? '', ENT_QUOTES, 'UTF-8'); ?>」补充信源文章，压制竞品曝光。
+                                </div>
+                            <?php elseif ($isRealAlertData): ?>
+                                <?php
+                                $actionText = match($alert['alert_type'] ?? '') {
+                                    'keyword_zero_visibility' => '优先补充该关键词的问答型内容、品牌事实页和第三方信源，发布后重新跑监测。',
+                                    'core_rate_low' => '检查低提及关键词，补齐品牌母句、服务边界、案例证据和可引用摘要。',
+                                    'source_diversity_low' => '增加不同平台的可索引信源，至少覆盖官网、问答平台和第三方内容平台。',
+                                    'visibility_drop' => '对比下跌前后的关键词和平台，优先修复跌幅最大的内容入口。',
+                                    'accuracy_low' => '修正品牌知识库中的事实口径，并补充可核验来源，降低 AI 误答。',
+                                    default => '进入本周优化清单，补充内容、信源和复测关键词。',
+                                };
+                                ?>
+                                <div class="mt-4 grid grid-cols-2 gap-2 rounded-lg bg-white/80 p-3 text-sm">
+                                    <div class="text-center">
+                                        <div class="text-xl font-bold text-blue-700"><?php echo htmlspecialchars((string) $alert['brand_rate'], ENT_QUOTES, 'UTF-8'); ?></div>
+                                        <div class="text-xs text-gray-500">当前指标</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="text-xl font-bold text-slate-700"><?php echo htmlspecialchars((string) $alert['competitor_rate'], ENT_QUOTES, 'UTF-8'); ?></div>
+                                        <div class="text-xs text-gray-500">阈值/对照</div>
+                                    </div>
+                                </div>
+                                <div class="mt-3 rounded-lg bg-white/80 p-3 text-sm text-gray-700">
+                                    <span class="font-semibold">建议处置：</span><?php echo htmlspecialchars($actionText, ENT_QUOTES, 'UTF-8'); ?>
                                 </div>
                             <?php elseif (!$isRealAlertData): ?>
                                 <div class="mt-4 rounded-lg bg-white/80 p-3 text-sm text-gray-700">

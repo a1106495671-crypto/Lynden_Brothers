@@ -17,6 +17,7 @@ chdir($projectRoot);
 require_once $projectRoot . '/includes/config.php';
 require_once $projectRoot . '/includes/database_admin.php';
 require_once $projectRoot . '/includes/citation_simulator_service.php';
+require_once $projectRoot . '/includes/geo_monitor_alert_service.php';
 
 set_time_limit(600);
 
@@ -552,6 +553,10 @@ PROMPT;
  * 计算并写入告警：竞品在某关键词上的提及率超过品牌时产生告警
  */
 function gm_compute_alerts(PDO $db, string $cid, string $cname, array $competitors, string $today): void {
+    $summary = geo_monitor_refresh_alerts($db, $cid, $cname, $competitors, $today);
+    gm_log("  [告警汇总] 检查 {$summary['checked_records']} 条记录，写入/更新 {$summary['created_or_updated']} 条告警");
+    return;
+
     if (empty($competitors)) return;
 
     // 取最近 7 天该客户所有记录

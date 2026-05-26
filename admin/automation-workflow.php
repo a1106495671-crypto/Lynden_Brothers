@@ -820,6 +820,12 @@ function updateLiveStepSummaries() {
         set('monitor', `关键词 ${runtime.monitor_keywords || 0} · 记录 ${runtime.monitor_records || 0} · 提及 ${runtime.monitor_mentions || 0}`);
     }
 
+    const diagStep = workflowState.steps?.diagnosis;
+    if (diagStep?.output?.overall_score !== undefined) {
+        const sourceLabel = diagStep.output.data_source === 'real_search' ? '实时搜索' : '估算';
+        set('diagnosis', `${sourceLabel}评分 ${diagStep.output.overall_score} · ${diagStep.output.predicted_hit_rate || ''}`);
+    }
+
     // 知识图谱统计（从步骤输出中读取）
     const kgStep = workflowState.steps?.knowledge_graph;
     if (kgStep?.output?.total_inserted) {
@@ -855,8 +861,9 @@ function updateDiagnosisDetail(diagnosis) {
     const hitRate = diagnosis.predicted_hit_rate || '命中率待估';
     const weakest = diagnosis.weakest_signal ? `短板：${diagnosis.weakest_signal}` : '';
     const actions = diagnosis.action_count !== undefined ? `优化动作 ${diagnosis.action_count} 个` : '';
+    const source = diagnosis.data_source === 'real_search' ? '实时搜索诊断' : '估算诊断';
 
-    document.getElementById('diagnosis-summary').textContent = `评分 ${score} / 100 · ${hitRate}`;
+    document.getElementById('diagnosis-summary').textContent = `${source} · 评分 ${score} / 100 · ${hitRate}`;
     document.getElementById('diagnosis-extra').textContent = [weakest, actions].filter(Boolean).join(' · ');
     document.getElementById('diagnosis-link').href = window.adminUrl('geo-diagnosis.php?id=' + encodeURIComponent(diagnosis.id));
     box.classList.remove('hidden');

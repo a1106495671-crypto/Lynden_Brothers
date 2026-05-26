@@ -12,6 +12,28 @@ require_once __DIR__ . '/../../includes/database_admin.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
+function automation_diagnosis_data_source(string $rawSignalsJson): string {
+    $signals = json_decode($rawSignalsJson, true);
+    if (!is_array($signals)) {
+        return 'unknown';
+    }
+
+    foreach ($signals as $signal) {
+        $metric = $signal['raw_metric'] ?? [];
+        if (!is_array($metric)) {
+            continue;
+        }
+        if (($metric['data_source'] ?? '') === 'real_search' || !empty($metric['search_provider'])) {
+            return 'real_search';
+        }
+        if (($metric['data_source'] ?? '') === 'estimated') {
+            return 'estimated';
+        }
+    }
+
+    return 'estimated';
+}
+
 // 需要管理员登录
 if (empty($_SESSION['admin_id']) && empty($_SESSION['admin_username'])) {
     http_response_code(401);
@@ -103,6 +125,7 @@ try {
                        r.predicted_hit_rate,
                        r.status,
                        r.completed_at,
+                       r.raw_signals_json::text AS raw_signals_json,
                        b.name AS brand_name,
                        b.domain,
                        b.industry,
@@ -126,6 +149,10 @@ try {
             ");
             $detailStmt->execute([(string) $workflow['diagnosis_id']]);
             $diagnosis = $detailStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            if ($diagnosis) {
+                $diagnosis['data_source'] = automation_diagnosis_data_source((string) ($diagnosis['raw_signals_json'] ?? ''));
+                unset($diagnosis['raw_signals_json']);
+            }
         } elseif (!empty($workflow['brand_name'])) {
             $ds = $db->prepare("
                 SELECT COUNT(*)
@@ -142,6 +169,7 @@ try {
                        r.predicted_hit_rate,
                        r.status,
                        r.completed_at,
+                       r.raw_signals_json::text AS raw_signals_json,
                        b.name AS brand_name,
                        b.domain,
                        b.industry,
@@ -166,6 +194,10 @@ try {
             ");
             $detailStmt->execute([(string) $workflow['brand_name']]);
             $diagnosis = $detailStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            if ($diagnosis) {
+                $diagnosis['data_source'] = automation_diagnosis_data_source((string) ($diagnosis['raw_signals_json'] ?? ''));
+                unset($diagnosis['raw_signals_json']);
+            }
         }
     } catch (Exception $e) {}
 
