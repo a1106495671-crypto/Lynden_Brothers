@@ -24,6 +24,8 @@ require_once $projectRoot . '/includes/task_lifecycle_service.php';
 require_once $projectRoot . '/includes/article_service.php';
 require_once $projectRoot . '/includes/monitor_api_service.php';
 require_once $projectRoot . '/includes/geo_diagnosis_service.php';
+require_once $projectRoot . '/includes/distribution_service.php';
+require_once $projectRoot . '/includes/distribution_publisher_service.php';
 
 set_time_limit(0);
 ini_set('memory_limit', '512M');
@@ -40,6 +42,9 @@ function wf_log(string $workflowId, string $message): void {
 
 // ─── 数据库工具 ──────────────────────────────────────────
 function wf_get_workflow(PDO $db, string $workflowId): ?array {
+    try {
+        $db->exec("ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS media_account_ids TEXT DEFAULT '[]'");
+    } catch (Throwable $e) {}
     $stmt = $db->prepare("SELECT * FROM automation_workflows WHERE workflow_id = ?");
     $stmt->execute([$workflowId]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
@@ -1106,6 +1111,10 @@ function step_generate(PDO $db, array $wf): array {
  */
 function step_distribute(PDO $db, array $wf): array {
     $taskId = (int) $wf['task_id'];
+    $selectedAccountIds = json_decode((string) ($wf['media_account_ids'] ?? '[]'), true);
+    $selectedAccountIds = is_array($selectedAccountIds)
+        ? array_values(array_unique(array_filter(array_map('intval', $selectedAccountIds))))
+        : [];
 
     // 查找该任务的所有文章
     $stmt = $db->prepare("SELECT id, status FROM articles WHERE task_id = ? AND deleted_at IS NULL ORDER BY id ASC");
@@ -1116,18 +1125,55 @@ function step_distribute(PDO $db, array $wf): array {
         throw new RuntimeException("没有可分发的文章，不能标记分发完成");
     }
 
-    $articleService = new ArticleService($db);
     $published = 0;
     $failed = 0;
+    $createdJobs = 0;
+    $startedJobs = 0;
+    $manualJobs = 0;
+    $autoJobs = 0;
 
     foreach ($articles as $article) {
         try {
             if ($article['status'] === 'published') {
                 $published++;
-                continue;
+            } else {
+                $db->prepare("
+                    UPDATE articles
+                    SET status = 'published',
+                        review_status = CASE
+                            WHEN review_status IN ('approved', 'auto_approved') THEN review_status
+                            ELSE 'auto_approved'
+                        END,
+                        published_at = COALESCE(published_at, CURRENT_TIMESTAMP),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND deleted_at IS NULL
+                ")->execute([(int) $article['id']]);
+                $published++;
             }
-            $articleService->publishArticle((int) $article['id']);
-            $published++;
+
+            if (!empty($selectedAccountIds)) {
+                $jobIds = distribution_enqueue_article_jobs($db, (int) $article['id'], $selectedAccountIds);
+                $createdJobs += count($jobIds);
+                if (!empty($jobIds)) {
+                    $placeholders = implode(',', array_fill(0, count($jobIds), '?'));
+                    $jobStmt = $db->prepare("
+                        SELECT COALESCE(ma.publish_mode, 'browser') AS publish_mode, COUNT(*) AS c
+                        FROM media_publish_jobs j
+                        LEFT JOIN media_accounts ma ON ma.id = j.account_id
+                        WHERE j.id IN ({$placeholders})
+                        GROUP BY COALESCE(ma.publish_mode, 'browser')
+                    ");
+                    $jobStmt->execute($jobIds);
+                    foreach ($jobStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                        if (($row['publish_mode'] ?? '') === 'manual') {
+                            $manualJobs += (int) $row['c'];
+                        } else {
+                            $autoJobs += (int) $row['c'];
+                        }
+                    }
+                    $startedJobs += distribution_start_article_queued_jobs_async($db, (int) $article['id'], count($jobIds));
+                }
+            }
         } catch (Throwable $e) {
             $failed++;
             wf_log($wf['workflow_id'], "发布文章 #{$article['id']} 失败: " . $e->getMessage());
@@ -1140,6 +1186,12 @@ function step_distribute(PDO $db, array $wf): array {
             'total' => count($articles),
             'published' => $published,
             'failed' => $failed,
+            'selected_account_ids' => $selectedAccountIds,
+            'media_jobs_created' => $createdJobs,
+            'media_jobs_started' => $startedJobs,
+            'auto_jobs' => $autoJobs,
+            'manual_jobs' => $manualJobs,
+            'skipped_reason' => empty($selectedAccountIds) ? 'no_media_accounts_selected' : '',
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['published' => $published]
     ];

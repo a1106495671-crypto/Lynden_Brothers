@@ -92,6 +92,7 @@ class DatabaseAdmin {
             model_type VARCHAR(20) DEFAULT 'chat',
             api_url VARCHAR(500) DEFAULT 'https://api.tu-zi.com',
             daily_limit INTEGER DEFAULT 0, -- 每日调用限制，0为不限制
+            priority INTEGER DEFAULT 10,
             used_today INTEGER DEFAULT 0,
             total_used INTEGER DEFAULT 0,
             status VARCHAR(20) DEFAULT 'active', -- active, inactive
@@ -708,6 +709,7 @@ class DatabaseAdmin {
             ],
             'ai_models' => [
                 'model_type' => "ALTER TABLE ai_models ADD COLUMN model_type VARCHAR(20) DEFAULT 'chat'",
+                'priority' => "ALTER TABLE ai_models ADD COLUMN priority INTEGER DEFAULT 10",
             ],
             'knowledge_chunks' => [
                 'embedding_model_id' => "ALTER TABLE knowledge_chunks ADD COLUMN embedding_model_id INTEGER DEFAULT NULL",
@@ -745,6 +747,7 @@ class DatabaseAdmin {
         ");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_base ON knowledge_chunks(knowledge_base_id, chunk_index)");
         $this->pdo->exec("UPDATE ai_models SET model_type = COALESCE(NULLIF(model_type, ''), 'chat')");
+        $this->pdo->exec("UPDATE ai_models SET priority = COALESCE(priority, 10)");
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS admin_activity_logs (
             id BIGSERIAL PRIMARY KEY,
             admin_id INTEGER DEFAULT NULL,

@@ -40,6 +40,29 @@ function normalize_ai_model_type(string $modelType): string
     return in_array($modelType, ['chat', 'embedding'], true) ? $modelType : 'chat';
 }
 
+function ensure_ai_models_page_schema(PDO $db): void
+{
+    $columns = [
+        'model_type' => "ALTER TABLE ai_models ADD COLUMN model_type VARCHAR(20) DEFAULT 'chat'",
+        'priority' => "ALTER TABLE ai_models ADD COLUMN priority INTEGER DEFAULT 10",
+    ];
+
+    foreach ($columns as $column => $sql) {
+        if (!db_column_exists($db, 'ai_models', $column)) {
+            $db->exec($sql);
+        }
+    }
+
+    $db->exec("UPDATE ai_models SET model_type = COALESCE(NULLIF(model_type, ''), 'chat')");
+    $db->exec("UPDATE ai_models SET priority = COALESCE(priority, 10)");
+}
+
+try {
+    ensure_ai_models_page_schema($db);
+} catch (Exception $e) {
+    $error = 'AI模型表结构检查失败: ' . $e->getMessage();
+}
+
 $default_embedding_model_id = (int) get_setting('default_embedding_model_id', 0);
 $pgvector_enabled = embedding_service_pgvector_available($db);
 

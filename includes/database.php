@@ -111,8 +111,10 @@ class Database {
             version VARCHAR(100) DEFAULT '',
             api_key VARCHAR(500) NOT NULL,
             model_id VARCHAR(200) NOT NULL,
+            model_type VARCHAR(20) DEFAULT 'chat',
             api_url VARCHAR(500) DEFAULT 'https://api.tu-zi.com',
             daily_limit INTEGER DEFAULT 0,
+            priority INTEGER DEFAULT 10,
             used_today INTEGER DEFAULT 0,
             total_used INTEGER DEFAULT 0,
             status VARCHAR(20) DEFAULT 'active',
@@ -368,8 +370,10 @@ class Database {
             version VARCHAR(100) DEFAULT '',
             api_key VARCHAR(500) NOT NULL,
             model_id VARCHAR(200) NOT NULL,
+            model_type VARCHAR(20) DEFAULT 'chat',
             api_url VARCHAR(500) DEFAULT 'https://api.tu-zi.com',
             daily_limit INTEGER DEFAULT 0, -- 每日调用限制，0为不限制
+            priority INTEGER DEFAULT 10,
             used_today INTEGER DEFAULT 0, -- 今日已使用次数
             total_used INTEGER DEFAULT 0, -- 总使用次数
             status VARCHAR(20) DEFAULT 'active', -- active, inactive
@@ -792,6 +796,10 @@ class Database {
                 'updated_at' => "ALTER TABLE authors ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
                 'avatar' => "ALTER TABLE authors ADD COLUMN avatar VARCHAR(200) DEFAULT ''",
                 'website' => "ALTER TABLE authors ADD COLUMN website VARCHAR(200) DEFAULT ''",
+            ],
+            'ai_models' => [
+                'model_type' => "ALTER TABLE ai_models ADD COLUMN model_type VARCHAR(20) DEFAULT 'chat'",
+                'priority' => "ALTER TABLE ai_models ADD COLUMN priority INTEGER DEFAULT 10",
             ],
         ];
 

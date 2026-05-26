@@ -14,6 +14,16 @@ require_admin_login();
 
 session_write_close();
 
+$automationMediaAccounts = [];
+try {
+    $automationMediaAccounts = $db->query("
+        SELECT id, platform, account_name, publish_mode, status
+        FROM media_accounts
+        WHERE status = 'active'
+        ORDER BY platform, id
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $_mediaAccountError) {}
+
 $page_title = '品牌入驻自动化';
 ?>
 <?php require_once __DIR__ . '/includes/header.php'; ?>
@@ -134,7 +144,7 @@ $page_title = '品牌入驻自动化';
                 ['id' => 'intent_mining',    'no' => '08', 'name' => '意图挖掘',      'desc' => '从7个维度挖掘用户真实问题，发现覆盖空白', 'icon' => 'crosshair',        'color' => 'rose'],
                 ['id' => 'task',             'no' => '09', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
                 ['id' => 'generate',         'no' => '10', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
-                ['id' => 'distribute',       'no' => '11', 'name' => '启动媒体分发',  'desc' => '发布文章并加入媒体队列，后台持续分发',   'icon' => 'send',             'color' => 'emerald'],
+                ['id' => 'distribute',       'no' => '11', 'name' => '启动媒体分发',  'desc' => '按所选账号创建外部分发任务，自动账号尝试发布，人工账号创建待办',   'icon' => 'send',             'color' => 'emerald'],
                 ['id' => 'monitor',          'no' => '12', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
             ];
 
@@ -228,7 +238,7 @@ $page_title = '品牌入驻自动化';
                     <span class="font-semibold text-gray-900" id="stat-articles">--</span>
                 </div>
                 <div class="rounded-lg bg-gray-50 p-3">
-                    <span class="text-gray-400 block mb-1">已发布</span>
+                    <span class="text-gray-400 block mb-1">站内发布</span>
                     <span class="font-semibold text-gray-900" id="stat-published">--</span>
                 </div>
             </div>
@@ -251,7 +261,7 @@ $page_title = '品牌入驻自动化';
                     <span class="font-semibold text-gray-900" id="runtime-generation">--</span>
                 </div>
                 <div class="rounded-lg border border-gray-100 bg-white p-3">
-                    <span class="text-gray-400 block mb-1">媒体发布队列</span>
+                    <span class="text-gray-400 block mb-1">外部分发队列</span>
                     <span class="font-semibold text-gray-900" id="runtime-distribution">--</span>
                     <span class="mt-1 block text-[10px] text-gray-400" id="runtime-next-distribution">--</span>
                 </div>
@@ -356,6 +366,25 @@ $page_title = '品牌入驻自动化';
                         <option value="20">20 篇（完整）</option>
                     </select>
                 </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">发布平台 / 账号</label>
+                    <?php if (empty($automationMediaAccounts)): ?>
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">暂无启用媒体账号，后续不会创建媒体分发任务。</div>
+                    <?php else: ?>
+                        <div class="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <?php foreach ($automationMediaAccounts as $account): ?>
+                                <?php $mode = (string) ($account['publish_mode'] ?? 'manual'); ?>
+                                <label class="flex items-start gap-3 rounded-md bg-white px-3 py-2 text-sm">
+                                    <input type="checkbox" class="automation-media-account mt-1 rounded border-gray-300 text-violet-600 focus:ring-violet-500" value="<?php echo (int) $account['id']; ?>" <?php echo $mode === 'browser' ? 'checked' : ''; ?>>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block font-medium text-gray-800"><?php echo htmlspecialchars($account['account_name']); ?></span>
+                                        <span class="text-xs text-gray-500"><?php echo htmlspecialchars($account['platform']); ?> · <?php echo $mode === 'browser' ? '浏览器自动发布，需要登录态' : '人工辅助，只创建待办不自动发出'; ?></span>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
             </div>
             <!-- 弹窗底部 -->
             <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-between bg-gray-50">
@@ -398,12 +427,14 @@ let workflowState = {
     brandInfo: null,
     diagnosis: null,
     runtime: null,
+    completionIssues: [],
     startTime: null,
     logs: [],
 };
 
 let logCount = 0;
 let elapsedTimer = null;
+let lastCompletionIssueSignature = '';
 
 function parsePgTimestamp(value) {
     if (!value) return null;
@@ -460,6 +491,7 @@ async function startAutomation() {
         competitors: document.getElementById('input-competitors').value.trim(),
         positioning: document.getElementById('input-positioning').value.trim(),
         article_count: parseInt(document.getElementById('input-article-count').value) || 10,
+        media_account_ids: Array.from(document.querySelectorAll('.automation-media-account:checked')).map(el => parseInt(el.value, 10)).filter(Boolean),
     };
 
     try {
@@ -522,8 +554,13 @@ async function pollWorkflowStatus() {
                 pollTimer = setTimeout(pollWorkflowStatus, 2000);
             } else if (workflowState.status === 'completed') {
                 stopElapsedTimer();
-                addLog('success', '🎉 全部流程执行完成！');
-                showToast('自动化流程已完成！', 'success');
+                if ((workflowState.completionIssues || []).length > 0) {
+                    addLog('warn', '流程走完，但未真正完成：' + workflowState.completionIssues.join('；'));
+                    showToast('流程有未完成项，请看日志', 'warn');
+                } else {
+                    addLog('success', '🎉 全部流程执行完成！');
+                    showToast('自动化流程已完成！', 'success');
+                }
             } else if (workflowState.status === 'error') {
                 stopElapsedTimer();
                 addLog('error', '流程执行出错，请检查日志');
@@ -553,6 +590,7 @@ function applyWorkflowPayload(data, logChanges) {
         positioning: wf.positioning || '',
         article_count: wf.article_count || 0,
     };
+    workflowState.completionIssues = Array.isArray(wf.completion_issues) ? wf.completion_issues : [];
     workflowState.startTime = parsePgTimestamp(wf.created_at) || workflowState.startTime || Date.now();
 
     STEP_IDS.forEach(id => {
@@ -597,6 +635,7 @@ function applyWorkflowPayload(data, logChanges) {
         updateRuntimeStats(data.runtime, logChanges);
         updateLiveStepSummaries();
     }
+    updateCompletionIssues(logChanges);
 }
 
 async function resumeLatestWorkflow() {
@@ -731,6 +770,7 @@ function renderStepOutputSummary(stepId, output) {
     if (stepId === 'keywords' && output.keyword_count !== undefined) return `${output.keyword_count} 个`;
     if (stepId === 'titles' && output.title_count !== undefined) return `${output.title_count} 个`;
     if (stepId === 'generate' && output.article_count !== undefined) return `${output.article_count} 篇`;
+    if (stepId === 'distribute' && output.media_jobs_created !== undefined) return `任务 ${output.media_jobs_created} · 自动 ${output.auto_jobs || 0} · 手动 ${output.manual_jobs || 0}`;
     if (stepId === 'monitor' && output.keyword_count !== undefined) return `${output.keyword_count} 词`;
     return '';
 }
@@ -753,9 +793,11 @@ function updateGlobalStatus() {
         running:   { text: '运行中', dot: 'bg-blue-500 animate-pulse', bg: 'bg-blue-50', textColor: 'text-blue-700' },
         background:{ text: '后台运行', dot: 'bg-blue-500 animate-pulse', bg: 'bg-blue-50', textColor: 'text-blue-700' },
         completed: { text: '已完成', dot: 'bg-emerald-500', bg: 'bg-emerald-50', textColor: 'text-emerald-700' },
+        incomplete:{ text: '未完成', dot: 'bg-yellow-500', bg: 'bg-yellow-50', textColor: 'text-yellow-800' },
         error:     { text: '出错',   dot: 'bg-red-500',    bg: 'bg-red-50',     textColor: 'text-red-700' },
     };
-    const s = backgroundActive ? statusMap.background : (statusMap[workflowState.status] || statusMap.idle);
+    const hasIssues = workflowState.status === 'completed' && (workflowState.completionIssues || []).length > 0;
+    const s = hasIssues ? statusMap.incomplete : (backgroundActive ? statusMap.background : (statusMap[workflowState.status] || statusMap.idle));
     el.className = `inline-flex items-center gap-1.5 rounded-full ${s.bg} px-3 py-1.5 text-xs font-medium ${s.textColor}`;
     el.innerHTML = `<span class="h-2 w-2 rounded-full ${s.dot}"></span>${s.text}`;
 
@@ -774,6 +816,17 @@ function hasBackgroundRuntime() {
         (workflowState.runtime.distribution_queued || 0) > 0 ||
         (workflowState.runtime.distribution_running || 0) > 0
     );
+}
+
+function updateCompletionIssues(logChanges = false) {
+    const issues = workflowState.completionIssues || [];
+    const signature = JSON.stringify(issues);
+    if (!issues.length || !logChanges || signature === lastCompletionIssueSignature) {
+        lastCompletionIssueSignature = signature;
+        return;
+    }
+    issues.forEach(issue => addLog('warn', '未完成：' + issue));
+    lastCompletionIssueSignature = signature;
 }
 
 function showBrandInfoCard() {
@@ -1076,7 +1129,11 @@ function runDemo() {
                 workflowState.status = 'completed';
                 updateGlobalStatus();
                 stopElapsedTimer();
-                addLog('success', '🎉 全部流程执行完成！');
+                if ((workflowState.completionIssues || []).length > 0) {
+                    addLog('warn', '流程走完，但仍有未完成项。');
+                } else {
+                    addLog('success', '🎉 全部流程执行完成！');
+                }
             }
         }, delay);
         delay += 1000 + Math.random() * 1000;

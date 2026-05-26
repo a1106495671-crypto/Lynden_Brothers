@@ -292,6 +292,48 @@ try {
         } catch (Exception $e) {}
     }
 
+    $completionIssues = [];
+    $targetArticles = (int) ($workflow['article_count'] ?? 0);
+    if (!empty($workflow['task_id']) && $targetArticles > 0 && (int) ($stats['articles'] ?? 0) < $targetArticles) {
+        $completionIssues[] = '文章生成未达标：已生成 ' . (int) ($stats['articles'] ?? 0) . '/' . $targetArticles . ' 篇';
+    }
+    if (($runtime['generation_pending'] ?? 0) > 0 || ($runtime['generation_running'] ?? 0) > 0) {
+        $completionIssues[] = '文章生成队列仍有待处理任务';
+    }
+    $distributionTotal = (int) ($runtime['distribution_queued'] ?? 0)
+        + (int) ($runtime['distribution_running'] ?? 0)
+        + (int) ($runtime['distribution_success'] ?? 0)
+        + (int) ($runtime['distribution_failed'] ?? 0)
+        + (int) ($runtime['distribution_manual_queued'] ?? 0);
+    if ($distributionTotal > 0 && (int) ($runtime['distribution_success'] ?? 0) === 0) {
+        $completionIssues[] = '媒体分发未成功：成功 0 / 总任务 ' . $distributionTotal;
+    }
+    if (($runtime['distribution_failed'] ?? 0) > 0) {
+        $completionIssues[] = '媒体分发存在失败任务：' . (int) $runtime['distribution_failed'] . ' 个';
+    }
+    if (($runtime['distribution_queued'] ?? 0) > 0 || ($runtime['distribution_manual_queued'] ?? 0) > 0) {
+        $completionIssues[] = '媒体分发仍有排队/手动任务';
+    }
+    $selectedMediaAccounts = json_decode((string) ($workflow['media_account_ids'] ?? '[]'), true);
+    if (!is_array($selectedMediaAccounts) || empty($selectedMediaAccounts)) {
+        $completionIssues[] = '未选择发布平台/账号，自动化不会真正发到外部平台';
+    }
+    if (($runtime['monitor_keywords'] ?? 0) > 0 && (int) ($runtime['monitor_records'] ?? 0) === 0) {
+        $completionIssues[] = 'GEO 监测未产出记录：关键词 ' . (int) $runtime['monitor_keywords'] . ' 个，记录 0 条';
+    }
+    if ($diagnosis && ($diagnosis['data_source'] ?? '') !== 'real_search') {
+        $completionIssues[] = '雷达诊断不是实时搜索诊断：' . (($diagnosis['data_source'] ?? '') === 'site_crawl_estimate' ? '官网抓取估算' : '本地估算');
+    }
+    foreach ($steps as $step) {
+        if (($step['step_id'] ?? '') !== 'intent_mining') {
+            continue;
+        }
+        $stepOutput = json_decode((string) ($step['output_data'] ?? ''), true);
+        if (is_array($stepOutput) && !empty($stepOutput['gap_analysis']['fallback'])) {
+            $completionIssues[] = '意图挖掘使用规则兜底，不是 AI JSON 正常解析结果';
+        }
+    }
+
     echo json_encode([
         'success'  => true,
         'workflow' => [
@@ -304,12 +346,15 @@ try {
             'services'     => $workflow['services'],
             'competitors'  => $workflow['competitors'],
             'positioning'  => $workflow['positioning'],
+            'media_account_ids' => json_decode((string) ($workflow['media_account_ids'] ?? '[]'), true) ?: [],
             'article_count'=> (int) $workflow['article_count'],
             'task_id'      => $workflow['task_id'] ? (int) $workflow['task_id'] : null,
             'diagnosis_id' => $workflow['diagnosis_id'] ?? '',
             'created_at'   => $workflow['created_at'],
             'completed_at' => $workflow['completed_at'],
             'error_message'=> $workflow['error_message'],
+            'completion_issues' => $completionIssues,
+            'is_really_complete' => empty($completionIssues),
             'steps'        => $steps,
         ],
         'stats' => $stats,
