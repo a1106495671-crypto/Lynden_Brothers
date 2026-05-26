@@ -161,6 +161,105 @@ function wf_parse_competitors(string $text): array {
     return array_values(array_unique($competitors));
 }
 
+function wf_extract_json_object(string $text): ?array {
+    $content = trim($text);
+    $content = preg_replace('/^```(?:json)?\s*/i', '', $content);
+    $content = preg_replace('/\s*```$/', '', $content);
+    $content = trim($content);
+
+    $decoded = json_decode($content, true);
+    if (is_array($decoded)) {
+        return $decoded;
+    }
+
+    $start = strpos($content, '{');
+    $end = strrpos($content, '}');
+    if ($start === false || $end === false || $end <= $start) {
+        return null;
+    }
+
+    $json = substr($content, $start, $end - $start + 1);
+    $decoded = json_decode($json, true);
+    return is_array($decoded) ? $decoded : null;
+}
+
+function wf_build_intent_fallback(string $brandName, string $industry, string $coreServices, string $competitorsText, string $targetClient): array {
+    $competitors = wf_parse_competitors($competitorsText);
+    $mainCompetitor = $competitors[0] ?? '主要竞品';
+    $service = $coreServices !== '' ? explode('、', str_replace([',', '，'], '、', $coreServices))[0] : $industry . '服务';
+    $target = $targetClient !== '' && $targetClient !== '待补充' ? $targetClient : '目标客户';
+
+    $templates = [
+        '品牌认知' => [
+            "{$brandName}是做什么的？",
+            "{$brandName}适合哪些{$target}？",
+            "{$brandName}靠谱吗？",
+        ],
+        '品类发现' => [
+            "{$industry}有哪些值得关注的品牌？",
+            "想做{$service}应该怎么选服务商？",
+            "{$industry}用户怎么判断一个品牌是否专业？",
+        ],
+        '购买决策' => [
+            "{$brandName}的服务适合什么预算阶段？",
+            "选择{$brandName}前需要准备哪些资料？",
+            "{$service}多久能看到效果？",
+        ],
+        '场景问题' => [
+            "{$target}遇到{$industry}增长瓶颈怎么办？",
+            "新品牌怎么在AI搜索里被推荐？",
+            "怎么让AI回答更准确地提到{$brandName}？",
+        ],
+        '竞品对比' => [
+            "{$brandName}和{$mainCompetitor}有什么区别？",
+            "有没有比{$mainCompetitor}更适合{$target}的方案？",
+            "{$brandName}相比同类品牌优势在哪里？",
+        ],
+        '风险质疑' => [
+            "{$brandName}会不会没有效果？",
+            "{$service}容易踩哪些坑？",
+            "{$brandName}的数据和案例怎么验证？",
+        ],
+        '行业趋势' => [
+            "{$industry}未来一年会怎么变化？",
+            "AI搜索会怎样影响{$industry}品牌获客？",
+            "{$industry}品牌为什么需要做GEO？",
+        ],
+    ];
+
+    $themes = [];
+    foreach ($templates as $dimension => $questions) {
+        $themes[] = [
+            'name' => $dimension . '意图',
+            'icon' => '',
+            'dimension' => $dimension,
+            'questions' => array_map(static function (string $q) use ($dimension): array {
+                return [
+                    'q' => $q,
+                    'intent' => $dimension,
+                    'priority' => in_array($dimension, ['品牌认知', '品类发现', '购买决策', '竞品对比'], true) ? 'P0' : 'P1',
+                    'covered' => false,
+                    'reason' => '该问题会影响用户在AI回答中对品牌的认知、比较或选择。',
+                    'suggested_action' => '补充FAQ、对比内容、案例证据和可引用品牌事实。',
+                ];
+            }, $questions),
+        ];
+    }
+
+    return [
+        'themes' => $themes,
+        'gap_analysis' => [
+            'total_questions' => 21,
+            'covered_count' => 0,
+            'gap_count' => 21,
+            'p0_gaps' => 12,
+            'top_gap_dimension' => '购买决策',
+            'summary' => 'AI返回格式无效时已使用规则兜底生成基础意图池。建议后续用真实监测数据继续校准覆盖状态。优先补齐品牌认知、购买决策和竞品对比内容。',
+            'fallback' => true,
+        ],
+    ];
+}
+
 function wf_sync_customer_competitors(PDO $db, string $customerId, array $competitors): int {
     if ($customerId === '' || empty($competitors)) {
         return 0;
@@ -736,6 +835,7 @@ function step_intent_mining(PDO $db, array $wf): array {
     $masterSentence = $facts['master_sentence'] ?? $wf['positioning'];
     $differentiator = $facts['differentiator'] ?? '';
     $targetClient   = $facts['target_client'] ?? '';
+    $competitorsText = trim((string) ($facts['competitors'] ?? $wf['competitors'] ?? ''));
 
     // 已监测关键词（新客户通常为空）
     $stmtKw = $db->prepare("
@@ -780,6 +880,10 @@ function step_intent_mining(PDO $db, array $wf): array {
         'differentiator'   => $differentiator ?: '待补充',
         'target_client'    => $targetClient ?: '待补充',
         'industry'         => $industry,
+        '行业'             => $industry,
+        '服务'             => $coreServices,
+        '竞品'             => $competitorsText !== '' ? $competitorsText : '主要竞品',
+        'competitors'      => $competitorsText !== '' ? $competitorsText : '主要竞品',
         'existing_keywords'=> $existingKwText,
         'existing_articles'=> $articleText,
         'brand_facts_summary'=> $factSummary ?: '暂无',
@@ -787,18 +891,11 @@ function step_intent_mining(PDO $db, array $wf): array {
 
     $aiOutput = wf_call_ai($prompt, 6144, $wf['workflow_id'], '意图挖掘');
 
-    // 解析 JSON
-    $content = trim($aiOutput);
-    $content = preg_replace('/^```(?:json)?\s*/i', '', $content);
-    $content = preg_replace('/\s*```$/', '', $content);
-    $content = trim($content);
-
-    $parsed = null;
-    if (preg_match('/\{[\s\S]*\}/', $content, $m)) {
-        $parsed = json_decode($m[0], true);
-    }
+    // 解析 JSON；若模型输出格式不稳定，使用规则兜底，避免自动化卡死。
+    $parsed = wf_extract_json_object($aiOutput);
     if (!$parsed || empty($parsed['themes']) || !is_array($parsed['themes'])) {
-        throw new RuntimeException("AI返回的意图挖掘数据格式无效，请重试");
+        wf_log($wf['workflow_id'], "意图挖掘 AI 输出格式无效，启用规则兜底。输出片段：" . mb_substr(trim($aiOutput), 0, 240));
+        $parsed = wf_build_intent_fallback($brandName, $industry, $coreServices, $competitorsText, $targetClient);
     }
 
     // 清空旧数据并写入
