@@ -62,6 +62,7 @@ $page_title = '雷达诊断';
 $scoresForChart = [];
 $benchmarkForChart = [];
 $actionsBySignal = [];
+$diagnosisSource = ['key' => 'unknown', 'label' => '未知来源', 'class' => 'bg-gray-100 text-gray-700', 'note' => '暂无诊断来源信息'];
 $trendData = ['labels' => [], 'overall' => [], 'hit_rate' => [], 'signals' => [], 'delta' => null];
 if ($currentReport) {
     $trendData = geo_diagnosis_history($db, (string) ($currentReport['brand_id'] ?? ''));
@@ -69,6 +70,31 @@ if ($currentReport) {
         $actionsBySignal[(string) $action['signal_key']][] = $action;
     }
     foreach ($currentReport['scores'] as $score) {
+        $rawMetric = json_decode((string) ($score['raw_metric'] ?? '{}'), true);
+        $rawMetric = is_array($rawMetric) ? $rawMetric : [];
+        $dataSource = (string) ($rawMetric['data_source'] ?? '');
+        if (!empty($rawMetric['search_provider']) || $dataSource === 'real_search') {
+            $diagnosisSource = [
+                'key' => 'real_search',
+                'label' => '实时搜索诊断',
+                'class' => 'bg-green-100 text-green-700',
+                'note' => '已调用搜索 API 扫描第三方提及、UGC 覆盖、权威来源和官网信号。',
+            ];
+        } elseif ($dataSource === 'site_crawl_estimate' && $diagnosisSource['key'] !== 'real_search') {
+            $diagnosisSource = [
+                'key' => 'site_crawl_estimate',
+                'label' => '官网抓取估算',
+                'class' => 'bg-amber-100 text-amber-800',
+                'note' => '未配置搜索 API；已抓取官网估算结构、事实密度和站点身份，但第三方声量仍不可验证。',
+            ];
+        } elseif ($dataSource === 'estimated' && $diagnosisSource['key'] === 'unknown') {
+            $diagnosisSource = [
+                'key' => 'estimated',
+                'label' => '本地估算',
+                'class' => 'bg-red-100 text-red-700',
+                'note' => '未配置搜索 API，当前分数只基于输入资料和规则估算，不能代表真实全网声量。',
+            ];
+        }
         $scoresForChart[] = [
             'key' => $score['signal_key'],
             'name' => $score['name'] ?: $score['signal_key'],
@@ -183,7 +209,12 @@ require_once __DIR__ . '/includes/header.php';
                             <?php endif; ?>
                         </div>
                         <?php if ($currentReport): ?>
-                            <div class="text-sm text-gray-500">完成时间：<?php echo htmlspecialchars((string) $currentReport['completed_at']); ?></div>
+                            <div class="flex flex-col items-start gap-2 md:items-end">
+                                <span class="rounded-full px-3 py-1 text-xs font-semibold <?php echo htmlspecialchars($diagnosisSource['class']); ?>">
+                                    <?php echo htmlspecialchars($diagnosisSource['label']); ?>
+                                </span>
+                                <div class="text-sm text-gray-500">完成时间：<?php echo htmlspecialchars((string) $currentReport['completed_at']); ?></div>
+                            </div>
                         <?php endif; ?>
                     </div>
 
@@ -196,11 +227,18 @@ require_once __DIR__ . '/includes/header.php';
                             </div>
                         </div>
                     <?php else: ?>
+                        <?php if ($diagnosisSource['key'] !== 'real_search'): ?>
+                            <div class="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">
+                                <?php echo htmlspecialchars($diagnosisSource['note']); ?> 要判断喜茶这类知名品牌的真实 AI 权威度，请在下方“雷达数据源配置”接入 Bing、SerpAPI、Google CSE 或博查搜索 API 后重新生成诊断。
+                            </div>
+                        <?php endif; ?>
 	                        <div class="grid grid-cols-1 gap-8 px-6 py-6 xl:grid-cols-2">
 	                            <div class="flex min-h-[440px] min-w-0 flex-col">
                                 <div class="mb-6 flex items-start justify-between gap-4">
                                     <div>
-                                        <div class="text-sm font-medium text-gray-500">客户内容 AI 权威分</div>
+                                        <div class="text-sm font-medium text-gray-500">
+                                            <?php echo $diagnosisSource['key'] === 'real_search' ? '客户内容 AI 权威分' : '本地诊断估算分'; ?>
+                                        </div>
                                         <div class="mt-3 flex items-end gap-2">
                                             <span id="overall-score-preview" class="text-6xl font-bold leading-none text-gray-900"><?php echo htmlspecialchars((string) round((float) $currentReport['overall_score'], 1)); ?></span>
                                             <span class="pb-2 text-sm text-gray-500">/ 100</span>
@@ -307,6 +345,9 @@ require_once __DIR__ . '/includes/header.php';
                                                 <div>
                                                     <div class="text-xs font-medium text-gray-500">找到的证据来源</div>
                                                     <p class="mt-1 text-gray-700"><?php echo htmlspecialchars((string) ($scoreDetails['hint'] ?? '当前基于品牌资料、官网域名、行业基准和已知平台线索估算；接入搜索 API 后会展示真实 URL 证据。')); ?></p>
+                                                    <?php if (!empty($scoreDetails['crawled'])): ?>
+                                                        <p class="mt-1 text-xs text-green-700">已抓取官网首页参与估算。</p>
+                                                    <?php endif; ?>
                                                 </div>
                                                 <div class="grid grid-cols-1 gap-2 text-xs text-gray-600 sm:grid-cols-3">
                                                     <div class="rounded-md bg-gray-50 px-3 py-2">当前 <?php echo htmlspecialchars((string) round($scoreValue, 1)); ?> 分</div>
