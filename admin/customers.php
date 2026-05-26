@@ -193,6 +193,61 @@ foreach ($customers as $customer) {
     $customer_map[$customer['id']] = $customer;
 }
 
+// 补充从数据库加载的客户（新建客户不在 hardcoded 列表中）
+try {
+    $dbStmt = $db->prepare("SELECT customer_id, name, domain, industry, package_tier, owner, service_status, contract_start_date, contract_end_date, contract_amount, contact_name, contact_phone FROM customers ORDER BY created_at DESC");
+    $dbStmt->execute();
+    while ($dbRow = $dbStmt->fetch(PDO::FETCH_ASSOC)) {
+        $cid = $dbRow['customer_id'];
+        if (!isset($customer_map[$cid])) {
+            $stageKey = 'diagnose';
+            $stageLabel = '第1阶段诊断中';
+            $packageMap = ['growth' => ['growth', '增长版'], 'dominate' => ['dominate', '主导版'], 'lite' => ['lite', '轻量版']];
+            $pkg = $packageMap[$dbRow['package_tier']] ?? ['growth', '增长版'];
+            $customer_map[$cid] = [
+                'id' => $cid,
+                'name' => $dbRow['name'],
+                'domain' => $dbRow['domain'],
+                'industry' => $dbRow['industry'],
+                'package_tier' => $pkg[0],
+                'package_label' => $pkg[1],
+                'owner' => $dbRow['owner'],
+                'stage_key' => $stageKey,
+                'stage_label' => $stageLabel,
+                'overall_pct' => 0,
+                'service_status' => $dbRow['service_status'],
+                'status_label' => $dbRow['service_status'] === 'active' ? '服务中' : '暂停',
+                'contract_start_at' => $dbRow['contract_start_date'] ?? date('Y-m-d'),
+                'contract_end_at' => $dbRow['contract_end_date'] ?? date('Y-m-d', strtotime('+90 days')),
+                'contract_amount' => $dbRow['contract_amount'],
+                'contact_name' => $dbRow['contact_name'],
+                'contact_phone' => $dbRow['contact_phone'],
+                'competitors' => [],
+                'cities' => [],
+                'alerts' => [],
+                'pending' => [],
+                'stages' => [
+                    ['key' => 'diagnose', 'name' => '诊断', 'tool' => '雷达诊断', 'link' => 'geo-diagnosis.php', 'pct' => 0, 'status' => 'pending', 'note' => '待开始'],
+                    ['key' => 'simulate', 'name' => '模拟', 'tool' => '引用模拟器', 'link' => 'citation-simulator.php', 'pct' => 0, 'status' => 'pending', 'note' => '待开始'],
+                    ['key' => 'strategy', 'name' => '策略', 'tool' => 'AI偏好对照表', 'link' => 'ai-citation-preferences.php', 'pct' => 0, 'status' => 'pending', 'note' => '待开始'],
+                    ['key' => 'execute', 'name' => '执行', 'tool' => '策略 SOP', 'link' => 'sop-center.php', 'pct' => 0, 'status' => 'pending', 'note' => '待开始'],
+                    ['key' => 'monitor', 'name' => '监测', 'tool' => 'GEO监测', 'link' => 'geo-monitor.php', 'pct' => 0, 'status' => 'pending', 'note' => '待开始'],
+                    ['key' => 'renew', 'name' => '续费', 'tool' => '复盘对比', 'link' => 'dashboard.php?tab=journey', 'pct' => 0, 'status' => 'pending', 'note' => '待开始'],
+                ],
+            ];
+            $customers[] = $customer_map[$cid];
+        } else {
+            // 已存在的 hardcoded 客户，用 DB 真实数据补全
+            $existing = &$customer_map[$cid];
+            if (!empty($dbRow['contract_start_date'])) $existing['contract_start_at'] = $dbRow['contract_start_date'];
+            if (!empty($dbRow['contract_end_date']))   $existing['contract_end_at'] = $dbRow['contract_end_date'];
+            if (!empty($dbRow['contact_name']))        $existing['contact_name'] = $dbRow['contact_name'];
+            if (!empty($dbRow['contact_phone']))       $existing['contact_phone'] = $dbRow['contact_phone'];
+        }
+    }
+} catch (Throwable $_dbe) {}
+
+
 // ── 竞品名称 AJAX 处理 ───────────────────────────────────────────────────────
 // ── 合同到期日 AJAX 更新 ─────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_contract_date') {
@@ -207,6 +262,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         $db->prepare("UPDATE customers SET contract_end_date = ? WHERE customer_id = ?")
            ->execute([$date, $cid]);
         echo json_encode(['ok' => true, 'date' => $date]);
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── 新建客户 AJAX 处理 ─────────────────────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create_customer') {
+    header('Content-Type: application/json');
+    if (!verify_csrf_token($_POST['_csrf'] ?? '')) { echo json_encode(['ok' => false, 'error' => 'CSRF']); exit; }
+    require_once __DIR__ . '/../includes/api_response.php';
+    require_once __DIR__ . '/../includes/customer_service.php';
+    try {
+        $svc = new CustomerService($db);
+        $newCust = $svc->createCustomer([
+            'name'               => trim($_POST['name'] ?? ''),
+            'domain'             => trim($_POST['domain'] ?? ''),
+            'industry'           => trim($_POST['industry'] ?? ''),
+            'package_tier'       => trim($_POST['package_tier'] ?? ''),
+            'owner'              => trim($_POST['owner'] ?? ''),
+            'contact_name'       => trim($_POST['contact_name'] ?? ''),
+            'contact_phone'      => trim($_POST['contact_phone'] ?? ''),
+            'contract_start_date'=> !empty($_POST['contract_start_date']) ? $_POST['contract_start_date'] : null,
+            'contract_end_date'  => !empty($_POST['contract_end_date']) ? $_POST['contract_end_date'] : null,
+            'contract_amount'    => (float) ($_POST['contract_amount'] ?? 0),
+        ]);
+        $cid = $newCust['customer_id'];
+
+        // 写入竞品
+        $competitors = array_filter(array_map('trim', explode("\n", $_POST['competitors'] ?? '')));
+        if ($competitors) {
+            $insCmp = $db->prepare("INSERT INTO geo_customer_competitors (customer_id, competitor) VALUES (?,?) ON CONFLICT (customer_id, competitor) DO UPDATE SET enabled=TRUE");
+            foreach ($competitors as $cmp) {
+                if ($cmp !== '') $insCmp->execute([$cid, $cmp]);
+            }
+        }
+
+        // 写入基础品牌事实
+        $factsToInsert = [];
+        if (!empty($newCust['name']))       $factsToInsert[] = ['brand_name', '品牌名称', $newCust['name']];
+        if (!empty($newCust['domain']))     $factsToInsert[] = ['domain', '官网域名', $newCust['domain']];
+        if (!empty($newCust['industry']))   $factsToInsert[] = ['industry', '所属行业', $newCust['industry']];
+        if (!empty($newCust['contact_name'])) $factsToInsert[] = ['contact_name', '联系人', $newCust['contact_name']];
+        $insFact = $db->prepare("INSERT INTO geo_brand_facts (customer_id, fact_key, fact_label, fact_value, is_core) VALUES (?,?,?,?,true) ON CONFLICT (customer_id, fact_key) DO UPDATE SET fact_value=EXCLUDED.fact_value, updated_at=CURRENT_TIMESTAMP");
+        foreach ($factsToInsert as $f) {
+            $insFact->execute([$cid, $f[0], $f[1], $f[2]]);
+        }
+
+        // 初始化 SOP 节点（onboard 场景，所有节点 pending）
+        $sopNodes = ['S1','S2','S3','S4','S5','S6','S7','S8','S9','S10','S11','S12','S14'];
+        $insSop = $db->prepare("INSERT INTO sop_node_status (customer_id, scenario, node_code, status) VALUES (?,?,?,?) ON CONFLICT (customer_id, scenario, node_code) DO NOTHING");
+        foreach ($sopNodes as $node) {
+            $insSop->execute([$cid, 'onboard', $node, 'pending']);
+        }
+
+        echo json_encode(['ok' => true, 'customer_id' => $cid, 'name' => $newCust['name']]);
     } catch (Throwable $e) {
         echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
     }
@@ -355,6 +466,10 @@ if ($selected_customer) {
         $stmtCmp->execute([$selected_customer['id']]);
         $dbCompetitors = $stmtCmp->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $_cmpe) {}
+    // 用 DB 竞品覆盖 hardcoded 竞品
+    if (!empty($dbCompetitors)) {
+        $selected_customer['competitors'] = array_column($dbCompetitors, 'competitor');
+    }
 }
 
 $page_title = '客户中心';
@@ -810,15 +925,15 @@ $stage_badge_classes = [
                 <i data-lucide="x" class="h-5 w-5"></i>
             </button>
         </div>
-        <form class="max-h-[78vh] space-y-4 overflow-y-auto p-6" onsubmit="event.preventDefault(); alert('MVP 预览：真实保存会写入 brands，并自动初始化 SOP/监测。');">
+        <form id="new-customer-form" class="max-h-[78vh] space-y-4 overflow-y-auto p-6" onsubmit="submitNewCustomer(event)">
             <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label class="block md:col-span-2">
                     <span class="text-sm font-semibold text-gray-700">客户名称 <span class="text-red-500">*</span></span>
-                    <input type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：湖南文韵爱阅读">
+                    <input name="name" type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：湖南文韵爱阅读" required>
                 </label>
                 <label class="block">
                     <span class="text-sm font-semibold text-gray-700">行业</span>
-                    <select class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                    <select name="industry" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
                         <option>教培 / 知识付费</option>
                         <option>B2B SaaS / 企业服务</option>
                         <option>医疗 / 健康</option>
@@ -828,19 +943,19 @@ $stage_badge_classes = [
                 </label>
                 <label class="block">
                     <span class="text-sm font-semibold text-gray-700">套餐</span>
-                    <select class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-                        <option>增长版</option>
-                        <option>主导版</option>
-                        <option>轻量版</option>
+                    <select name="package_tier" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        <option value="growth">增长版</option>
+                        <option value="dominate">主导版</option>
+                        <option value="lite">轻量版</option>
                     </select>
                 </label>
                 <label class="block">
                     <span class="text-sm font-semibold text-gray-700">官网域名</span>
-                    <input type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：example.com（不含 https://）">
+                    <input name="domain" type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：example.com（不含 https://）">
                 </label>
                 <label class="block">
                     <span class="text-sm font-semibold text-gray-700">负责人</span>
-                    <input type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：张顾问">
+                    <input name="owner" type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：张顾问">
                 </label>
             </div>
             <div class="rounded-lg border border-gray-200 p-4">
@@ -848,15 +963,15 @@ $stage_badge_classes = [
                 <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
                     <label class="block">
                         <span class="text-sm font-semibold text-gray-700">签署日期</span>
-                        <input type="date" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        <input name="contract_start_date" type="date" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
                     </label>
                     <label class="block">
                         <span class="text-sm font-semibold text-gray-700">到期日期</span>
-                        <input type="date" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        <input name="contract_end_date" type="date" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
                     </label>
                     <label class="block">
                         <span class="text-sm font-semibold text-gray-700">合同金额（元）</span>
-                        <input type="number" min="0" step="100" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：58000">
+                        <input name="contract_amount" type="number" min="0" step="100" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：58000">
                     </label>
                 </div>
             </div>
@@ -865,11 +980,11 @@ $stage_badge_classes = [
                 <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <label class="block">
                         <span class="text-sm font-semibold text-gray-700">联系人姓名</span>
-                        <input type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：李总">
+                        <input name="contact_name" type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：李总">
                     </label>
                     <label class="block">
                         <span class="text-sm font-semibold text-gray-700">联系方式（电话 / 邮箱）</span>
-                        <input type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：138xxxx0000 或 li@example.com">
+                        <input name="contact_phone" type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：138xxxx0000 或 li@example.com">
                     </label>
                 </div>
             </div>
@@ -889,7 +1004,7 @@ $stage_badge_classes = [
             </div>
             <label class="block">
                 <span class="text-sm font-semibold text-gray-700">重点城市</span>
-                <input type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：长沙、上海、全国">
+                <input name="cities" type="text" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="例如：长沙、上海、全国">
             </label>
             <div class="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
                 <p class="text-xs leading-5 text-gray-500">保存后初始化首月 SOP，并把 industry、domain、competitor_terms、contact_name 作为所有模块的数据上下文。</p>
@@ -1105,6 +1220,32 @@ $stage_badge_classes = [
         renderNewCmp();
     }
     document.getElementById('new-cmp-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addNewCmp(); } });
+
+    async function submitNewCustomer(event) {
+        event.preventDefault();
+        const form = document.getElementById('new-customer-form');
+        const fd = new FormData(form);
+        fd.append('action', 'create_customer');
+        fd.append('_csrf', _bfCsrf);
+        fd.append('competitors', _newCmpList.join('\n'));
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = '创建中…';
+        try {
+            const res = await fetch(window.location.pathname, { method: 'POST', body: fd });
+            const data = await res.json();
+            if (data.ok) {
+                window.location.href = window.location.pathname + '?customer=' + encodeURIComponent(data.customer_id);
+            } else {
+                alert('创建失败：' + (data.error || '未知错误'));
+            }
+        } catch (e) {
+            alert('网络错误，请重试');
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.textContent = '创建客户并初始化';
+        }
+    }
 
     (function() {
         const searchInput = document.getElementById('customer-search');
