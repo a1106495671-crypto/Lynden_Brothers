@@ -149,6 +149,42 @@ function wf_parse_titles(string $text): array {
     return array_values(array_unique($titles));
 }
 
+function wf_parse_competitors(string $text): array {
+    $parts = preg_split('/[,，、\n\r]+/u', $text) ?: [];
+    $competitors = [];
+    foreach ($parts as $part) {
+        $name = mb_substr(trim($part), 0, 100);
+        if ($name !== '') {
+            $competitors[] = $name;
+        }
+    }
+    return array_values(array_unique($competitors));
+}
+
+function wf_sync_customer_competitors(PDO $db, string $customerId, array $competitors): int {
+    if ($customerId === '' || empty($competitors)) {
+        return 0;
+    }
+
+    $stmt = $db->prepare("
+        INSERT INTO geo_customer_competitors (customer_id, competitor, enabled)
+        VALUES (?, ?, TRUE)
+        ON CONFLICT (customer_id, competitor) DO UPDATE SET enabled = TRUE
+    ");
+
+    $count = 0;
+    foreach ($competitors as $competitor) {
+        $competitor = mb_substr(trim((string) $competitor), 0, 100);
+        if ($competitor === '') {
+            continue;
+        }
+        $stmt->execute([$customerId, $competitor]);
+        $count++;
+    }
+
+    return $count;
+}
+
 function wf_get_usable_chat_model(PDO $db): ?array {
     $stmt = $db->query("
         SELECT id, name, api_key, model_id, api_url
@@ -512,6 +548,8 @@ function step_customer(PDO $db, array $wf): array {
 
     $customerId = $customer['customer_id'];
     $factCount = wf_seed_geo_brand_facts($db, $customerId, $wf);
+    $competitors = wf_parse_competitors((string) ($wf['competitors'] ?? ''));
+    $competitorCount = wf_sync_customer_competitors($db, $customerId, $competitors);
     wf_update_workflow($db, $wf['workflow_id'], ['customer_id' => $customerId]);
 
     return [
@@ -520,6 +558,7 @@ function step_customer(PDO $db, array $wf): array {
             'customer_id' => $customerId,
             'reused_existing_customer' => !$created,
             'geo_brand_fact_count' => $factCount,
+            'competitor_count' => $competitorCount,
         ], JSON_UNESCAPED_UNICODE),
         'data' => ['customer_id' => $customerId]
     ];
@@ -1001,6 +1040,7 @@ function step_monitor(PDO $db, array $wf): array {
 
     // 加上品牌名
     $monitorKeywords[] = $wf['brand_name'];
+    $monitorKeywords = array_merge($monitorKeywords, wf_parse_competitors((string) ($wf['competitors'] ?? '')));
     $monitorKeywords = array_values(array_unique($monitorKeywords));
 
     if (!empty($monitorKeywords)) {

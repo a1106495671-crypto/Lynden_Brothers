@@ -16,6 +16,42 @@ function customer_h($value) {
     return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 }
 
+function customer_split_terms(string $raw): array {
+    $parts = preg_split('/[,，、\n\r]+/u', $raw) ?: [];
+    $terms = [];
+    foreach ($parts as $part) {
+        $term = mb_substr(trim($part), 0, 100);
+        if ($term !== '') {
+            $terms[] = $term;
+        }
+    }
+    return array_values(array_unique($terms));
+}
+
+function customer_add_monitor_keywords(PDO $db, string $customerId, array $keywords): int {
+    if ($customerId === '' || empty($keywords)) {
+        return 0;
+    }
+
+    $stmt = $db->prepare("
+        INSERT INTO geo_monitor_keywords (customer_id, keyword, enabled)
+        VALUES (?, ?, TRUE)
+        ON CONFLICT (customer_id, keyword) DO UPDATE SET enabled = TRUE
+    ");
+
+    $added = 0;
+    foreach ($keywords as $keyword) {
+        $keyword = mb_substr(trim((string) $keyword), 0, 100);
+        if ($keyword === '') {
+            continue;
+        }
+        $stmt->execute([$customerId, $keyword]);
+        $added++;
+    }
+
+    return $added;
+}
+
 $customers = [
     [
         'id' => 'wenyun-ai-reading',
@@ -291,12 +327,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         $cid = $newCust['customer_id'];
 
         // 写入竞品
-        $competitors = array_filter(array_map('trim', explode("\n", $_POST['competitors'] ?? '')));
+        $competitors = customer_split_terms($_POST['competitors'] ?? '');
         if ($competitors) {
             $insCmp = $db->prepare("INSERT INTO geo_customer_competitors (customer_id, competitor) VALUES (?,?) ON CONFLICT (customer_id, competitor) DO UPDATE SET enabled=TRUE");
             foreach ($competitors as $cmp) {
                 if ($cmp !== '') $insCmp->execute([$cid, $cmp]);
             }
+            customer_add_monitor_keywords($db, $cid, $competitors);
         }
 
         // 写入基础品牌事实
@@ -339,6 +376,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['
             $name = mb_substr(trim($_POST['competitor'] ?? ''), 0, 100);
             if ($name === '') { echo json_encode(['ok' => false, 'error' => 'empty']); exit; }
             $db->prepare("INSERT INTO geo_customer_competitors (customer_id, competitor) VALUES (?,?) ON CONFLICT (customer_id, competitor) DO UPDATE SET enabled=TRUE")->execute([$cmpCid, $name]);
+            customer_add_monitor_keywords($db, $cmpCid, [$name]);
         } else {
             $db->prepare("UPDATE geo_customer_competitors SET enabled=FALSE WHERE id=? AND customer_id=?")->execute([(int)($_POST['competitor_id'] ?? 0), $cmpCid]);
         }
