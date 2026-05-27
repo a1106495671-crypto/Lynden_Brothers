@@ -1124,6 +1124,14 @@ function step_distribute(PDO $db, array $wf): array {
         ? array_values(array_unique(array_filter(array_map('intval', $selectedAccountIds))))
         : [];
 
+    if (empty($selectedAccountIds)) {
+        return [
+            'success' => false,
+            'error' => '没有选择发布平台/账号，媒体分发不会真正发到外部平台。',
+            'output' => json_encode(['skipped_reason' => 'no_media_accounts_selected'], JSON_UNESCAPED_UNICODE),
+        ];
+    }
+
     // 查找该任务的所有文章
     $stmt = $db->prepare("SELECT id, status FROM articles WHERE task_id = ? AND deleted_at IS NULL ORDER BY id ASC");
     $stmt->execute([$taskId]);
@@ -1139,6 +1147,11 @@ function step_distribute(PDO $db, array $wf): array {
     $startedJobs = 0;
     $manualJobs = 0;
     $autoJobs = 0;
+    $successfulAutoJobs = 0;
+    $failedAutoJobs = 0;
+    $skippedAutoJobs = 0;
+    $errors = [];
+    $seenJobIds = [];
 
     foreach ($articles as $article) {
         try {
@@ -1159,48 +1172,95 @@ function step_distribute(PDO $db, array $wf): array {
                 $published++;
             }
 
-            if (!empty($selectedAccountIds)) {
-                $jobIds = distribution_enqueue_article_jobs($db, (int) $article['id'], $selectedAccountIds);
-                $createdJobs += count($jobIds);
-                if (!empty($jobIds)) {
-                    $placeholders = implode(',', array_fill(0, count($jobIds), '?'));
-                    $jobStmt = $db->prepare("
-                        SELECT COALESCE(ma.publish_mode, 'browser') AS publish_mode, COUNT(*) AS c
-                        FROM media_publish_jobs j
-                        LEFT JOIN media_accounts ma ON ma.id = j.account_id
-                        WHERE j.id IN ({$placeholders})
-                        GROUP BY COALESCE(ma.publish_mode, 'browser')
-                    ");
-                    $jobStmt->execute($jobIds);
-                    foreach ($jobStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                        if (($row['publish_mode'] ?? '') === 'manual') {
-                            $manualJobs += (int) $row['c'];
-                        } else {
-                            $autoJobs += (int) $row['c'];
-                        }
-                    }
-                    $startedJobs += distribution_start_article_queued_jobs_async($db, (int) $article['id'], count($jobIds));
+            $createdIds = distribution_enqueue_article_jobs($db, (int) $article['id'], $selectedAccountIds);
+            $createdJobs += count($createdIds);
+
+            $placeholders = implode(',', array_fill(0, count($selectedAccountIds), '?'));
+            $jobStmt = $db->prepare("
+                SELECT j.id, COALESCE(ma.publish_mode, 'browser') AS publish_mode, j.status
+                FROM media_publish_jobs j
+                LEFT JOIN media_accounts ma ON ma.id = j.account_id
+                WHERE j.article_id = ?
+                  AND j.account_id IN ({$placeholders})
+                ORDER BY j.id ASC
+            ");
+            $jobStmt->execute(array_merge([(int) $article['id']], $selectedAccountIds));
+
+            foreach ($jobStmt->fetchAll(PDO::FETCH_ASSOC) as $jobRow) {
+                $jobId = (int) ($jobRow['id'] ?? 0);
+                if ($jobId <= 0 || isset($seenJobIds[$jobId])) {
+                    continue;
+                }
+                $seenJobIds[$jobId] = true;
+
+                if (($jobRow['publish_mode'] ?? '') === 'manual') {
+                    $manualJobs++;
+                    continue;
+                }
+
+                $autoJobs++;
+                $currentStatus = (string) ($jobRow['status'] ?? '');
+                if ($currentStatus === 'success') {
+                    $successfulAutoJobs++;
+                    continue;
+                }
+
+                $startedJobs++;
+                wf_log($wf['workflow_id'], "媒体分发任务 #{$jobId} 将打开可见浏览器；如遇登录/扫码/验证码，请在弹出的浏览器里完成验证，系统会继续发布。");
+                $result = distribution_execute_publish_job($db, $jobId, true);
+                $resultStatus = (string) ($result['status'] ?? '');
+                if ($resultStatus === 'success') {
+                    $successfulAutoJobs++;
+                } elseif ($resultStatus === 'skipped') {
+                    $skippedAutoJobs++;
+                    $errors[] = '任务 #' . $jobId . ' 暂未执行：' . (string) ($result['error_message'] ?? '排期或频控限制');
+                } else {
+                    $failedAutoJobs++;
+                    $errors[] = '任务 #' . $jobId . ' 发布失败：' . (string) ($result['error_message'] ?? '未知错误');
                 }
             }
         } catch (Throwable $e) {
             $failed++;
             wf_log($wf['workflow_id'], "发布文章 #{$article['id']} 失败: " . $e->getMessage());
+            $errors[] = '文章 #' . (int) $article['id'] . ' 分发失败：' . $e->getMessage();
         }
+    }
+
+    $output = json_encode([
+        'total' => count($articles),
+        'published' => $published,
+        'failed' => $failed,
+        'selected_account_ids' => $selectedAccountIds,
+        'media_jobs_created' => $createdJobs,
+        'media_jobs_started' => $startedJobs,
+        'auto_jobs' => $autoJobs,
+        'manual_jobs' => $manualJobs,
+        'auto_success' => $successfulAutoJobs,
+        'auto_failed' => $failedAutoJobs,
+        'auto_skipped' => $skippedAutoJobs,
+        'errors' => array_slice($errors, 0, 5),
+    ], JSON_UNESCAPED_UNICODE);
+
+    if ($autoJobs <= 0) {
+        return [
+            'success' => false,
+            'error' => "所选账号均为人工辅助账号，只创建了 {$manualJobs} 条待办，没有真实自动发布到外部平台。",
+            'output' => $output,
+        ];
+    }
+
+    if ($successfulAutoJobs <= 0) {
+        $errorText = !empty($errors) ? implode('；', array_slice($errors, 0, 3)) : '自动发布未返回成功状态';
+        return [
+            'success' => false,
+            'error' => "媒体分发没有成功发布到外部平台：{$errorText}",
+            'output' => $output,
+        ];
     }
 
     return [
         'success' => true,
-        'output'  => json_encode([
-            'total' => count($articles),
-            'published' => $published,
-            'failed' => $failed,
-            'selected_account_ids' => $selectedAccountIds,
-            'media_jobs_created' => $createdJobs,
-            'media_jobs_started' => $startedJobs,
-            'auto_jobs' => $autoJobs,
-            'manual_jobs' => $manualJobs,
-            'skipped_reason' => empty($selectedAccountIds) ? 'no_media_accounts_selected' : '',
-        ], JSON_UNESCAPED_UNICODE),
+        'output'  => $output,
         'data' => ['published' => $published]
     ];
 }

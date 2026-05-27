@@ -379,7 +379,7 @@ $page_title = '品牌入驻自动化';
                                     <input type="checkbox" class="automation-media-account mt-1 rounded border-gray-300 text-violet-600 focus:ring-violet-500" value="<?php echo (int) $account['id']; ?>" <?php echo $mode === 'browser' ? 'checked' : ''; ?>>
                                     <span class="min-w-0 flex-1">
                                         <span class="block font-medium text-gray-800"><?php echo htmlspecialchars($account['account_name']); ?></span>
-                                        <span class="text-xs text-gray-500"><?php echo htmlspecialchars($account['platform']); ?> · <?php echo $mode === 'browser' ? '浏览器自动发布，需要登录态' : '人工辅助，只创建待办不自动发出'; ?></span>
+                                        <span class="text-xs text-gray-500"><?php echo htmlspecialchars($account['platform']); ?> · <?php echo $mode === 'browser' ? '浏览器自动发布，需验证时会弹窗等待人工处理' : '人工辅助，只创建待办不自动发出'; ?></span>
                                     </span>
                                 </label>
                             <?php endforeach; ?>
@@ -635,9 +635,28 @@ function applyWorkflowPayload(data, logChanges) {
     updateDiagnosisDetail(data.diagnosis || null);
     if (data.runtime) {
         updateRuntimeStats(data.runtime, logChanges);
+        applyDistributionTruthFromRuntime();
         updateLiveStepSummaries();
     }
     updateCompletionIssues(logChanges);
+}
+
+function applyDistributionTruthFromRuntime() {
+    const runtime = workflowState.runtime || {};
+    const distributeStep = workflowState.steps.distribute;
+    if (!distributeStep || workflowState.status !== 'completed' || distributeStep.status !== 'completed') return;
+
+    const total = (runtime.distribution_queued || 0)
+        + (runtime.distribution_running || 0)
+        + (runtime.distribution_success || 0)
+        + (runtime.distribution_failed || 0)
+        + (runtime.distribution_manual_queued || 0);
+
+    if (total > 0 && (runtime.distribution_success || 0) === 0) {
+        distributeStep.status = 'error';
+        distributeStep.error = `媒体分发未实发成功：成功 0 / 总任务 ${total}`;
+        updateStepUI('distribute', distributeStep);
+    }
 }
 
 async function resumeLatestWorkflow() {
@@ -772,7 +791,9 @@ function renderStepOutputSummary(stepId, output) {
     if (stepId === 'keywords' && output.keyword_count !== undefined) return `${output.keyword_count} 个`;
     if (stepId === 'titles' && output.title_count !== undefined) return `${output.title_count} 个`;
     if (stepId === 'generate' && output.article_count !== undefined) return `${output.article_count} 篇`;
-    if (stepId === 'distribute' && output.media_jobs_created !== undefined) return `任务 ${output.media_jobs_created} · 自动 ${output.auto_jobs || 0} · 手动 ${output.manual_jobs || 0}`;
+    if (stepId === 'distribute' && output.media_jobs_created !== undefined) {
+        return `自动 ${output.auto_success || 0}/${output.auto_jobs || 0} · 手动 ${output.manual_jobs || 0} · 失败 ${output.auto_failed || 0}`;
+    }
     if (stepId === 'monitor' && output.keyword_count !== undefined) return `${output.keyword_count} 词`;
     if (stepId === 'panorama' && output.report_id !== undefined) return `档案 #${output.report_id}`;
     return '';
@@ -869,7 +890,7 @@ function updateLiveStepSummaries() {
     const success = runtime.distribution_success || 0;
     const failed = runtime.distribution_failed || 0;
     if (autoQueue || manual || success || failed) {
-        set('distribute', `自动待发 ${autoQueue} · 手动 ${manual} · 成功 ${success} · 失败 ${failed}`);
+        set('distribute', `待发 ${autoQueue} · 手动 ${manual} · 实发成功 ${success} · 失败 ${failed}`);
     }
 
     if (runtime.monitor_keywords !== undefined) {
@@ -945,7 +966,7 @@ function updateRuntimeStats(runtime, logChanges = false) {
         `待发 ${runtime.distribution_queued || 0}`,
         `发布中 ${runtime.distribution_running || 0}`,
         `手动 ${runtime.distribution_manual_queued || 0}`,
-        `成功 ${runtime.distribution_success || 0}`,
+        `实发成功 ${runtime.distribution_success || 0}`,
         `失败 ${runtime.distribution_failed || 0}`,
     ].join(' / ');
 

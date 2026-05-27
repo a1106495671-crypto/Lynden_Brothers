@@ -98,7 +98,7 @@ PROMPT;
     }
 }
 
-function distribution_execute_publish_job(PDO $db, int $jobId): array {
+function distribution_execute_publish_job(PDO $db, int $jobId, bool $interactiveBrowser = false): array {
     if (function_exists('set_time_limit')) {
         @set_time_limit(900);
     }
@@ -107,6 +107,7 @@ function distribution_execute_publish_job(PDO $db, int $jobId): array {
     if (!$job) {
         throw new InvalidArgumentException('发布任务不存在');
     }
+    $job['interactive_browser'] = $interactiveBrowser;
 
     $rateGate = distribution_publish_job_rate_gate($db, $job);
     if (!$rateGate['allowed']) {
@@ -129,6 +130,7 @@ function distribution_execute_publish_job(PDO $db, int $jobId): array {
         }
 
         $job = distribution_get_publish_job($db, $jobId);
+        if ($job) $job['interactive_browser'] = $interactiveBrowser;
     }
 
     try {
@@ -390,6 +392,36 @@ function distribution_browser_headless_enabled(): bool {
     return !in_array($value, ['0', 'false', 'off', 'no'], true);
 }
 
+function distribution_auto_publish_scope_for_article(PDO $db, int $articleId): array {
+    try {
+        $db->exec("ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS media_account_ids TEXT DEFAULT '[]'");
+    } catch (Throwable $e) {
+        return ['has_workflow_scope' => false, 'account_ids' => []];
+    }
+
+    $stmt = $db->prepare("
+        SELECT a.task_id, aw.media_account_ids
+        FROM articles a
+        LEFT JOIN automation_workflows aw ON aw.task_id = a.task_id
+        WHERE a.id = ? AND a.deleted_at IS NULL
+        ORDER BY aw.created_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$articleId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$row || empty($row['media_account_ids'])) {
+        return ['has_workflow_scope' => false, 'account_ids' => []];
+    }
+
+    $accountIds = json_decode((string) $row['media_account_ids'], true);
+    $accountIds = is_array($accountIds)
+        ? array_values(array_unique(array_filter(array_map('intval', $accountIds))))
+        : [];
+
+    return ['has_workflow_scope' => true, 'account_ids' => $accountIds];
+}
+
 function distribution_handle_article_published(PDO $db, int $articleId): array {
     if (!distribution_auto_publish_enabled()) {
         return ['created' => 0, 'started' => 0, 'skipped' => 'auto_publish_disabled'];
@@ -405,7 +437,12 @@ function distribution_handle_article_published(PDO $db, int $articleId): array {
             return ['created' => 0, 'started' => 0, 'skipped' => 'article_not_published'];
         }
 
-        $jobIds = distribution_enqueue_article_jobs($db, $articleId, []);
+        $scope = distribution_auto_publish_scope_for_article($db, $articleId);
+        if (!empty($scope['has_workflow_scope']) && empty($scope['account_ids'])) {
+            return ['created' => 0, 'started' => 0, 'skipped' => 'no_media_accounts_selected'];
+        }
+
+        $jobIds = distribution_enqueue_article_jobs($db, $articleId, $scope['account_ids']);
         $started = 0;
         if (!empty($jobIds) && distribution_auto_start_enabled()) {
             $started = distribution_start_article_queued_jobs_async($db, $articleId, count($jobIds));
@@ -505,7 +542,7 @@ function distribution_publish_zhihu_with_browser(array $job): array {
         'profileDir' => $profileDir,
         'loginWaitMs' => max(60, (int) env_value('DISTRIBUTION_LOGIN_WAIT_SECONDS', 600)) * 1000,
         'accountName' => (string) ($job['account_name'] ?? ''),
-        'headless' => distribution_browser_headless_enabled(),
+        'headless' => !distribution_truthy_value($job['interactive_browser'] ?? false) && distribution_browser_headless_enabled(),
     ];
 
     file_put_contents($inputFile, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -536,6 +573,13 @@ function distribution_publish_zhihu_with_browser(array $job): array {
     }
 
     return ['remote_url' => (string) ($output['remote_url'] ?? '')];
+}
+
+function distribution_truthy_value($value): bool {
+    if (is_bool($value)) {
+        return $value;
+    }
+    return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
 }
 
 function distribution_zhihu_write_url(string $configuredUrl = ''): string {
