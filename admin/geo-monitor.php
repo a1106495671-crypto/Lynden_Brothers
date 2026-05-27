@@ -592,11 +592,46 @@ $renewalItems = [
 
 
 $thresholdRows = [
-    ['type' => 'dropped_out', 'level' => 'HIGH', 'rule' => '核心词从进引用集掉出', 'result' => '自动触发应急 SOP'],
-    ['type' => 'hit_rate_fall', 'level' => 'HIGH', 'rule' => '命中率单周跌幅 ≥ 15pp', 'result' => '自动触发应急 SOP'],
-    ['type' => 'hit_rate_soft', 'level' => 'MEDIUM', 'rule' => '命中率单周跌幅 5-15pp', 'result' => '进入本周优化清单'],
-    ['type' => 'source_low', 'level' => 'MEDIUM', 'rule' => '引用来源数 < 20', 'result' => '补信源与案例资料'],
-    ['type' => 'normal_rotation', 'level' => 'LOW', 'rule' => '引用来源 40-60% 正常轮换', 'result' => '仅记录到月度复盘'],
+    [
+        'name'  => '品牌消失',
+        'level' => 'HIGH',
+        'icon'  => '🚨',
+        'rule'  => '品牌之前在 AI 回答中被提及，现在突然不再被提及了',
+        'cause' => 'AI 模型更新或竞品内容覆盖了品牌信源',
+        'action' => '立即排查并补充品牌内容',
+    ],
+    [
+        'name'  => '提及率骤降',
+        'level' => 'HIGH',
+        'icon'  => '📉',
+        'rule'  => '品牌在 AI 回答中的出现比例，一周内下降超过 15 个百分点',
+        'cause' => '竞品发布了大量新内容，挤压了品牌曝光',
+        'action' => '启动应急内容补充，压制竞品',
+    ],
+    [
+        'name'  => '提及率下滑',
+        'level' => 'MEDIUM',
+        'icon'  => '⚠️',
+        'rule'  => '品牌在 AI 回答中的出现比例，一周内下降 5-15 个百分点',
+        'cause' => '品牌内容更新频率不足，被竞品逐步追赶',
+        'action' => '纳入本周内容优化计划，补充高质量文章',
+    ],
+    [
+        'name'  => '信源不足',
+        'level' => 'MEDIUM',
+        'icon'  => '📄',
+        'rule'  => '品牌被 AI 引用的独立来源少于 20 个，可信度受限',
+        'cause' => '品牌内容传播渠道单一，缺乏多平台背书',
+        'action' => '拓展内容分发渠道，增加权威媒体引用',
+    ],
+    [
+        'name'  => '引用正常',
+        'level' => 'LOW',
+        'icon'  => '✅',
+        'rule'  => '品牌引用来源在 40-60% 范围内自然轮换，属于健康状态',
+        'cause' => 'AI 平台正常的内容更新机制',
+        'action' => '无需干预，仅记录到月度复盘',
+    ],
 ];
 
 $quotaRows = [
@@ -952,16 +987,25 @@ require_once __DIR__ . '/includes/header.php';
                     <?php endforeach; ?>
                 </div>
                 <div class="rounded-xl border border-gray-200 bg-white p-5">
-                    <h3 class="text-lg font-bold text-gray-900">MVP 告警阈值</h3>
+                    <h3 class="text-lg font-bold text-gray-900">告警规则说明</h3>
+                    <p class="mt-1 text-xs text-gray-500">系统根据以下规则自动生成异常告警</p>
                     <div class="mt-4 space-y-3">
                         <?php foreach ($thresholdRows as $row): ?>
-                            <div class="rounded-lg bg-gray-50 p-3">
-                                <div class="flex items-center justify-between gap-2">
-                                    <span class="text-sm font-bold text-gray-900"><?php echo htmlspecialchars($row['type'], ENT_QUOTES, 'UTF-8'); ?></span>
-                                    <span class="rounded-full px-2 py-1 text-xs font-bold <?php echo $row['level'] === 'HIGH' ? 'bg-red-100 text-red-700' : ($row['level'] === 'MEDIUM' ? 'bg-orange-100 text-orange-700' : 'bg-gray-200 text-gray-600'); ?>"><?php echo htmlspecialchars($row['level'], ENT_QUOTES, 'UTF-8'); ?></span>
+                            <div class="rounded-lg border-l-4 <?php echo $row['level'] === 'HIGH' ? 'border-red-400 bg-red-50' : ($row['level'] === 'MEDIUM' ? 'border-orange-400 bg-orange-50' : 'border-green-400 bg-green-50'); ?> p-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-base"><?php echo $row['icon']; ?></span>
+                                    <span class="text-sm font-bold text-gray-900"><?php echo htmlspecialchars($row['name'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                    <span class="rounded-full px-2 py-0.5 text-xs font-bold <?php echo $row['level'] === 'HIGH' ? 'bg-red-200 text-red-800' : ($row['level'] === 'MEDIUM' ? 'bg-orange-200 text-orange-800' : 'bg-green-200 text-green-800'); ?>"><?php echo htmlspecialchars($row['level'], ENT_QUOTES, 'UTF-8'); ?></span>
                                 </div>
-                                <p class="mt-2 text-xs leading-5 text-gray-600"><?php echo htmlspecialchars($row['rule'], ENT_QUOTES, 'UTF-8'); ?></p>
-                                <p class="mt-1 text-xs font-semibold text-gray-700"><?php echo htmlspecialchars($row['result'], ENT_QUOTES, 'UTF-8'); ?></p>
+                                <p class="mt-2 text-xs leading-5 text-gray-700"><?php echo htmlspecialchars($row['rule'], ENT_QUOTES, 'UTF-8'); ?></p>
+                                <div class="mt-2 flex items-start gap-1 text-xs text-gray-600">
+                                    <span class="mt-0.5 shrink-0 font-semibold text-gray-500">常见原因：</span>
+                                    <span><?php echo htmlspecialchars($row['cause'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                </div>
+                                <div class="mt-1 flex items-start gap-1 text-xs text-gray-600">
+                                    <span class="mt-0.5 shrink-0 font-semibold text-gray-500">建议处置：</span>
+                                    <span class="font-medium text-gray-800"><?php echo htmlspecialchars($row['action'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                </div>
                             </div>
                         <?php endforeach; ?>
                     </div>
