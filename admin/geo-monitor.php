@@ -214,65 +214,56 @@ $sr = static function(int $slot, int $min, int $max) use ($customerSeed): int {
     return $min + (abs((int) crc32($customerSeed . ':' . $slot)) % ($max - $min + 1));
 };
 
-// 基准可见率（品牌起点 30-55，行业均值 40-55）
-$brandBase    = $sr(0, 30, 55);
-$industryBase = $sr(1, 40, 55);
-// 最终可见率（品牌 65-92，行业 55-70）
-$brandPeak    = $sr(2, 65, 92);
-$industryPeak = $sr(3, 55, 70);
-
-// ── 趋势图：优先用真实 by_date 数据，回退 mock ───────────────────────
+// ── 趋势图：全部使用真实监测数据 ──────────────────────────────────────
 $trendPoints = [];
-if ($hasRealData && !empty($realMonitorData['by_date'])) {
-    // 生成以今天结尾的 90 天日期列表
-    $trEndDate = new DateTimeImmutable('today');
-    $trDateList = [];
-    for ($ti = 89; $ti >= 0; $ti--) {
-        $trDateList[] = $trEndDate->modify("-{$ti} days")->format('Y-m-d');
-    }
-    // 前向填充：无监测数据的天沿用最近一次真实比率
-    $trLastRate = null;
-    $trFilled   = [];
-    foreach ($trDateList as $td) {
-        if (isset($realMonitorData['by_date'][$td])) {
-            $trLastRate = $realMonitorData['by_date'][$td]['rate'];
-        }
-        $trFilled[$td] = $trLastRate;
-    }
-    // 反向填充前段空值（用第一个真实值补齐）
-    $trFirstKnown = null;
-    foreach ($trDateList as $td) { if ($trFilled[$td] !== null) { $trFirstKnown = $trFilled[$td]; break; } }
-    foreach ($trDateList as $td) { if ($trFilled[$td] === null) { $trFilled[$td] = $trFirstKnown ?? 0; } }
 
-    foreach ($trDateList as $tIdx => $td) {
-        $progress = $tIdx / 89;
-        $trendPoints[] = [
-            'date'     => (new DateTimeImmutable($td))->format('m-d'),
-            'brand'    => (int) $trFilled[$td],
-            'industry' => (int) min(80, max(30, round($industryBase + ($industryPeak - $industryBase) * $progress + ($sr($tIdx + 200, 0, 8) - 4) * 0.5))),
-            'origin'   => $tIdx === 0 ? 'radar_baseline' : 'live',
-            'partial'  => $tIdx === 89,
-        ];
+// 查询跨客户行业均值（所有客户的平均每日提及率）
+$industryByDate = [];
+try {
+    $stmtIndustryTrend = $db->prepare("
+        SELECT day, ROUND(AVG(rate), 0) AS avg_rate
+        FROM (
+            SELECT customer_id, queried_at AS day,
+                   CASE WHEN COUNT(*) > 0 THEN ROUND(COUNT(*) FILTER (WHERE brand_mentioned = TRUE)::numeric / COUNT(*) * 100, 0) ELSE 0 END AS rate
+            FROM geo_monitor_records
+            WHERE queried_at >= CURRENT_DATE - INTERVAL '90 days'
+            GROUP BY customer_id, queried_at
+        ) sub
+        GROUP BY day
+        ORDER BY day ASC
+    ");
+    $stmtIndustryTrend->execute();
+    foreach ($stmtIndustryTrend->fetchAll(PDO::FETCH_ASSOC) as $iRow) {
+        $industryByDate[$iRow['day']] = (int) $iRow['avg_rate'];
     }
-} else {
-    $trendStart = new DateTimeImmutable('2026-02-17');
-    for ($index = 0; $index < 90; $index++) {
-        $date = $trendStart->modify('+' . $index . ' days')->format('m-d');
-        $progress = $index / 89;
-        $noise    = ($sr($index + 100, 0, 12) - 6);
+} catch (Throwable $_it) {}
+
+if ($hasRealData && !empty($realMonitorData['by_date'])) {
+    // 只保留有真实监测数据的日期，不做前向填充
+    foreach ($realMonitorData['by_date'] as $td => $dData) {
         $trendPoints[] = [
-            'date'     => $date,
-            'brand'    => (int) min(98, max(20, round($brandBase + ($brandPeak - $brandBase) * $progress + $noise * 0.6))),
-            'industry' => (int) min(80, max(30, round($industryBase + ($industryPeak - $industryBase) * $progress + ($sr($index + 200, 0, 8) - 4) * 0.5))),
-            'origin'   => $index === 0 ? 'radar_baseline' : 'live',
-            'partial'  => $index === 89,
+            'date'      => (new DateTimeImmutable($td))->format('m-d'),
+            'brand'     => (int) $dData['rate'],
+            'industry'  => $industryByDate[$td] ?? null,
+            'has_industry' => isset($industryByDate[$td]),
+            'origin'    => 'live',
         ];
     }
 }
 
-$latestBrandRate    = end($trendPoints)['brand'];
-$latestIndustryRate = end($trendPoints)['industry'];
-$brandRiseTotal     = $latestBrandRate - $trendPoints[0]['brand'];
+// 获取最新行业均值（取最近一次跨客户平均，供雷达图使用）
+$latestIndustryRate = 50;
+if (!empty($industryByDate)) {
+    $latestIndustryRate = (int) end($industryByDate);
+}
+
+if (!empty($trendPoints)) {
+    $latestBrandRate = end($trendPoints)['brand'];
+    $brandRiseTotal  = $latestBrandRate - $trendPoints[0]['brand'];
+} else {
+    $latestBrandRate = 0;
+    $brandRiseTotal  = 0;
+}
 reset($trendPoints);
 
 // ── 雷达图：mock 保底值（不依赖真实数据时使用）─────────────────────
@@ -584,7 +575,7 @@ try {
 } catch (Throwable $_artE) {}
 
 $renewalItems = [
-    ['label' => '可见率提升', 'value' => $trendPoints[0]['brand'] . '% → ' . $latestBrandRate . '%', 'desc' => '从诊断基线到本月监测，客户可见率提升 ' . $brandRiseTotal . ' 个百分点。'],
+    ['label' => '可见率提升', 'value' => ($trendPoints[0]['brand'] ?? 0) . '% → ' . $latestBrandRate . '%', 'desc' => !empty($trendPoints) ? '从诊断基线到本月监测，客户可见率提升 ' . $brandRiseTotal . ' 个百分点。' : '持续监测后自动计算提升幅度。'],
     ['label' => '竞品挤出', 'value' => $sr(99, 1, 3) . ' 个', 'desc' => '推荐型问题中，竞品的平均排名被压到品牌之后。'],
     ['label' => '原话证据', 'value' => count($conversations) . ' 条', 'desc' => '可直接展示 AI 如何提到品牌、竞品和引用来源。'],
     ['label' => '续费触发', 'value' => 'T-14 自动', 'desc' => '合同到期日 ' . $contractEndAt . '，到期前 14 天自动生成证据包并提醒负责人。'],
@@ -732,12 +723,15 @@ require_once __DIR__ . '/includes/header.php';
                         <?php endforeach; ?>
                     </div>
                 </div>
+                <div id="trend-empty" class="hidden h-[360px] w-full flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 text-center">
+                    <svg class="mb-3 h-12 w-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                    <p class="text-sm font-medium text-gray-500">监测数据不足</p>
+                    <p class="mt-1 text-xs text-gray-400">请持续运行监测任务，至少积累 2 天数据后显示趋势图</p>
+                </div>
                 <svg id="trend-chart" class="h-[360px] w-full" viewBox="0 0 860 360" role="img" aria-label="数据趋势分析图"></svg>
                 <div class="mt-3 flex flex-wrap justify-center gap-5 text-sm text-gray-500">
                     <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-blue-500"></span>品牌提及率</span>
-                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-gray-500"></span>行业均值</span>
-                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-emerald-500"></span>基线</span>
-                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-orange-500"></span>partial 数据延后</span>
+                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-gray-500"></span>行业均值（跨客户）</span>
                 </div>
             </div>
         </div>
@@ -1422,10 +1416,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderTrendChart() {
         const svg = document.getElementById('trend-chart');
+        const emptyEl = document.getElementById('trend-empty');
         if (!svg) return;
         const activeRange = document.querySelector('[data-trend-range].bg-blue-600')?.dataset.trendRange || '30';
         const count = activeRange === '7' ? 7 : (activeRange === '30' ? 30 : trendPoints.length);
         const points = trendPoints.slice(-count);
+
+        // 数据不足时显示空状态
+        if (points.length < 2) {
+            svg.classList.add('hidden');
+            if (emptyEl) emptyEl.classList.remove('hidden');
+            return;
+        }
+        svg.classList.remove('hidden');
+        if (emptyEl) emptyEl.classList.add('hidden');
+
         const width = 860;
         const height = 360;
         const padX = 56;
@@ -1449,24 +1454,28 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<line x1="${plotStartX}" y1="${y}" x2="${plotEndX}" y2="${y}" stroke="#E5E7EB" />
                 <text x="${padX - 12}" y="${y + 4}" text-anchor="end" font-size="12" fill="#9CA3AF">${value}%</text>`;
         }).join('');
+        // 品牌柱子：只画有真实数据的点
         const bars = points.map((point, index) => {
             const center = xFor(index);
             const y = yFor(point.brand);
             const h = height - padBottom - y;
-            const fill = point.origin === 'radar_baseline' ? '#10B981' : (point.partial ? '#F97316' : '#4F83E8');
-            return `<rect x="${center - barWidth / 2}" y="${y}" width="${barWidth}" height="${h}" rx="7" fill="${fill}" opacity="0.84" />`;
+            return `<rect x="${center - barWidth / 2}" y="${y}" width="${barWidth}" height="${h}" rx="7" fill="#4F83E8" opacity="0.84" />`;
         }).join('');
-        const linePoints = points.map((point, index) => {
-            const x = xFor(index);
-            const y = yFor(point.industry);
-            return `${x.toFixed(1)},${y.toFixed(1)}`;
-        }).join(' ');
-        const industryLine = `<polyline points="${linePoints}" fill="none" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />`;
-        const dots = points.map((point, index) => {
-            const x = xFor(index);
-            const y = yFor(point.industry);
-            return `<circle cx="${x}" cy="${y}" r="${activeRange === '90' ? 3.2 : 5}" fill="#64748B" />`;
-        }).join('');
+        // 行业均值折线：只连接有行业数据的点
+        const industryPoints = points.filter(p => p.has_industry);
+        let industryLine = '';
+        let dots = '';
+        if (industryPoints.length >= 2) {
+            const lineCoords = industryPoints.map((point) => {
+                const idx = points.indexOf(point);
+                return `${xFor(idx).toFixed(1)},${yFor(point.industry).toFixed(1)}`;
+            }).join(' ');
+            industryLine = `<polyline points="${lineCoords}" fill="none" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />`;
+            dots = industryPoints.map((point) => {
+                const idx = points.indexOf(point);
+                return `<circle cx="${xFor(idx)}" cy="${yFor(point.industry)}" r="${activeRange === '90' ? 3.2 : 5}" fill="#64748B" />`;
+            }).join('');
+        }
         const labelEvery = activeRange === '7' ? 1 : (activeRange === '30' ? 7 : 15);
         const labels = points.map((point, index) => {
             const isLast = index === points.length - 1;

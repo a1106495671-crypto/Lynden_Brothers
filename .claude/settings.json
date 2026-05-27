@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(php -l /Users/jeon/Desktop/工作/geo-system/admin/geo-monitor.php)"
+    ]
+  }
+}
