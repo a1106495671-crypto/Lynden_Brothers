@@ -114,6 +114,8 @@ try {
     resetDailyAIUsage();
     autoPublishApprovedArticles();
     startDueDistributionJobs();
+    runMonitorAutoRespond();
+    runDailyTopicAuto();
 
     $executionTime = round(microtime(true) - $startTime, 2);
     log_message("轻量调度器执行完成，入队 {$queuedCount} 个任务，跳过 {$skippedCount} 个任务");
@@ -243,5 +245,63 @@ function startDueDistributionJobs() {
     $started = distribution_start_queued_jobs_async($db, $limit);
     if ($started > 0) {
         log_message("已启动到点媒体分发任务 {$started} 条");
+    }
+}
+
+function runDailyTopicAuto() {
+    global $projectRoot, $db;
+
+    $hour = (int) date('G');
+    if ($hour !== 7) {
+        return; // 只在每天 07:xx 执行
+    }
+
+    // 防止同一小时重复执行（检查 system_logs）
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) FROM system_logs WHERE type = 'topic_auto' AND created_at >= CURRENT_DATE + INTERVAL '7 hours' AND created_at < CURRENT_DATE + INTERVAL '8 hours'");
+        $stmt->execute();
+        if ((int)$stmt->fetchColumn() > 0) {
+            return;
+        }
+    } catch (Throwable $e) {
+        // system_logs 可能无此 type，忽略
+    }
+
+    $script = $projectRoot . '/bin/topic-auto.php';
+    if (!file_exists($script)) {
+        return;
+    }
+
+    log_message('[topic-auto] 开始每日选题自动化');
+    $output = shell_exec("php " . escapeshellarg($script) . " 2>&1");
+    if ($output) {
+        foreach (explode("\n", trim($output)) as $line) {
+            if (trim($line)) log_message('[topic-auto] ' . $line);
+        }
+    }
+
+    // 记录执行日志防重复
+    try {
+        $db->prepare("INSERT INTO system_logs (type, message, data) VALUES ('topic_auto', '每日选题自动化完成', '{}') ")->execute();
+    } catch (Throwable $e) {}
+}
+
+function runMonitorAutoRespond() {
+    global $projectRoot;
+    // 每天凌晨8点后、且仅在监测数据存在时运行一次
+    $hour = (int) date('G');
+    if ($hour < 8) {
+        return;
+    }
+    $autoRespondScript = $projectRoot . '/bin/geo-monitor-auto-respond.php';
+    if (file_exists($autoRespondScript)) {
+        $output = shell_exec("php " . escapeshellarg($autoRespondScript) . " 2>&1");
+        if ($output) {
+            foreach (explode("\n", trim($output)) as $line) {
+                if (trim($line)) {
+                    log_message('[auto-respond] ' . $line);
+                }
+            }
+        }
     }
 }
