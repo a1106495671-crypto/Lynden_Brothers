@@ -258,7 +258,7 @@ try {
 var _histories = <?= json_encode($historyByCustomer, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
 
 document.addEventListener('DOMContentLoaded', function() {
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') lucide.createIcons();
     var select = $('customerSelect');
     if (select) {
         select.addEventListener('change', onCustomerChange);
@@ -382,7 +382,7 @@ function renderArchive(customerId) {
         var created = formatDateTime(item.created_at);
         var rate = Number(item.overall_rate || 0).toFixed(1);
         var activeClass = idx === 0 ? 'border-indigo-200 bg-indigo-50/50' : 'border-gray-200 bg-white hover:bg-gray-50';
-        return '<button type="button" onclick="loadArchivedReport(\\'' + escapeJs(customerId) + '\\',' + idx + ')" class="text-left rounded-lg border ' + activeClass + ' p-3 transition">' +
+        return '<button type="button" data-report-index="' + idx + '" class="panorama-archive-item text-left rounded-lg border ' + activeClass + ' p-3 transition">' +
           '<div class="flex items-center justify-between gap-2 mb-1">' +
             '<span class="text-sm font-semibold text-gray-800 truncate">' + escapeHtml(item.brand_name || '历史报告') + '</span>' +
             '<span class="text-xs font-semibold text-indigo-600 bg-white rounded-full px-2 py-0.5">' + rate + '%</span>' +
@@ -391,7 +391,12 @@ function renderArchive(customerId) {
           '<div class="text-xs text-gray-400 mt-1 truncate">' + escapeHtml(item.model_used || 'AI') + ' · ' + Number(item.total_records || 0) + ' 条监测数据</div>' +
         '</button>';
     }).join('');
-    lucide.createIcons();
+    Array.prototype.forEach.call(archiveList.querySelectorAll('.panorama-archive-item'), function(btn) {
+        btn.addEventListener('click', function() {
+            loadArchivedReport(customerId, Number(btn.getAttribute('data-report-index') || 0));
+        });
+    });
+    if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 function loadArchivedReport(customerId, index) {
@@ -424,10 +429,6 @@ function escapeHtml(value) {
     return String(value || '').replace(/[&<>"']/g, function(ch) {
         return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch];
     });
-}
-
-function escapeJs(value) {
-    return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 /* ── Stat Ring SVG ── */
@@ -540,7 +541,7 @@ function renderResult(data) {
     $('promptPreview').textContent = _lastPrompt;
 
     $('resultArea').style.display = 'block';
-    lucide.createIcons();
+    if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 /* ── Markdown → HTML ── */
