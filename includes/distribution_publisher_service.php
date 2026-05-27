@@ -10,6 +10,94 @@ if (!defined('FEISHU_TREASURE')) {
 require_once __DIR__ . '/distribution_service.php';
 require_once __DIR__ . '/functions.php';
 
+/**
+ * 返回平台专属写作风格指引（与 GeoSemanticOptimizer::getPlatformGuide 对应）
+ */
+function distribution_platform_writing_guide(string $platform): string {
+    return match ($platform) {
+        'zhihu' => <<<GUIDE
+## 平台写作风格：知乎专业深度
+- 开头必须是问题或反常识断言，3 句以内引出核心结论
+- 用”首先/其次/最后”等明确的结构词分段
+- 每个论点后面必须跟一条可核验的数据或案例
+- 结尾给出明确的行动建议或判断标准
+- 字数建议 800-1500 字；不用 emoji
+GUIDE,
+        'xiaohongshu' => <<<GUIDE
+## 平台写作风格：小红书干货种草
+- 开头 1-2 句必须是可截图单独理解的核心结论（”结论先行”）
+- 每段不超过 3 行，大量换行，视觉轻松
+- 适量使用 emoji 作为段落分隔符（每 2-3 段一个）
+- 结尾用”💡 总结”或”✅ 行动清单”收束
+- 字数建议 300-600 字
+GUIDE,
+        'wechat' => <<<GUIDE
+## 平台写作风格：公众号深度阅读
+- 前 3 行必须制造悬念或强共鸣，让读者想继续读
+- 用小标题（加粗）把文章分成 3-5 个清晰章节
+- 每章节有 1 个具体故事或案例支撑论点
+- 结尾必须有明确的行动号召（收藏/分享/咨询）
+- 字数建议 1000-2000 字
+GUIDE,
+        default => <<<GUIDE
+## 平台写作风格：通用
+- 结论先行，直接回答核心问题
+- 每个论点配一条数据或案例
+- 结构清晰，易于 AI 引用
+GUIDE,
+    };
+}
+
+/**
+ * 用 AI 将文章改写为目标平台专属版本，并将结果缓存到 media_publish_jobs.adapted_content
+ */
+function distribution_adapt_content_for_platform(PDO $db, int $jobId, array &$job): void {
+    $platform = (string) ($job['platform'] ?? '');
+    $originalContent = (string) ($job['article_content'] ?? '');
+    $originalTitle   = (string) ($job['article_title'] ?: $job['title'] ?? '');
+
+    // 已有适配内容则直接用（避免重复调用 AI）
+    if (!empty($job['adapted_content'])) {
+        $job['article_content'] = $job['adapted_content'];
+        return;
+    }
+
+    // 内容为空或平台无需特殊适配（非知乎/小红书/公众号）时跳过
+    if ($originalContent === '' || !in_array($platform, ['zhihu', 'xiaohongshu', 'wechat'], true)) {
+        return;
+    }
+
+    $guide = distribution_platform_writing_guide($platform);
+    $prompt = <<<PROMPT
+你是 GEO 内容适配专家。请将以下文章改写为适合”{$platform}”平台的版本。
+
+{$guide}
+
+## 改写要求
+- 保留所有品牌名称、数据、事实，不得捏造新信息
+- 保留 GEO 结构：直接答案 → 判断标准 → 证据 → 边界对比
+- 仅调整语气、结构、长度，使其符合平台风格
+- 直接输出改写后的正文，不要加任何解释性前缀
+
+## 原始标题
+{$originalTitle}
+
+## 原始正文
+{$originalContent}
+PROMPT;
+
+    require_once __DIR__ . '/config.php';
+    $result = geo_call_ai($prompt, 2500, 0.6);
+    $adapted = trim($result['content'] ?? '');
+
+    if ($adapted !== '') {
+        $stmt = $db->prepare("UPDATE media_publish_jobs SET adapted_content = ? WHERE id = ?");
+        $stmt->execute([$adapted, $jobId]);
+        $job['adapted_content'] = $adapted;
+        $job['article_content'] = $adapted;
+    }
+}
+
 function distribution_execute_publish_job(PDO $db, int $jobId): array {
     if (function_exists('set_time_limit')) {
         @set_time_limit(900);
@@ -46,8 +134,11 @@ function distribution_execute_publish_job(PDO $db, int $jobId): array {
     try {
         $mode = (string) ($job['publish_mode'] ?? 'browser');
         if ($mode !== 'browser') {
-            throw new RuntimeException('当前账号不是“浏览器自动化”模式，无法自动发布。请将账号发布方式改为“浏览器自动化”。');
+            throw new RuntimeException('当前账号不是”浏览器自动化”模式，无法自动发布。请将账号发布方式改为”浏览器自动化”。');
         }
+
+        // 发布前：按平台风格 AI 改写文章内容
+        distribution_adapt_content_for_platform($db, $jobId, $job);
 
         $platform = (string) ($job['platform'] ?? '');
         $result = match ($platform) {

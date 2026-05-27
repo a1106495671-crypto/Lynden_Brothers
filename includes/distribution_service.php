@@ -262,6 +262,9 @@ function ensure_distribution_schema(PDO $db): void {
     if (!db_column_exists($db, 'media_publish_jobs', 'retry_count')) {
         $db->exec("ALTER TABLE media_publish_jobs ADD COLUMN retry_count INTEGER DEFAULT 0");
     }
+    if (!db_column_exists($db, 'media_publish_jobs', 'adapted_content')) {
+        $db->exec("ALTER TABLE media_publish_jobs ADD COLUMN adapted_content TEXT DEFAULT ''");
+    }
 
     $db->exec("CREATE INDEX IF NOT EXISTS idx_media_accounts_platform ON media_accounts(platform, status)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_media_accounts_filters ON media_accounts(media_type, portal_source, industry, region, status)");
