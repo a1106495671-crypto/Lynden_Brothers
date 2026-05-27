@@ -1037,8 +1037,7 @@ class DatabaseAdmin {
         $activeChatModels = (int) $this->pdo->query("
             SELECT COUNT(*)
             FROM ai_models
-            WHERE status = 'active'
-              AND COALESCE(NULLIF(model_type, ''), 'chat') = 'chat'
+            WHERE COALESCE(NULLIF(model_type, ''), 'chat') = 'chat'
         ")->fetchColumn();
 
         if ($activeChatModels === 0) {
