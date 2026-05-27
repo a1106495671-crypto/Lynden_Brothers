@@ -11,6 +11,16 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+如需导入随仓库提供的演示数据：
+
+```bash
+docker compose exec app php -r 'define("FEISHU_TREASURE", true); require "includes/config.php"; require "includes/database_admin.php";'
+docker compose exec -T postgres psql -U geo_user -d geo_system < docs/demo-data.sql
+```
+
+如果 `.env` 里改过数据库名或账号，请把命令里的 `geo_user`、`geo_system` 换成对应值。
+导入演示数据会清空并替换演示业务表，请只在新建或测试数据库执行，不要导入生产库。
+
 默认访问地址：
 
 ```text
@@ -46,6 +56,36 @@ APP_SECRET_KEY=replace-with-a-long-random-secret
 ```
 
 Docker Compose 会读取 `.env` 并传给 `app`、`worker`、`cron` 三个容器。
+
+## 演示数据
+
+仓库包含一份脱敏演示数据：
+
+```text
+docs/demo-data.sql
+```
+
+这份数据包含客户、关键词、标题、知识库、文章、雷达诊断、GEO 监测记录、告警和自动化历史记录，方便新部署直接看到完整页面效果。
+
+这份数据不包含：
+
+```text
+管理员密码
+API token
+真实 AI API Key
+媒体账号凭证
+浏览器登录态
+访问日志
+运行队列日志
+```
+
+如果需要从当前数据库重新生成演示数据：
+
+```bash
+php bin/export_demo_seed.php
+```
+
+重新生成后请检查 `docs/demo-data.sql`，确认没有误带敏感信息再提交。
 
 ## AI 模型配置
 
