@@ -95,6 +95,8 @@ try {
         'monitor_keywords' => 0,
         'monitor_records' => 0,
         'monitor_mentions' => 0,
+        'panorama_reports' => 0,
+        'latest_panorama_report_id' => null,
     ];
 
     if ($workflow['keyword_library_id']) {
@@ -290,6 +292,18 @@ try {
             $runtime['monitor_records'] = (int) ($monitorRow['total'] ?? 0);
             $runtime['monitor_mentions'] = (int) ($monitorRow['mentioned'] ?? 0);
         } catch (Exception $e) {}
+
+        try {
+            $pr = $db->prepare("
+                SELECT COUNT(*) AS total, MAX(id) AS latest_id
+                FROM geo_panorama_reports
+                WHERE customer_id = ?
+            ");
+            $pr->execute([$customerId]);
+            $panoramaRow = $pr->fetch(PDO::FETCH_ASSOC) ?: [];
+            $runtime['panorama_reports'] = (int) ($panoramaRow['total'] ?? 0);
+            $runtime['latest_panorama_report_id'] = $panoramaRow['latest_id'] ? (int) $panoramaRow['latest_id'] : null;
+        } catch (Exception $e) {}
     }
 
     $completionIssues = [];
@@ -320,6 +334,9 @@ try {
     }
     if (($runtime['monitor_keywords'] ?? 0) > 0 && (int) ($runtime['monitor_records'] ?? 0) === 0) {
         $completionIssues[] = 'GEO 监测未产出记录：关键词 ' . (int) $runtime['monitor_keywords'] . ' 个，记录 0 条';
+    }
+    if (($runtime['monitor_records'] ?? 0) > 0 && (int) ($runtime['panorama_reports'] ?? 0) === 0) {
+        $completionIssues[] = '全景诊断未生成档案';
     }
     if ($diagnosis && ($diagnosis['data_source'] ?? '') !== 'real_search') {
         $completionIssues[] = '雷达诊断不是实时搜索诊断：' . (($diagnosis['data_source'] ?? '') === 'site_crawl_estimate' ? '官网抓取估算' : '本地估算');

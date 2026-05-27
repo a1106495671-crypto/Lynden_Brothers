@@ -146,6 +146,7 @@ $page_title = '品牌入驻自动化';
                 ['id' => 'generate',         'no' => '10', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
                 ['id' => 'distribute',       'no' => '11', 'name' => '启动媒体分发',  'desc' => '按所选账号创建外部分发任务，自动账号尝试发布，人工账号创建待办',   'icon' => 'send',             'color' => 'emerald'],
                 ['id' => 'monitor',          'no' => '12', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
+                ['id' => 'panorama',         'no' => '13', 'name' => '生成全景诊断',  'desc' => '基于监测结果生成并保存全景诊断档案', 'icon' => 'scan-search',      'color' => 'blue'],
             ];
 
             $color_map = [
@@ -404,7 +405,7 @@ $page_title = '品牌入驻自动化';
 $additional_js = <<<'JS'
 <script>
 // ── 状态管理 ──────────────────────────────────────────────────────────────────
-const STEP_IDS = ['collect','diagnosis','keywords','titles','knowledge','customer','knowledge_graph','intent_mining','task','generate','distribute','monitor'];
+const STEP_IDS = ['collect','diagnosis','keywords','titles','knowledge','customer','knowledge_graph','intent_mining','task','generate','distribute','monitor','panorama'];
 const STEP_META = {
     collect:         { name: '搜集品牌资料',  icon: 'search' },
     diagnosis:       { name: '生成雷达诊断',  icon: 'radar' },
@@ -418,6 +419,7 @@ const STEP_META = {
     generate:        { name: '首篇文章生成',  icon: 'file-text' },
     distribute:      { name: '启动媒体分发',  icon: 'send' },
     monitor:         { name: '启动监测',      icon: 'activity' },
+    panorama:        { name: '生成全景诊断',  icon: 'scan-search' },
 };
 
 let workflowState = {
@@ -772,6 +774,7 @@ function renderStepOutputSummary(stepId, output) {
     if (stepId === 'generate' && output.article_count !== undefined) return `${output.article_count} 篇`;
     if (stepId === 'distribute' && output.media_jobs_created !== undefined) return `任务 ${output.media_jobs_created} · 自动 ${output.auto_jobs || 0} · 手动 ${output.manual_jobs || 0}`;
     if (stepId === 'monitor' && output.keyword_count !== undefined) return `${output.keyword_count} 词`;
+    if (stepId === 'panorama' && output.report_id !== undefined) return `档案 #${output.report_id}`;
     return '';
 }
 
@@ -872,6 +875,10 @@ function updateLiveStepSummaries() {
     if (runtime.monitor_keywords !== undefined) {
         set('monitor', `关键词 ${runtime.monitor_keywords || 0} · 记录 ${runtime.monitor_records || 0} · 提及 ${runtime.monitor_mentions || 0}`);
     }
+    if (runtime.panorama_reports !== undefined) {
+        const latest = runtime.latest_panorama_report_id ? ` · 最新 #${runtime.latest_panorama_report_id}` : '';
+        set('panorama', `档案 ${runtime.panorama_reports || 0} 份${latest}`);
+    }
 
     const diagStep = workflowState.steps?.diagnosis;
     if (diagStep?.output?.overall_score !== undefined) {
@@ -946,6 +953,7 @@ function updateRuntimeStats(runtime, logChanges = false) {
         `关键词 ${runtime.monitor_keywords || 0}`,
         `记录 ${runtime.monitor_records || 0}`,
         `提及 ${runtime.monitor_mentions || 0}`,
+        `全景 ${runtime.panorama_reports || 0}`,
     ].join(' / ');
 
     document.getElementById('runtime-generation').textContent = generationText;
@@ -966,6 +974,7 @@ function updateRuntimeStats(runtime, logChanges = false) {
         dr: runtime.distribution_running || 0,
         ds: runtime.distribution_success || 0,
         mr: runtime.monitor_records || 0,
+        pr: runtime.panorama_reports || 0,
     });
     if (logChanges && lastRuntimeSignature && signature !== lastRuntimeSignature) {
         addLog('info', `后台状态：${generationText}；${distributionText}；${monitorText}`);

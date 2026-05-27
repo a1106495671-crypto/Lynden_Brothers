@@ -86,6 +86,7 @@ try {
         ['generate',        10],
         ['distribute',      11],
         ['monitor',         12],
+        ['panorama',        13],
     ];
 
     $stepStmt = $db->prepare("

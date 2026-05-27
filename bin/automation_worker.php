@@ -166,6 +166,14 @@ function wf_parse_competitors(string $text): array {
     return array_values(array_unique($competitors));
 }
 
+function wf_truthy_bool($value): bool {
+    if (is_bool($value)) {
+        return $value;
+    }
+    $normalized = strtolower(trim((string) $value));
+    return in_array($normalized, ['1', 't', 'true', 'yes', 'y'], true);
+}
+
 function wf_extract_json_object(string $text): ?array {
     $content = trim($text);
     $content = preg_replace('/^```(?:json)?\s*/i', '', $content);
@@ -1243,6 +1251,244 @@ function step_monitor(PDO $db, array $wf): array {
     ];
 }
 
+function step_panorama(PDO $db, array $wf): array {
+    $customerId = trim((string) ($wf['customer_id'] ?? ''));
+    if ($customerId === '') {
+        return ['success' => false, 'error' => '缺少客户 ID，无法生成全景诊断'];
+    }
+
+    $deadline = time() + 600;
+    $recordCount = 0;
+    do {
+        $stmtCount = $db->prepare("
+            SELECT COUNT(*)
+            FROM geo_monitor_records
+            WHERE customer_id = ?
+              AND queried_at >= CURRENT_DATE - INTERVAL '29 days'
+        ");
+        $stmtCount->execute([$customerId]);
+        $recordCount = (int) $stmtCount->fetchColumn();
+        if ($recordCount > 0) {
+            break;
+        }
+        wf_log($wf['workflow_id'], "等待 GEO 监测记录产出后生成全景诊断...");
+        sleep(10);
+    } while (time() < $deadline);
+
+    if ($recordCount === 0) {
+        return ['success' => false, 'error' => 'GEO 监测尚未产出记录，无法生成全景诊断档案'];
+    }
+
+    $facts = [];
+    $stmtF = $db->prepare("SELECT fact_key, fact_value FROM geo_brand_facts WHERE customer_id = ?");
+    $stmtF->execute([$customerId]);
+    foreach ($stmtF->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $facts[(string) $row['fact_key']] = (string) $row['fact_value'];
+    }
+    $brandName = $facts['brand_name'] ?? (string) ($wf['brand_name'] ?? $customerId);
+
+    $stmtM = $db->prepare("
+        SELECT provider, query_text, brand_mentioned, mention_depth,
+               competitors_found, accuracy_score, queried_at::text AS day
+        FROM geo_monitor_records
+        WHERE customer_id = ?
+          AND queried_at >= CURRENT_DATE - INTERVAL '29 days'
+        ORDER BY queried_at DESC
+    ");
+    $stmtM->execute([$customerId]);
+    $records = $stmtM->fetchAll(PDO::FETCH_ASSOC);
+    if (empty($records)) {
+        return ['success' => false, 'error' => '未读取到可用于全景诊断的监测记录'];
+    }
+
+    $platformStats = [];
+    $kwStats = [];
+    $compOverall = [];
+    foreach ($records as $row) {
+        $provider = (string) ($row['provider'] ?? 'unknown');
+        $keyword = (string) ($row['query_text'] ?? '');
+        if (!isset($platformStats[$provider])) {
+            $platformStats[$provider] = ['total' => 0, 'hit' => 0];
+        }
+        $platformStats[$provider]['total']++;
+        if (wf_truthy_bool($row['brand_mentioned'] ?? false)) {
+            $platformStats[$provider]['hit']++;
+        }
+        if (!isset($kwStats[$keyword])) {
+            $kwStats[$keyword] = ['total' => 0, 'hit' => 0, 'comp' => []];
+        }
+        $kwStats[$keyword]['total']++;
+        if (wf_truthy_bool($row['brand_mentioned'] ?? false)) {
+            $kwStats[$keyword]['hit']++;
+        }
+        $found = json_decode((string) ($row['competitors_found'] ?? '[]'), true);
+        if (!is_array($found)) {
+            continue;
+        }
+        foreach ($found as $item) {
+            $name = is_array($item) ? trim((string) ($item['name'] ?? '')) : '';
+            if ($name === '') {
+                continue;
+            }
+            $kwStats[$keyword]['comp'][$name] = ($kwStats[$keyword]['comp'][$name] ?? 0) + 1;
+            $compOverall[$name] = ($compOverall[$name] ?? 0) + 1;
+        }
+    }
+
+    $stmtSignals = $db->prepare("
+        SELECT s.signal_key, d.name, s.score
+        FROM geo_diagnosis_runs r
+        JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+        JOIN geo_diagnosis_signal_scores s ON s.diagnosis_id = r.id
+        JOIN geo_diagnosis_signal_definitions d ON d.signal_key = s.signal_key
+        WHERE b.name = ?
+        ORDER BY r.created_at DESC, s.score ASC
+        LIMIT 6
+    ");
+    $stmtSignals->execute([$brandName]);
+    $signals = $stmtSignals->fetchAll(PDO::FETCH_ASSOC);
+
+    $stmtAlerts = $db->prepare("
+        SELECT alert_type, level, keyword, competitor_name, brand_rate, competitor_rate, detail
+        FROM geo_monitor_alerts
+        WHERE customer_id = ?
+          AND alerted_at >= CURRENT_DATE - INTERVAL '7 days'
+        ORDER BY CASE level WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
+        LIMIT 5
+    ");
+    $stmtAlerts->execute([$customerId]);
+    $alerts = $stmtAlerts->fetchAll(PDO::FETCH_ASSOC);
+
+    $templatePath = dirname(__DIR__) . '/prompts/panorama_diagnosis.md';
+    if (!is_file($templatePath)) {
+        return ['success' => false, 'error' => '全景诊断 prompt 模板不存在'];
+    }
+    $template = file_get_contents($templatePath);
+
+    $platformText = '';
+    foreach ($platformStats as $provider => $stats) {
+        $rate = $stats['total'] > 0 ? round($stats['hit'] / $stats['total'] * 100, 1) : 0;
+        $sampleNote = $stats['total'] < 5 ? '（样本不足，仅供参考）' : '';
+        $platformText .= "- {$provider}：提及率 {$rate}%（{$stats['hit']}/{$stats['total']}）{$sampleNote}\n";
+    }
+
+    $kwSorted = $kwStats;
+    uasort($kwSorted, static function ($a, $b): int {
+        $ra = $a['total'] > 0 ? $a['hit'] / $a['total'] : 0;
+        $rb = $b['total'] > 0 ? $b['hit'] / $b['total'] : 0;
+        return $ra <=> $rb;
+    });
+    $kwText = '';
+    foreach (array_slice($kwSorted, 0, 15, true) as $keyword => $stats) {
+        $rate = $stats['total'] > 0 ? round($stats['hit'] / $stats['total'] * 100, 1) : 0;
+        $compInfo = '';
+        if (!empty($stats['comp'])) {
+            arsort($stats['comp']);
+            $parts = [];
+            foreach (array_slice($stats['comp'], 0, 3, true) as $name => $count) {
+                $parts[] = "{$name}({$count}次)";
+            }
+            $compInfo = ' | 竞品出现：' . implode('、', $parts);
+        }
+        $kwText .= "- 「{$keyword}」提及率 {$rate}%（{$stats['hit']}/{$stats['total']}）{$compInfo}\n";
+    }
+
+    $compText = '';
+    if (!empty($compOverall)) {
+        arsort($compOverall);
+        foreach (array_slice($compOverall, 0, 8, true) as $name => $count) {
+            $rate = round($count / count($records) * 100, 1);
+            $compText .= "- {$name}：出现率 {$rate}%（{$count}/" . count($records) . "）\n";
+        }
+    } else {
+        $compText = "监测范围内暂无竞品被 AI 回答提及\n";
+    }
+
+    $signalText = '';
+    if (!empty($signals)) {
+        foreach ($signals as $signal) {
+            $score = (float) ($signal['score'] ?? 0);
+            $flag = $score < 40 ? '低' : ($score < 70 ? '中' : '高');
+            $signalText .= "- {$flag} {$signal['name']}：{$score}分\n";
+        }
+    } else {
+        $signalText = "暂无雷达诊断数据，可前往雷达诊断页生成\n";
+    }
+
+    $alertText = '';
+    if (!empty($alerts)) {
+        foreach ($alerts as $alert) {
+            $alertText .= "- [{$alert['level']}] {$alert['detail']}\n";
+        }
+    } else {
+        $alertText = "近 7 天无告警\n";
+    }
+
+    $prompt = wf_fill_template($template, [
+        'brand_name' => $brandName,
+        'master_sentence' => $facts['master_sentence'] ?? '未提供',
+        'core_services' => $facts['core_service'] ?? $facts['core_services'] ?? (string) ($wf['services'] ?? '未提供'),
+        'differentiator' => $facts['differentiator'] ?? '未提供',
+        'target_client' => $facts['target_client'] ?? '未提供',
+        'industry' => $facts['industry'] ?? (string) ($wf['industry'] ?? '未提供'),
+        'total_records' => (string) count($records),
+        'platform_count' => (string) count($platformStats),
+        'keyword_count' => (string) count($kwStats),
+        'platform_text' => rtrim($platformText),
+        'kw_text' => rtrim($kwText),
+        'comp_text' => rtrim($compText),
+        'signal_text' => rtrim($signalText),
+        'alert_text' => rtrim($alertText),
+    ]);
+
+    $reportMd = wf_call_ai($prompt, 4096, $wf['workflow_id'], '生成全景诊断');
+    $modelUsed = wf_last_ai_model() ?: 'unknown';
+    $totalHit = array_sum(array_map(static fn ($stats) => (int) $stats['hit'], $platformStats));
+    $totalAll = array_sum(array_map(static fn ($stats) => (int) $stats['total'], $platformStats));
+    $overallRate = $totalAll > 0 ? round($totalHit / $totalAll * 100, 1) : 0;
+
+    $stmtSave = $db->prepare("
+        INSERT INTO geo_panorama_reports (
+            customer_id, brand_name, report_md, prompt_used, model_used,
+            overall_rate, total_records, platform_stats, kw_stats,
+            comp_overall, signals, alerts
+        ) VALUES (
+            :customer_id, :brand_name, :report_md, :prompt_used, :model_used,
+            :overall_rate, :total_records, CAST(:platform_stats AS jsonb), CAST(:kw_stats AS jsonb),
+            CAST(:comp_overall AS jsonb), CAST(:signals AS jsonb), CAST(:alerts AS jsonb)
+        )
+        RETURNING id
+    ");
+    $stmtSave->execute([
+        ':customer_id' => $customerId,
+        ':brand_name' => $brandName,
+        ':report_md' => $reportMd,
+        ':prompt_used' => $prompt,
+        ':model_used' => $modelUsed,
+        ':overall_rate' => $overallRate,
+        ':total_records' => count($records),
+        ':platform_stats' => json_encode($platformStats, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':kw_stats' => json_encode($kwStats, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':comp_overall' => json_encode($compOverall, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':signals' => json_encode($signals, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':alerts' => json_encode($alerts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $reportId = (int) $stmtSave->fetchColumn();
+    wf_log($wf['workflow_id'], "全景诊断档案已生成：report_id={$reportId}");
+
+    return [
+        'success' => true,
+        'output' => json_encode([
+            'customer_id' => $customerId,
+            'report_id' => $reportId,
+            'overall_rate' => $overallRate,
+            'total_records' => count($records),
+            'model_used' => $modelUsed,
+        ], JSON_UNESCAPED_UNICODE),
+        'data' => ['panorama_report_id' => $reportId],
+    ];
+}
+
 function wf_start_geo_monitor_run_async(string $customerId): bool {
     $customerId = trim($customerId);
     if ($customerId === '') {
@@ -1295,6 +1541,7 @@ function wf_execute_step(PDO $db, array $wf, string $stepId): array {
         case 'generate':         return step_generate($db, $wf);
         case 'distribute':       return step_distribute($db, $wf);
         case 'monitor':          return step_monitor($db, $wf);
+        case 'panorama':         return step_panorama($db, $wf);
         default:
             throw new RuntimeException("未知步骤: {$stepId}");
     }
