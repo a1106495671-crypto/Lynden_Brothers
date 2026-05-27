@@ -135,7 +135,7 @@ foreach ($customers as $customer) {
 
     // 读该客户的监测关键词（含文章关联信息）
     $stmtKw = $db->prepare("
-        SELECT id, keyword, article_id, source_url
+        SELECT id, keyword, article_id, source_url, source_fingerprints, fingerprints_extracted_at
         FROM geo_monitor_keywords
         WHERE customer_id = ? AND enabled = TRUE
         ORDER BY id
@@ -1028,7 +1028,7 @@ function gm_call_provider_raw(string $pkey, array $pcfg, string $prompt): ?strin
     if (!empty($pcfg['api_key']) && !empty($pcfg['api_url'])) {
         return gm_call_openai_compatible($pcfg, [
             ['role' => 'user', 'content' => $prompt],
-        ], 400, 0.1);
+        ], 400, 0.1, $pkey);
     }
 
     $fields = $pcfg['fields'] ?? [];
@@ -1086,7 +1086,7 @@ function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?s
         return gm_call_openai_compatible($pcfg, [
             ['role' => 'system', 'content' => $systemPrompt],
             ['role' => 'user',   'content' => $query],
-        ], 800, 0.3);
+        ], 800, 0.3, $pkey);
     }
 
     $rawKey = citation_simulator_get_provider_key($pkey, 'api_key');
@@ -1161,7 +1161,7 @@ function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?s
     return $data['choices'][0]['message']['content'] ?? null;
 }
 
-function gm_call_openai_compatible(array $pcfg, array $messages, int $maxTokens = 800, float $temperature = 0.3): ?string {
+function gm_call_openai_compatible(array $pcfg, array $messages, int $maxTokens = 800, float $temperature = 0.3, string $providerLabel = ''): ?string {
     $apiKey = trim((string) ($pcfg['api_key'] ?? ''));
     $apiUrl = ai_build_chat_completions_url((string) ($pcfg['api_url'] ?? ''));
     $modelId = trim((string) ($pcfg['model_id'] ?? ''));
@@ -1189,10 +1189,12 @@ function gm_call_openai_compatible(array $pcfg, array $messages, int $maxTokens 
     ]);
     $raw = curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
     curl_close($ch);
 
     if ($raw === false || $code !== 200) {
-        gm_log("  [{$pkey}] 调用失败 HTTP {$code}");
+        $label = $providerLabel !== '' ? $providerLabel : ($modelId !== '' ? $modelId : 'provider');
+        gm_log("  [{$label}] 调用失败 HTTP {$code}" . ($error !== '' ? "：{$error}" : ''));
         return null;
     }
 

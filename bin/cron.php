@@ -114,6 +114,7 @@ try {
     resetDailyAIUsage();
     autoPublishApprovedArticles();
     startDueDistributionJobs();
+    startDailyGeoMonitor();
 
     $executionTime = round(microtime(true) - $startTime, 2);
     log_message("轻量调度器执行完成，入队 {$queuedCount} 个任务，跳过 {$skippedCount} 个任务");
@@ -244,4 +245,63 @@ function startDueDistributionJobs() {
     if ($started > 0) {
         log_message("已启动到点媒体分发任务 {$started} 条");
     }
+}
+
+function startDailyGeoMonitor() {
+    global $db;
+
+    if (env_value('GEO_MONITOR_CRON_ENABLED', 'true') === 'false') {
+        return;
+    }
+
+    try {
+        $keywordCount = (int) $db->query("SELECT COUNT(*) FROM geo_monitor_keywords WHERE enabled = TRUE")->fetchColumn();
+    } catch (Throwable $e) {
+        log_message('GEO监测关键词检查失败: ' . $e->getMessage());
+        return;
+    }
+    if ($keywordCount <= 0) {
+        return;
+    }
+
+    try {
+        $todayRecords = (int) $db->query("SELECT COUNT(*) FROM geo_monitor_records WHERE queried_at = CURRENT_DATE")->fetchColumn();
+    } catch (Throwable $e) {
+        log_message('GEO监测今日记录检查失败: ' . $e->getMessage());
+        return;
+    }
+    if ($todayRecords > 0) {
+        return;
+    }
+
+    $lastStarted = (string) get_setting('geo_monitor_last_started_at', '');
+    if ($lastStarted !== '' && strtotime($lastStarted) > time() - 6 * 3600) {
+        log_message('GEO监测今日暂无记录，但最近已启动过，等待后台任务完成');
+        return;
+    }
+
+    $script = realpath(dirname(__DIR__) . '/bin/geo-monitor-run.php') ?: '';
+    if ($script === '') {
+        log_message('GEO监测脚本不存在，跳过');
+        return;
+    }
+
+    $runner = env_value('GEO_MONITOR_PHP_RUNNER', '');
+    if ($runner === '') {
+        $runner = PHP_BINARY ?: 'php';
+    }
+    $parts = preg_split('/\s+/', trim($runner)) ?: [];
+    $parts = array_values(array_filter($parts, static fn($part) => $part !== ''));
+    $runnerCommand = empty($parts) ? 'php ' : implode(' ', array_map('escapeshellarg', $parts)) . ' ';
+
+    $logFile = __DIR__ . '/logs/geo_monitor_' . date('Y-m-d') . '.log';
+    $logDir = dirname($logFile);
+    if (!is_dir($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+
+    set_setting('geo_monitor_last_started_at', date('Y-m-d H:i:s'));
+    $command = $runnerCommand . escapeshellarg($script) . ' >> ' . escapeshellarg($logFile) . ' 2>&1 &';
+    exec($command);
+    log_message("已启动每日GEO监测：{$keywordCount} 个关键词");
 }

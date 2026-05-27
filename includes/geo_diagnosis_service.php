@@ -63,9 +63,13 @@ function geo_diagnosis_ensure_schema(PDO $db): void {
             weight NUMERIC(4,2) NOT NULL,
             raw_metric JSONB,
             details_json JSONB,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (diagnosis_id, signal_key)
         )
     ");
+    if (!db_column_exists($db, 'geo_diagnosis_signal_scores', 'updated_at')) {
+        $db->exec("ALTER TABLE geo_diagnosis_signal_scores ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+    }
     $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_scores_run ON geo_diagnosis_signal_scores(diagnosis_id)");
 
     $db->exec("
