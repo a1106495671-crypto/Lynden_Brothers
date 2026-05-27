@@ -115,16 +115,63 @@ class GeoSemanticOptimizer {
      * @param string $brandName   品牌名
      * @param string $scenario    A=品牌词, B=长尾问询, C=红线词
      */
+
+    public function getPlatformGuide(string $platform): string {
+        return match ($platform) {
+            'zhihu' => <<<GUIDE
+
+## 平台写作风格：知乎专业深度
+开头必须是问题或反常识断言，不得以品牌名或广告语开头。
+结构顺序：核心结论 → 论证链 → 可引用数据 → 真实案例 → FAQ。
+段落 200-400 字，逻辑严密，语气专业但不学术化，每段可独立引用。
+禁止：小标题堆砌、emoji、感叹号结尾、"干货来了/建议收藏"等引流套语。
+GUIDE,
+            'xiaohongshu' => <<<GUIDE
+
+## 平台写作风格：小红书干货种草
+开头 1-2 句必须是可截图单独理解的核心结论，吸引滑动停留。
+用带前缀小标题分层（✅ 适合 / ❌ 不适合 / 📌 核心逻辑 / 💡 实操建议），每节 100-200 字。
+语气亲切，第一人称叙述，emoji 总量不超过 8 个。
+结尾必须有「一句话总结」段落（15 字内，加粗）。
+GUIDE,
+            'wechat' => <<<GUIDE
+
+## 平台写作风格：公众号深度阅读
+前 3 行必须制造悬念或强共鸣（读者不滑走才能读完）。
+段落间保持留白，每段 150-250 字，整篇逻辑线：问题 → 原因 → 解法 → 验证。
+语气温和权威，不写促销话语。文末附「延伸阅读建议」1 条（指向品牌已有内容）。
+GUIDE,
+            default => <<<GUIDE
+
+## 平台写作风格：通用多平台
+按 GEO 写作结构要求组织内容，每段独立成可引用知识块，适合多平台分发。
+GUIDE,
+        };
+    }
+
+    /**
+     * 构建 GEO 增强 Prompt
+     *
+     * @param string $basePrompt  原始 Prompt
+     * @param string $title       文章标题
+     * @param string $keyword     核心关键词
+     * @param array  $facts       品牌事实数组
+     * @param string $brandName   品牌名
+     * @param string $scenario    A=品牌词, B=长尾问询, C=红线词
+     * @param string $platform    zhihu | xiaohongshu | wechat | general
+     */
     public function buildGeoPrompt(
         string $basePrompt,
         string $title,
         string $keyword,
         array $facts,
         string $brandName,
-        string $scenario = 'B'
+        string $scenario = 'B',
+        string $platform = 'general'
     ): string {
         $masterSentence = $this->getMasterSentence($facts);
         $factsBlock     = $this->buildBrandFactsBlock($facts, $brandName);
+        $platformGuide  = $this->getPlatformGuide($platform);
 
         // 场景化写作策略
         $scenarioGuide = match ($scenario) {
@@ -177,9 +224,10 @@ RED;
 
         // 组合最终 Prompt
         $geoPrefix = <<<GEO
-你是一名专业的GEO（生成式引擎优化）内容策略师。你的任务是撰写一篇能够被 AI 大模型引用、核验和复述的结构化知识文章。成功标准不是“看起来像文章”，而是每一段都能回答一个具体问题，并带有事实、边界或验证方法。
+你是一名专业的GEO（生成式引擎优化）内容策略师。你的任务是撰写一篇能够被 AI 大模型引用、核验和复述的结构化知识文章。成功标准不是”看起来像文章”，而是每一段都能回答一个具体问题，并带有事实、边界或验证方法。
 
 {$scenarioGuide}
+{$platformGuide}
 {$structureGuide}
 {$redLineGuide}
 {$masterSentenceGuide}

@@ -759,8 +759,14 @@ function distribution_enqueue_article_jobs(PDO $db, int $articleId, array $accou
     $insert = $db->prepare("
         INSERT INTO media_publish_jobs (
             article_id, account_id, platform, status, title, payload, scheduled_at, updated_at
-        ) VALUES (?, ?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, 'queued', ?, ?, ?, CURRENT_TIMESTAMP)
     ");
+
+    // 加载择时发布助手
+    $optimalTimeFile = __DIR__ . '/optimal_publish_time.php';
+    if (file_exists($optimalTimeFile)) {
+        require_once $optimalTimeFile;
+    }
 
     $payload = json_encode([
         'title' => $article['title'],
@@ -784,7 +790,16 @@ function distribution_enqueue_article_jobs(PDO $db, int $articleId, array $accou
             continue;
         }
 
-        $insert->execute([$articleId, $accountId, $account['platform'], $article['title'], $payload]);
+        // 择时发布：计算该平台最优发布时间
+        $scheduledAt = 'CURRENT_TIMESTAMP';
+        if (function_exists('get_optimal_publish_hour') && function_exists('next_occurrence_of_hour')) {
+            $optHour     = get_optimal_publish_hour($db, $account['platform']);
+            $scheduledAt = next_occurrence_of_hour($optHour);
+        } else {
+            $scheduledAt = date('Y-m-d H:i:s');
+        }
+
+        $insert->execute([$articleId, $accountId, $account['platform'], $article['title'], $payload, $scheduledAt]);
         $createdJobIds[] = function_exists('db_last_insert_id') ? db_last_insert_id($db, 'media_publish_jobs') : (int) $db->lastInsertId();
     }
 

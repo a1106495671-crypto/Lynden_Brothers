@@ -15,6 +15,7 @@ docs/git/repo/
 docs/git/state/
 **/.DS_Store
 .DS_Store
+deploy.sh
 .env
 .env.*
 !.env.delivery.example
@@ -52,3 +53,4 @@ uploads/tmp/
 *.zip
 node_modules/
 package-lock.json
+.gstack/

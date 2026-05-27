@@ -52,6 +52,9 @@ $menu_items = [
     'site-settings.php' => ['name' => '网站设置', 'icon' => 'settings'],
     'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield'],
     'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow'],
+    'onboard-chat.php'       => ['name' => '对话式入驻',     'icon' => 'message-square'],
+    'dynamic-workflow.php'   => ['name' => '动态工作流',     'icon' => 'cpu'],
+    'reference-finder.php'   => ['name' => '参考文章发现器', 'icon' => 'book-marked'],
     'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot'],
     'access-logs.php'        => ['name' => '访问日志',      'icon' => 'activity'],
     'theme-settings.php'     => ['name' => '前台主题',      'icon' => 'layout-template'],
@@ -71,12 +74,11 @@ $primary_nav_items = [
         'name' => '诊断',
         'icon' => 'radar',
         'children' => [
-            ['page' => 'geo-diagnosis.php',         'name' => '雷达诊断',     'desc' => '品牌 GEO 权威性诊断'],
-            ['page' => 'geo-panorama.php',           'name' => '全景诊断',     'desc' => 'AI可见度全景分析'],
-            ['page' => 'geo-intent.php',             'name' => '意图挖掘',     'desc' => '发现AI问答意图空白'],
-            ['page' => 'geo-knowledge-graph.php',    'name' => '知识图谱',     'desc' => '结构化品牌可引用事实'],
-            ['page' => 'citation-simulator.php',     'name' => '引用模拟器',   'desc' => '关键词引用机会推演'],
-            ['page' => 'ai-citation-preferences.php','name' => 'AI偏好对照表', 'desc' => '中文 AI 平台偏好'],
+            ['page' => 'geo-diagnosis.php',         'name' => '雷达诊断',       'desc' => '品牌 GEO 权威性诊断'],
+            ['page' => 'geo-panorama.php',           'name' => '全景诊断',       'desc' => 'AI可见度全景分析'],
+            ['page' => 'geo-intent.php',             'name' => '意图挖掘',       'desc' => '发现AI问答意图空白'],
+            ['page' => 'citation-simulator.php',     'name' => '引用模拟器',     'desc' => '关键词引用机会推演'],
+            ['page' => 'reference-finder.php',       'name' => '参考文章发现器', 'desc' => '提炼高引用写作风格Meta-Prompt'],
         ],
     ],
     ['type' => 'link', 'page' => 'sop-center.php', 'name' => '策略', 'icon' => 'book-open-check'],
@@ -85,13 +87,12 @@ $primary_nav_items = [
         'name' => '交付',
         'icon' => 'send',
         'children' => [
-            ['page' => 'tasks.php',           'name' => '任务管理',     'desc' => '任务派发与进度管理'],
-            ['page' => 'materials.php',        'name' => '素材管理',     'desc' => '关键词、标题、图片和知识库'],
-            ['page' => 'geo-content.php',      'name' => '内容生成',     'desc' => 'AI一键生成GEO文章'],
-            ['page' => 'geo-content-queue.php','name' => '批量生成队列', 'desc' => '策略日历批量生成文章'],
-            ['page' => 'articles.php',         'name' => '文章管理',     'desc' => '内容生产与审核'],
-            ['page' => 'geo-scorecard.php',    'name' => 'GEO质量看板',  'desc' => '三维评分分布与低分预警'],
-            ['page' => 'distribution.php',     'name' => '媒体分发',     'desc' => '平台铺设与发布'],
+            ['page' => 'onboard-chat.php',      'name' => '品牌入驻',   'desc' => 'AI对话收集信息，自动触发12步入驻'],
+            ['page' => 'tasks.php',             'name' => '任务管理',   'desc' => '任务派发、内容生成与进度管理'],
+            ['page' => 'materials.php',         'name' => '素材管理',   'desc' => '关键词、标题、图片和知识库'],
+            ['page' => 'articles.php',          'name' => '文章管理',   'desc' => '内容生产与审核'],
+            ['page' => 'distribution.php',      'name' => '媒体分发',   'desc' => '平台铺设与发布'],
+            ['page' => 'automation-workflow.php','name' => '高级：完整工作流','desc' => '12步全链路自动化（进阶）'],
         ],
     ],
     [
@@ -99,12 +100,11 @@ $primary_nav_items = [
         'name' => '监测',
         'icon' => 'activity',
         'children' => [
-            ['page' => 'geo-monitor.php',          'name' => 'GEO监测',   'desc' => '关键词引用率实时监测'],
-            ['page' => 'competitor-timeline.php',  'name' => '竞品对比',  'desc' => '品牌vs竞品提及率历史曲线'],
-            ['page' => 'geo-monitor-dashboard.php','name' => '监测大盘',  'desc' => '多客户数据概览大屏'],
-            ['page' => 'geo-article-impact.php',    'name' => '效果归因',  'desc' => '文章发布前后AI提及率对比'],
-            ['page' => 'geo-content-suggest.php',  'name' => '内容补充建议','desc' => '低提及率关键词→自动加入写作队列'],
-            ['page' => 'geo-roadmap.php',           'name' => '执行路线图','desc' => '进度与优先行动清单'],
+            ['page' => 'geo-monitor.php',          'name' => 'GEO监测',    'desc' => '关键词引用率实时监测'],
+            ['page' => 'geo-monitor-dashboard.php','name' => '监测大盘',   'desc' => '多客户数据概览大屏'],
+            ['page' => 'geo-scorecard.php',        'name' => 'GEO质量看板','desc' => '三维评分分布与低分预警'],
+            ['page' => 'competitor-timeline.php',  'name' => '竞品对比',   'desc' => '品牌vs竞品提及率历史曲线'],
+            ['page' => 'geo-article-impact.php',   'name' => '效果归因',   'desc' => '文章发布前后AI提及率对比'],
         ],
     ],
     ['type' => 'link', 'page' => 'ops-dashboard.php', 'name' => '运营', 'icon' => 'layout-dashboard'],
@@ -278,12 +278,11 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                         <button class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors" title="通知">
                             <i data-lucide="bell" class="w-5 h-5"></i>
                         </button>
-                        <!-- 自动化工作流 -->
-                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
+                        <!-- 对话式入驻快捷入口 -->
+                        <a href="<?php echo htmlspecialchars(admin_url('onboard-chat.php')); ?>"
                            class="relative rounded-md p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 transition-colors"
-                           title="品牌入驻自动化">
-                            <i data-lucide="workflow" class="w-5 h-5"></i>
-                            <span id="nav-automation-dot" class="absolute top-1 right-1 hidden h-2 w-2 rounded-full bg-emerald-400 ring-1.5 ring-white animate-pulse"></span>
+                           title="对话式品牌入驻">
+                            <i data-lucide="message-square" class="w-5 h-5"></i>
                         </a>
                     </div>
 
