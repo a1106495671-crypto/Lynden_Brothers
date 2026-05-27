@@ -460,7 +460,8 @@ if (isset($_GET['select']) && isset($customer_map[$_GET['select']])) {
     admin_redirect('customers.php?customer=' . rawurlencode($_GET['select']));
 }
 
-$selected_id = $_GET['customer'] ?? ($_SESSION['current_customer']['id'] ?? null);
+$is_switching_customer = isset($_GET['switch_customer']);
+$selected_id = $is_switching_customer ? null : ($_GET['customer'] ?? ($_SESSION['current_customer']['id'] ?? null));
 $selected_customer = $selected_id && isset($customer_map[$selected_id]) ? $customer_map[$selected_id] : null;
 
 if ($selected_customer) {
@@ -671,7 +672,7 @@ $stage_badge_classes = [
                         <div class="h-2 rounded-full bg-blue-600" style="width: <?php echo (int) $selected_customer['overall_pct']; ?>%;"></div>
                     </div>
                     <div class="mt-4 flex gap-2">
-                        <a href="<?php echo customer_h(admin_url('customers.php')); ?>" class="flex-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50">切换客户</a>
+                        <a href="<?php echo customer_h(admin_url('customers.php?switch_customer=1#customer-switcher')); ?>" class="flex-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50">切换客户</a>
                         <a href="<?php echo customer_h(admin_url('customers.php?clear_customer=1')); ?>" class="flex-1 rounded-md bg-slate-900 px-3 py-2 text-center text-sm font-semibold text-white hover:bg-slate-800">退出客户</a>
                     </div>
                 </div>
@@ -878,12 +879,14 @@ $stage_badge_classes = [
         </div>
     <?php endif; ?>
 
-    <div>
-        <section class="rounded-lg border border-gray-200 bg-white shadow-sm">
+    <div id="customer-switcher">
+        <section class="<?php echo $is_switching_customer ? 'ring-2 ring-blue-500 ring-offset-2' : ''; ?> rounded-lg border border-gray-200 bg-white shadow-sm">
             <div class="flex flex-col gap-4 border-b border-gray-200 p-5 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                    <h2 class="text-xl font-bold text-gray-900">客户列表</h2>
-                    <p class="mt-1 text-sm text-gray-500">登录后默认进入这里，先选客户，再进入各模块。</p>
+                    <h2 class="text-xl font-bold text-gray-900"><?php echo $is_switching_customer ? '选择要切换的客户' : '客户列表'; ?></h2>
+                    <p class="mt-1 text-sm text-gray-500">
+                        <?php echo $is_switching_customer ? '点击“设为当前”后，会切换顶部客户上下文，并进入该客户工作台。' : '登录后默认进入这里，先选客户，再进入各模块。'; ?>
+                    </p>
                 </div>
                 <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
                     <input id="customer-search" type="search" placeholder="搜索客户 / 行业 / 负责人" class="rounded-md border border-gray-300 px-3 py-2 text-sm md:col-span-2">
@@ -915,9 +918,15 @@ $stage_badge_classes = [
                     </thead>
                     <tbody id="customer-table-body" class="divide-y divide-gray-200 bg-white">
                         <?php foreach ($customers as $customer): ?>
-                            <tr class="customer-row hover:bg-gray-50" data-search="<?php echo customer_h($customer['name'] . ' ' . $customer['industry'] . ' ' . $customer['owner']); ?>" data-stage="<?php echo customer_h($customer['stage_key']); ?>" data-status="<?php echo customer_h($customer['service_status']); ?>">
+                            <?php $isCurrentCustomer = isset($_SESSION['current_customer']['id']) && $_SESSION['current_customer']['id'] === $customer['id']; ?>
+                            <tr class="customer-row <?php echo $isCurrentCustomer ? 'bg-blue-50/60' : 'hover:bg-gray-50'; ?>" data-search="<?php echo customer_h($customer['name'] . ' ' . $customer['industry'] . ' ' . $customer['owner']); ?>" data-stage="<?php echo customer_h($customer['stage_key']); ?>" data-status="<?php echo customer_h($customer['service_status']); ?>">
                                 <td class="px-5 py-4">
-                                    <div class="font-bold text-gray-900"><?php echo customer_h($customer['name']); ?></div>
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-bold text-gray-900"><?php echo customer_h($customer['name']); ?></span>
+                                        <?php if ($isCurrentCustomer): ?>
+                                            <span class="rounded-full bg-blue-600 px-2 py-0.5 text-xs font-bold text-white">当前</span>
+                                        <?php endif; ?>
+                                    </div>
                                     <div class="mt-1 text-sm text-gray-500"><?php echo customer_h($customer['domain']); ?></div>
                                 </td>
                                 <td class="px-5 py-4">

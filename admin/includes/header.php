@@ -412,7 +412,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                     <span class="text-xs text-slate-300"><?php echo htmlspecialchars($current_customer_context['stage_label'] ?? '阶段待确认'); ?></span>
                 </div>
                 <div class="flex items-center gap-2">
-                    <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="rounded-md border border-white/20 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10">切换客户</a>
+                    <a href="<?php echo htmlspecialchars(admin_url('customers.php?switch_customer=1#customer-switcher')); ?>" class="rounded-md border border-white/20 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10">切换客户</a>
                     <a href="<?php echo htmlspecialchars(admin_url('customers.php?clear_customer=1')); ?>" class="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-100">退出客户</a>
                 </div>
             </div>

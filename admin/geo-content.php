@@ -182,6 +182,91 @@ $page_header = '
 require_once __DIR__ . '/includes/header.php';
 ?>
 
+<style>
+  .generated-preview {
+    font-size: 15px;
+    line-height: 1.9;
+    color: #1f2937;
+  }
+  .generated-preview h1,
+  .generated-preview h2,
+  .generated-preview h3 {
+    color: #111827;
+    font-weight: 800;
+    letter-spacing: 0;
+  }
+  .generated-preview h1 {
+    margin: 0 0 1.25rem;
+    font-size: 1.875rem;
+    line-height: 1.25;
+  }
+  .generated-preview h2 {
+    margin: 1.75rem 0 0.75rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e5e7eb;
+    font-size: 1.25rem;
+    line-height: 1.35;
+  }
+  .generated-preview h3 {
+    margin: 1.25rem 0 0.5rem;
+    font-size: 1.05rem;
+  }
+  .generated-preview p {
+    margin: 0.65rem 0;
+  }
+  .generated-preview strong {
+    color: #0f172a;
+    font-weight: 800;
+  }
+  .generated-preview ul,
+  .generated-preview ol {
+    margin: 0.75rem 0 1rem 1.35rem;
+  }
+  .generated-preview li {
+    margin: 0.35rem 0;
+    padding-left: 0.15rem;
+  }
+  .generated-preview blockquote {
+    margin: 1rem 0;
+    border-left: 4px solid #2563eb;
+    background: #eff6ff;
+    padding: 0.75rem 1rem;
+    color: #1e3a8a;
+    border-radius: 0 0.5rem 0.5rem 0;
+  }
+  .generated-preview table {
+    width: 100%;
+    margin: 1rem 0;
+    border-collapse: collapse;
+    overflow: hidden;
+    border-radius: 0.5rem;
+    font-size: 0.9rem;
+  }
+  .generated-preview th,
+  .generated-preview td {
+    border: 1px solid #e5e7eb;
+    padding: 0.65rem 0.75rem;
+    text-align: left;
+  }
+  .generated-preview th {
+    background: #f8fafc;
+    font-weight: 700;
+    color: #334155;
+  }
+  .generated-preview code {
+    border-radius: 0.35rem;
+    background: #f1f5f9;
+    padding: 0.12rem 0.35rem;
+    color: #0f172a;
+    font-size: 0.9em;
+  }
+  .generated-preview a {
+    color: #2563eb;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+</style>
+
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
   <!-- 左：生成表单 + 结果 -->
@@ -255,23 +340,49 @@ require_once __DIR__ . '/includes/header.php';
     </div>
 
     <!-- 生成结果卡（隐藏，生成后显示） -->
-    <div id="resultCard" class="bg-white shadow rounded-lg hidden">
-      <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-        <h3 class="text-base font-medium text-gray-900">生成结果</h3>
-        <span id="modelUsed" class="text-xs text-gray-400"></span>
-      </div>
-      <div class="px-6 py-5 space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">标题</label>
-          <input id="resultTitle" type="text"
-            class="block w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-blue-500 focus:border-blue-500">
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">正文（Markdown）</label>
-          <textarea id="resultContent" rows="18"
-            class="block w-full border-gray-300 rounded-md shadow-sm text-sm font-mono focus:ring-blue-500 focus:border-blue-500"></textarea>
-        </div>
+    <div id="resultCard" class="bg-white shadow rounded-lg hidden overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex items-center gap-3">
+          <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+            <i data-lucide="file-text" class="h-5 w-5"></i>
+          </span>
+          <div>
+            <h3 class="text-base font-semibold text-gray-900">生成结果</h3>
+            <p id="resultMeta" class="mt-0.5 text-xs text-gray-400">生成后可预览、微调并保存为草稿</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="modelUsed" class="text-xs text-gray-400"></span>
+          <div class="inline-flex rounded-md border border-gray-200 bg-gray-50 p-1">
+            <button type="button" id="previewTab" onclick="setResultTab('preview')"
+              class="rounded px-3 py-1.5 text-xs font-semibold text-blue-700 bg-white shadow-sm">预览</button>
+            <button type="button" id="rawTab" onclick="setResultTab('raw')"
+              class="rounded px-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800">源文</button>
+          </div>
+        </div>
+      </div>
+      <div class="px-6 py-5 space-y-5">
+        <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-slate-50 to-white p-5">
+          <label class="block text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">标题</label>
+          <input id="resultTitle" type="text"
+            class="block w-full border-0 bg-transparent p-0 text-2xl font-bold leading-snug text-gray-950 shadow-none focus:ring-0">
+        </div>
+
+        <div id="previewPane" class="rounded-lg border border-gray-200 bg-white p-6">
+          <article id="resultPreview" class="generated-preview"></article>
+        </div>
+
+        <div id="rawPane" class="hidden">
+          <label class="mb-2 flex items-center justify-between text-sm font-medium text-gray-700">
+            <span>Markdown 源文</span>
+            <span class="text-xs font-normal text-gray-400">直接修改会同步更新预览</span>
+          </label>
+          <textarea id="resultContent" rows="18"
+            oninput="updateResultPreview()"
+            class="block w-full rounded-lg border-gray-300 bg-slate-950 px-4 py-3 font-mono text-sm leading-6 text-slate-100 shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+        </div>
+
+        <div class="flex flex-col gap-3 border-t border-gray-100 pt-5 sm:flex-row sm:items-center">
           <button onclick="saveDraft()"
             class="inline-flex items-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
             <i data-lucide="save" class="w-4 h-4 mr-2"></i>保存为草稿并进入编辑
@@ -324,10 +435,57 @@ require_once __DIR__ . '/includes/header.php';
 
 </div>
 
+<script src="/admin/assets/js/marked.min.js"></script>
 <script>
 const KEYWORD  = <?php echo json_encode($keyword); ?>;
 const CUSTOMER = <?php echo json_encode($customer); ?>;
 const ADMIN_PATH = <?php echo json_encode(ADMIN_BASE_PATH); ?>;
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function renderMarkdown(content) {
+  const source = String(content || '').trim();
+  if (!source) return '<p class="text-gray-400">暂无正文内容</p>';
+  if (typeof marked !== 'undefined') {
+    marked.setOptions({ breaks: true, gfm: true });
+    return marked.parse(source);
+  }
+  return '<p>' + escapeHtml(source).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+}
+
+function updateResultPreview() {
+  const title = document.getElementById('resultTitle').value.trim();
+  const content = document.getElementById('resultContent').value;
+  const preview = document.getElementById('resultPreview');
+  const words = content.replace(/\s+/g, '').length;
+  const sections = (content.match(/^#{2,3}\s+/gm) || []).length;
+
+  preview.innerHTML = renderMarkdown(content);
+  document.getElementById('resultMeta').textContent = `${words} 字 · ${sections} 个小节`;
+  if (title && !content.trim().startsWith('#')) {
+    preview.insertAdjacentHTML('afterbegin', '<h1>' + escapeHtml(title) + '</h1>');
+  }
+}
+
+function setResultTab(tabName) {
+  const isPreview = tabName === 'preview';
+  document.getElementById('previewPane').classList.toggle('hidden', !isPreview);
+  document.getElementById('rawPane').classList.toggle('hidden', isPreview);
+  document.getElementById('previewTab').className = isPreview
+    ? 'rounded px-3 py-1.5 text-xs font-semibold text-blue-700 bg-white shadow-sm'
+    : 'rounded px-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800';
+  document.getElementById('rawTab').className = isPreview
+    ? 'rounded px-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800'
+    : 'rounded px-3 py-1.5 text-xs font-semibold text-blue-700 bg-white shadow-sm';
+  if (isPreview) updateResultPreview();
+}
 
 function startGenerate() {
   const btn       = document.getElementById('genBtn');
@@ -362,6 +520,8 @@ function startGenerate() {
       document.getElementById('resultContent').value = data.content || '';
       document.getElementById('modelUsed').textContent = data.model_used ? '模型：' + data.model_used : '';
       resultCard.classList.remove('hidden');
+      updateResultPreview();
+      setResultTab('preview');
       resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     })
     .catch(e => {
