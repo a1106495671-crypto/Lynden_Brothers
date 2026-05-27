@@ -37,18 +37,32 @@ try {
     ta_log('建表失败: ' . $e->getMessage());
 }
 
-// 取所有有活跃任务且有监测数据的客户
-$stmt = $db->query("
-    SELECT DISTINCT t.geo_customer_id AS customer_id
-    FROM tasks t
-    WHERE t.status = 'active'
-      AND t.geo_customer_id IS NOT NULL
-      AND t.geo_customer_id != ''
-      AND EXISTS (
-          SELECT 1 FROM geo_monitor_keywords mk WHERE mk.customer_id = t.geo_customer_id
-      )
-");
-$customers = $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN) : [];
+// 取有监测关键词且有监测记录的客户；若任务表有 geo_customer_id 则优先按任务过滤
+$customers = [];
+try {
+    // 先尝试从 tasks 取（需要 geo_customer_id 列且有活跃任务）
+    $fromTasks = $db->query("
+        SELECT DISTINCT t.geo_customer_id AS customer_id
+        FROM tasks t
+        WHERE t.status = 'active'
+          AND t.geo_customer_id IS NOT NULL
+          AND t.geo_customer_id != ''
+          AND EXISTS (
+              SELECT 1 FROM geo_monitor_keywords mk WHERE mk.customer_id = t.geo_customer_id
+          )
+    ")->fetchAll(PDO::FETCH_COLUMN);
+    $customers = $fromTasks;
+} catch (Throwable $_) {}
+
+// 无活跃任务时，直接取有监测关键词的客户（生产环境冷启动兼容）
+if (empty($customers)) {
+    $stmt = $db->query("
+        SELECT DISTINCT customer_id
+        FROM geo_monitor_keywords
+        WHERE customer_id IS NOT NULL AND customer_id != ''
+    ");
+    $customers = $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN) : [];
+}
 
 if (empty($customers)) {
     ta_log('没有符合条件的客户，退出');
@@ -108,11 +122,21 @@ foreach ($customers as $cid) {
     }
 
     if (empty($weakKws)) {
-        ta_log("  {$cid}: 无监测数据，跳过");
-        continue;
+        // 无监测数据时，从 geo_monitor_keywords 直接取关键词，提及率标为"待监测"
+        $stmtMk = $db->prepare("SELECT keyword FROM geo_monitor_keywords WHERE customer_id = ? AND enabled = true LIMIT 5");
+        $stmtMk->execute([$cid]);
+        $mkKeywords = $stmtMk->fetchAll(PDO::FETCH_COLUMN);
+        if (empty($mkKeywords)) {
+            ta_log("  {$cid}: 无监测数据且无关键词，跳过");
+            continue;
+        }
+        foreach ($mkKeywords as $kw) {
+            $weakKws[] = ['query_text' => $kw, 'mention_rate' => 0, 'total' => 0];
+        }
+        ta_log("  {$cid}: 无监测记录，用 " . count($weakKws) . " 个关键词生成冷启动选题");
     }
 
-    $weakKwLines  = implode("\n", array_map(fn($k) => "- 「{$k['query_text']}」当前提及率 {$k['mention_rate']}%", $weakKws));
+    $weakKwLines = implode("\n", array_map(fn($k) => "- 「{$k['query_text']}」当前提及率 " . ($k['total'] > 0 ? $k['mention_rate'] . '%' : '待监测'), $weakKws));
     $recentTitleBlock = empty($recentTitles) ? '（暂无）' : implode("\n", array_map(fn($t) => "- {$t}", array_slice($recentTitles, 0, 15)));
 
     $prompt = <<<PROMPT
