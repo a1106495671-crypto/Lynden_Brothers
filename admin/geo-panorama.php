@@ -11,6 +11,11 @@ require_once __DIR__ . '/../includes/citation_simulator_service.php';
 require_admin_login();
 
 function gp_h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+function gp_json_decode($v, $fallback) {
+    if (is_array($v)) return $v;
+    $decoded = json_decode((string)$v, true);
+    return is_array($decoded) ? $decoded : $fallback;
+}
 
 // 客户列表
 $customers = [];
@@ -21,6 +26,29 @@ try {
         FROM geo_monitor_keywords k ORDER BY brand_name
     ");
     $customers = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {}
+
+$historyByCustomer = [];
+try {
+    $stmtH = $db->query("
+        SELECT id, customer_id, brand_name, report_md, prompt_used, model_used,
+               overall_rate, total_records, platform_stats, kw_stats, comp_overall,
+               signals, alerts, created_at::text AS created_at
+        FROM geo_panorama_reports
+        ORDER BY created_at DESC
+        LIMIT 80
+    ");
+    foreach ($stmtH->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $row['id'] = (int)$row['id'];
+        $row['overall_rate'] = (float)$row['overall_rate'];
+        $row['total_records'] = (int)$row['total_records'];
+        $row['platform_stats'] = gp_json_decode($row['platform_stats'] ?? '{}', []);
+        $row['kw_stats'] = gp_json_decode($row['kw_stats'] ?? '{}', []);
+        $row['comp_overall'] = gp_json_decode($row['comp_overall'] ?? '{}', []);
+        $row['signals'] = gp_json_decode($row['signals'] ?? '[]', []);
+        $row['alerts'] = gp_json_decode($row['alerts'] ?? '[]', []);
+        $historyByCustomer[$row['customer_id']][] = $row;
+    }
 } catch (Throwable $e) {}
 ?>
 <!DOCTYPE html>
@@ -100,6 +128,23 @@ try {
         生成全景诊断
       </button>
     </div>
+  </div>
+
+  <!-- Saved Reports -->
+  <div id="archiveBox" style="display:none" class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-slate-100 text-slate-600">
+          <i data-lucide="archive" class="w-4 h-4"></i>
+        </span>
+        <div>
+          <h2 class="text-sm font-semibold text-gray-900">历史诊断档案</h2>
+          <p class="text-xs text-gray-400">自动保存每次生成结果，可随时回看和导出</p>
+        </div>
+      </div>
+      <span id="archiveCount" class="text-xs text-gray-400"></span>
+    </div>
+    <div id="archiveList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
   </div>
 
   <!-- Loading -->
@@ -210,7 +255,16 @@ try {
 </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() { lucide.createIcons(); });
+var _histories = <?= json_encode($historyByCustomer, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
+
+document.addEventListener('DOMContentLoaded', function() {
+    lucide.createIcons();
+    var select = $('customerSelect');
+    if (select) {
+        select.addEventListener('change', onCustomerChange);
+        onCustomerChange();
+    }
+});
 
 var _timer = null, _seconds = 0, _lastPrompt = '', _promptOpen = false;
 
@@ -261,6 +315,7 @@ function startGeneration() {
             return;
         }
         _lastPrompt = data.prompt_used || '';
+        addHistoryRecord(customerId, data);
         renderResult(data);
     })
     .catch(function(err) {
@@ -273,6 +328,107 @@ function startGeneration() {
 }
 
 function $(id) { return document.getElementById(id); }
+
+function onCustomerChange() {
+    var customerId = $('customerSelect') ? $('customerSelect').value : '';
+    renderArchive(customerId);
+    var list = _histories[customerId] || [];
+    if (list.length > 0) {
+        $('emptyState').style.display = 'none';
+        $('errorBox').style.display = 'none';
+        $('loadingBox').style.display = 'none';
+        loadArchivedReport(customerId, 0);
+    } else {
+        $('resultArea').style.display = 'none';
+        $('emptyState').style.display = 'block';
+    }
+}
+
+function addHistoryRecord(customerId, data) {
+    var record = {
+        id: data.report_id || null,
+        customer_id: customerId,
+        brand_name: data.brand_name || '',
+        report_md: data.report_md || '',
+        prompt_used: data.prompt_used || '',
+        model_used: data.model_used || '',
+        overall_rate: data.overall_rate || 0,
+        total_records: data.total_records || 0,
+        platform_stats: data.platform_stats || {},
+        kw_stats: data.kw_stats || {},
+        comp_overall: data.comp_overall || {},
+        signals: data.signals || [],
+        alerts: data.alerts || [],
+        created_at: data.created_at || new Date().toISOString().slice(0, 19).replace('T', ' ')
+    };
+    if (!_histories[customerId]) _histories[customerId] = [];
+    _histories[customerId].unshift(record);
+    renderArchive(customerId);
+}
+
+function renderArchive(customerId) {
+    var list = _histories[customerId] || [];
+    var box = $('archiveBox');
+    var archiveList = $('archiveList');
+    if (!box || !archiveList) return;
+    if (list.length === 0) {
+        box.style.display = 'none';
+        archiveList.innerHTML = '';
+        return;
+    }
+    box.style.display = 'block';
+    $('archiveCount').textContent = list.length + ' 份档案';
+    archiveList.innerHTML = list.slice(0, 12).map(function(item, idx) {
+        var created = formatDateTime(item.created_at);
+        var rate = Number(item.overall_rate || 0).toFixed(1);
+        var activeClass = idx === 0 ? 'border-indigo-200 bg-indigo-50/50' : 'border-gray-200 bg-white hover:bg-gray-50';
+        return '<button type="button" onclick="loadArchivedReport(\\'' + escapeJs(customerId) + '\\',' + idx + ')" class="text-left rounded-lg border ' + activeClass + ' p-3 transition">' +
+          '<div class="flex items-center justify-between gap-2 mb-1">' +
+            '<span class="text-sm font-semibold text-gray-800 truncate">' + escapeHtml(item.brand_name || '历史报告') + '</span>' +
+            '<span class="text-xs font-semibold text-indigo-600 bg-white rounded-full px-2 py-0.5">' + rate + '%</span>' +
+          '</div>' +
+          '<div class="text-xs text-gray-500 flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3"></i>' + escapeHtml(created) + '</div>' +
+          '<div class="text-xs text-gray-400 mt-1 truncate">' + escapeHtml(item.model_used || 'AI') + ' · ' + Number(item.total_records || 0) + ' 条监测数据</div>' +
+        '</button>';
+    }).join('');
+    lucide.createIcons();
+}
+
+function loadArchivedReport(customerId, index) {
+    var item = (_histories[customerId] || [])[index];
+    if (!item) return;
+    _lastPrompt = item.prompt_used || '';
+    renderResult({
+        report_id: item.id,
+        report_md: item.report_md,
+        brand_name: item.brand_name,
+        overall_rate: item.overall_rate,
+        total_records: item.total_records,
+        platform_stats: item.platform_stats || {},
+        kw_stats: item.kw_stats || {},
+        comp_overall: item.comp_overall || {},
+        signals: item.signals || [],
+        alerts: item.alerts || [],
+        model_used: item.model_used,
+        prompt_used: item.prompt_used,
+        created_at: item.created_at
+    });
+}
+
+function formatDateTime(value) {
+    if (!value) return '';
+    return String(value).replace('T', ' ').replace(/\.\d+$/, '').slice(0, 19);
+}
+
+function escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, function(ch) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch];
+    });
+}
+
+function escapeJs(value) {
+    return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
 
 /* ── Stat Ring SVG ── */
 function makeRing(pct, color, label, sub) {
@@ -376,7 +532,8 @@ function renderResult(data) {
 
     // Report
     $('reportBrand').textContent = data.brand_name;
-    $('reportMeta').textContent = new Date().toLocaleDateString('zh-CN') + ' · ' + (data.model_used || 'AI') + ' 分析 · ' + data.total_records + ' 条监测数据';
+    var reportTime = data.created_at ? formatDateTime(data.created_at) : new Date().toLocaleString('zh-CN');
+    $('reportMeta').textContent = reportTime + ' · ' + (data.model_used || 'AI') + ' 分析 · ' + data.total_records + ' 条监测数据';
     $('reportBody').innerHTML = md2html(data.report_md);
 
     // Prompt preview

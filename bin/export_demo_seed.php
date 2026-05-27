@@ -49,6 +49,7 @@ $tables = [
     'geo_monitor_keywords',
     'geo_monitor_records',
     'geo_monitor_alerts',
+    'geo_panorama_reports',
     'sop_node_status',
     'automation_workflows',
     'automation_workflow_steps',

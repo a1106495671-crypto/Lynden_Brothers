@@ -1065,6 +1065,26 @@ class DatabaseAdmin {
         $this->pdo->exec("ALTER TABLE geo_intent_questions ADD COLUMN IF NOT EXISTS suggested_action TEXT DEFAULT ''");
         $this->pdo->exec("ALTER TABLE geo_intent_questions ADD COLUMN IF NOT EXISTS dimension VARCHAR(30) DEFAULT ''");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_geo_intent_questions_customer ON geo_intent_questions(customer_id, priority, covered)");
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS geo_panorama_reports (
+                id BIGSERIAL PRIMARY KEY,
+                customer_id VARCHAR(80) NOT NULL,
+                brand_name VARCHAR(200) NOT NULL DEFAULT '',
+                report_md TEXT NOT NULL,
+                prompt_used TEXT DEFAULT '',
+                model_used VARCHAR(200) DEFAULT '',
+                overall_rate NUMERIC(5,2) DEFAULT 0,
+                total_records INTEGER DEFAULT 0,
+                platform_stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+                kw_stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+                comp_overall JSONB NOT NULL DEFAULT '{}'::jsonb,
+                signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+                alerts JSONB NOT NULL DEFAULT '[]'::jsonb,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_geo_panorama_reports_customer ON geo_panorama_reports(customer_id, created_at DESC)");
     }
 
     private function ensureCustomerSchema(): void {

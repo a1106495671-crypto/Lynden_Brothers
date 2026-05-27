@@ -5,7 +5,7 @@
  * Body: { "customer_id": "xxx" }
  */
 define('FEISHU_TREASURE', true);
-set_time_limit(120);
+set_time_limit(300);
 session_start();
 
 require_once __DIR__ . '/../../includes/config.php';
@@ -248,9 +248,44 @@ $totalHit = 0;
 $totalAll = 0;
 foreach ($platformStats as $s) { $totalHit += $s['hit']; $totalAll += $s['total']; }
 $overallRate = $totalAll > 0 ? round($totalHit / $totalAll * 100, 1) : 0;
+$modelUsed = $aiResult['model_used'] ?? 'unknown';
+
+$reportId = null;
+try {
+    $stmtSave = $db->prepare("
+        INSERT INTO geo_panorama_reports (
+            customer_id, brand_name, report_md, prompt_used, model_used,
+            overall_rate, total_records, platform_stats, kw_stats,
+            comp_overall, signals, alerts
+        ) VALUES (
+            :customer_id, :brand_name, :report_md, :prompt_used, :model_used,
+            :overall_rate, :total_records, CAST(:platform_stats AS jsonb), CAST(:kw_stats AS jsonb),
+            CAST(:comp_overall AS jsonb), CAST(:signals AS jsonb), CAST(:alerts AS jsonb)
+        )
+        RETURNING id
+    ");
+    $stmtSave->execute([
+        ':customer_id' => $customerId,
+        ':brand_name' => $brandName,
+        ':report_md' => $reportMd,
+        ':prompt_used' => $prompt,
+        ':model_used' => $modelUsed,
+        ':overall_rate' => $overallRate,
+        ':total_records' => $totalRecords,
+        ':platform_stats' => json_encode($platformStats, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':kw_stats' => json_encode($kwStats, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':comp_overall' => json_encode($compOverall, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':signals' => json_encode($signals, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ':alerts' => json_encode($alerts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $reportId = $stmtSave->fetchColumn();
+} catch (Throwable $e) {
+    error_log('保存 GEO 全景诊断档案失败: ' . $e->getMessage());
+}
 
 echo json_encode([
     'success'       => true,
+    'report_id'     => $reportId,
     'report_md'     => $reportMd,
     'brand_name'    => $brandName,
     'overall_rate'  => $overallRate,
@@ -260,6 +295,7 @@ echo json_encode([
     'comp_overall'  => $compOverall,
     'signals'       => $signals,
     'alerts'        => $alerts,
-    'model_used'    => $aiResult['model_used'] ?? 'unknown',
+    'model_used'    => $modelUsed,
     'prompt_used'   => $prompt,
+    'created_at'    => date('Y-m-d H:i:s'),
 ]);
