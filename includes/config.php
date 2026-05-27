@@ -257,21 +257,74 @@ function geo_call_ai(string $prompt, int $maxTokens = 3000, float $temperature =
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $payload,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 90,
+        CURLOPT_CONNECTTIMEOUT => 20,
+        CURLOPT_TIMEOUT        => 240,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: application/json',
             'Authorization: Bearer ' . $cfg['api_key'],
         ],
     ]);
+    if (function_exists('apply_curl_network_defaults')) {
+        apply_curl_network_defaults($ch);
+    }
     $raw  = curl_exec($ch);
     $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    $curlErrno = curl_errno($ch);
     curl_close($ch);
+
+    if ($curlError !== '') {
+        if (function_exists('log_ai_api_call')) {
+            log_ai_api_call([
+                'source' => 'geo_call_ai',
+                'model_id' => $cfg['model_id'],
+                'api_url' => $apiUrl,
+                'http_code' => 0,
+                'ok' => false,
+                'error' => "cURL {$curlErrno}: {$curlError}",
+            ]);
+        }
+        return ['content' => '', 'model_used' => 'none', 'error' => "cURL {$curlErrno}: {$curlError}"];
+    }
+
+    $data = json_decode((string) $raw, true);
     if ($code === 200) {
-        $data = json_decode($raw, true);
-        $content = $data['choices'][0]['message']['content'] ?? '';
+        $message = $data['choices'][0]['message'] ?? [];
+        $content = is_array($message) ? (string) ($message['content'] ?? '') : '';
+        if ($content === '' && is_array($message) && !empty($message['reasoning_content'])) {
+            $content = (string) $message['reasoning_content'];
+        }
+        if (function_exists('log_ai_api_call')) {
+            log_ai_api_call([
+                'source' => 'geo_call_ai',
+                'model_id' => $cfg['model_id'],
+                'api_url' => $apiUrl,
+                'http_code' => $code,
+                'ok' => $content !== '',
+                'prompt_tokens' => is_array($data) ? ($data['usage']['prompt_tokens'] ?? null) : null,
+                'completion_tokens' => is_array($data) ? ($data['usage']['completion_tokens'] ?? null) : null,
+                'total_tokens' => is_array($data) ? ($data['usage']['total_tokens'] ?? null) : null,
+                'error' => $content === '' ? 'empty_content' : '',
+            ]);
+        }
         return ['content' => $content, 'model_used' => $cfg['model_id'], 'error' => null];
     }
-    return ['content' => '', 'model_used' => 'none', 'error' => "HTTP {$code}"];
+
+    $errMsg = is_array($data) ? (string) ($data['error']['message'] ?? $data['message'] ?? '') : '';
+    if ($errMsg === '') {
+        $errMsg = trim(mb_substr((string) $raw, 0, 300));
+    }
+    if (function_exists('log_ai_api_call')) {
+        log_ai_api_call([
+            'source' => 'geo_call_ai',
+            'model_id' => $cfg['model_id'],
+            'api_url' => $apiUrl,
+            'http_code' => $code,
+            'ok' => false,
+            'error' => $errMsg,
+        ]);
+    }
+    return ['content' => '', 'model_used' => 'none', 'error' => "HTTP {$code}" . ($errMsg !== '' ? ": {$errMsg}" : '')];
 }
 
 function apply_curl_network_defaults($ch) {
