@@ -1,0 +1,15 @@
+FROM mcr.microsoft.com/playwright:v1.44.0-jammy
+
+WORKDIR /app
+
+COPY playwright-monitor/package.json ./
+RUN npm install --production
+
+# Install Chromium browser
+RUN npx playwright install chromium
+
+COPY playwright-monitor/ ./
+
+EXPOSE 3456
+
+CMD ["node", "server.js"]

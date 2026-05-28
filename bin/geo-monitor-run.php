@@ -18,6 +18,7 @@ require_once $projectRoot . '/includes/config.php';
 require_once $projectRoot . '/includes/database_admin.php';
 require_once $projectRoot . '/includes/citation_simulator_service.php';
 require_once $projectRoot . '/includes/geo_monitor_alert_service.php';
+require_once $projectRoot . '/includes/playwright_monitor_client.php';
 
 set_time_limit(600);
 
@@ -120,6 +121,15 @@ if (empty($providers)) {
 
 gm_log('可用提供商：' . implode(', ', array_keys($providers)));
 
+// ── Playwright 浏览器监测（最准确模式） ────────────────────────────────────
+$playwrightAvailable = playwright_is_available();
+$playwrightPlatforms = ['kimi', 'deepseek', 'doubao', 'tongyi'];
+if ($playwrightAvailable) {
+    gm_log('Playwright 服务在线，支持平台：' . implode(', ', $playwrightPlatforms));
+} else {
+    gm_log('Playwright 服务未启动，回退到 API 模式（精度较低）');
+}
+
 // ── 今日日期 ──────────────────────────────────────────────────────────────
 $today = date('Y-m-d');
 
@@ -201,13 +211,38 @@ foreach ($customers as $customer) {
                 continue;
             }
 
-            // 调用 AI
+            // 优先使用 Playwright 真实浏览器（最准确）
             $response = null;
-            try {
-                $response = geo_monitor_call_provider($pkey, $providers[$pkey], $kw);
-            } catch (Throwable $e) {
-                gm_log("  [{$pkey}] 调用失败：" . $e->getMessage());
-                continue;
+            $usedPlaywright = false;
+
+            if ($playwrightAvailable && in_array($pkey, $playwrightPlatforms, true)) {
+                try {
+                    $pwCookies = playwright_get_cookies($db, $pkey);
+                    if (!empty($pwCookies)) {
+                        gm_log("  [{$pkey}] 使用 Playwright 真实浏览器");
+                        $pwResult = playwright_monitor($pkey, $kw, $cname, $pwCookies);
+                        if ($pwResult['success']) {
+                            $response = $pwResult['response_text'];
+                            $usedPlaywright = true;
+                        } else {
+                            gm_log("  [{$pkey}] Playwright 失败（{$pwResult['error']}），回退 API");
+                        }
+                    } else {
+                        gm_log("  [{$pkey}] 未配置 Cookie，回退 API");
+                    }
+                } catch (Throwable $e) {
+                    gm_log("  [{$pkey}] Playwright 异常：" . $e->getMessage() . "，回退 API");
+                }
+            }
+
+            // Playwright 未用时，回退 API
+            if (!$usedPlaywright) {
+                try {
+                    $response = geo_monitor_call_provider($pkey, $providers[$pkey] ?? [], $kw);
+                } catch (Throwable $e) {
+                    gm_log("  [{$pkey}] 调用失败：" . $e->getMessage());
+                    continue;
+                }
             }
 
             if ($response === null) {

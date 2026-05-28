@@ -892,6 +892,7 @@ require_once __DIR__ . '/includes/header.php';
                             </p>
                             <div class="mt-5 flex flex-wrap justify-center gap-3 text-sm">
                                 <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="rounded-lg border border-gray-300 bg-white px-4 py-2 font-semibold text-gray-700 hover:bg-gray-50">检查客户关键词</a>
+                                <a href="<?php echo htmlspecialchars(admin_url('monitor-cookies.php')); ?>" class="rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 font-semibold text-indigo-700 hover:bg-indigo-100">🤖 配置 AI 平台 Cookie</a>
                                 <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="rounded-lg bg-slate-900 px-4 py-2 font-semibold text-white hover:bg-slate-700">刷新监测页</a>
                             </div>
                         </div>

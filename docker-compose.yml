@@ -91,6 +91,19 @@ services:
     networks:
       - geo-net
 
+  playwright:
+    build:
+      context: .
+      dockerfile: Dockerfile.playwright
+    container_name: geo-playwright
+    restart: always
+    environment:
+      - PORT=3456
+      - TZ=Asia/Shanghai
+    networks:
+      - geo-net
+    shm_size: '2gb'
+
 volumes:
   geo-pgdata:
 
