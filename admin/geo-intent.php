@@ -31,6 +31,70 @@ try {
     $db->exec("ALTER TABLE geo_intent_questions ADD COLUMN IF NOT EXISTS dimension VARCHAR(30) DEFAULT ''");
 } catch (Throwable $e) {}
 
+// ── AJAX: 从监测缺口导入 P0 意图问题 ──
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'import_from_monitor') {
+    header('Content-Type: application/json; charset=utf-8');
+    $cid = trim($_POST['customer_id'] ?? '');
+    if ($cid === '') { echo json_encode(['error' => '未指定客户']); exit; }
+
+    // 获取品牌名用于区分品牌词
+    $brandRow = $db->prepare("SELECT fact_value FROM geo_brand_facts WHERE customer_id=? AND fact_key='brand_name' LIMIT 1");
+    $brandRow->execute([$cid]);
+    $brandName = strtolower((string)($brandRow->fetchColumn() ?: $cid));
+    $brandWords = array_filter(preg_split('/[\s\-_\/]+/u', $brandName), fn($w) => mb_strlen($w) >= 2);
+
+    // 找出非品牌词、引用率为0的关键词
+    $stmt = $db->prepare("
+        SELECT query_text,
+               COUNT(*) AS total,
+               SUM(CASE WHEN brand_mentioned THEN 1 ELSE 0 END) AS cited
+        FROM geo_monitor_records
+        WHERE customer_id = ?
+        GROUP BY query_text
+        HAVING SUM(CASE WHEN brand_mentioned THEN 1 ELSE 0 END) = 0
+    ");
+    $stmt->execute([$cid]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $imported = 0;
+    $skipped  = 0;
+    $ins = $db->prepare("
+        INSERT INTO geo_intent_questions
+            (customer_id, theme, question, intent_type, priority, covered, reason, suggested_action, dimension)
+        VALUES (?, ?, ?, 'question', 'P0', FALSE, ?, ?, ?)
+        ON CONFLICT DO NOTHING
+    ");
+
+    // 维度猜测规则
+    function guess_dimension(string $q): string {
+        if (preg_match('/推荐|选择|哪家|哪个|对比|区别|vs|VS/u', $q)) return '购买决策';
+        if (preg_match('/竞品|PK|比较|和.*的区别/u', $q)) return '竞品对比';
+        if (preg_match('/风险|靠谱|值不值|骗|假/u', $q)) return '风险质疑';
+        if (preg_match('/怎么|如何|方法|步骤|教程/u', $q)) return '场景问题';
+        if (preg_match('/什么是|定义|原理|概念/u', $q)) return '品类发现';
+        if (preg_match('/行业|趋势|未来|市场/u', $q)) return '行业趋势';
+        return '品类发现';
+    }
+
+    foreach ($rows as $r) {
+        $q   = $r['query_text'];
+        $ql  = mb_strtolower($q);
+        // 跳过品牌词
+        $isBranded = false;
+        foreach ($brandWords as $w) { if (mb_strpos($ql, $w) !== false) { $isBranded = true; break; } }
+        if ($isBranded) { $skipped++; continue; }
+
+        $dim    = guess_dimension($q);
+        $reason = "监测记录：共查询 {$r['total']} 次，引用率 0%，用户真实问过此问题但品牌未被 AI 提及";
+        $action = "针对此问题写一篇知乎文章，第一段直接给出定义/判断/建议，后附数据证据";
+        $ins->execute([$cid, $dim, $q, $reason, $action, $dim]);
+        $imported++;
+    }
+
+    echo json_encode(['ok' => true, 'imported' => $imported, 'skipped' => $skipped]);
+    exit;
+}
+
 // ── AJAX: Toggle covered status ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_covered') {
     header('Content-Type: application/json; charset=utf-8');
@@ -128,6 +192,9 @@ $dimIcons = ['品牌认知'=>'🏷️','品类发现'=>'🔍','购买决策'=>'�
           <option value="<?= htmlspecialchars($c['customer_id']) ?>" <?= $c['customer_id'] === $selectedCid ? 'selected' : '' ?>><?= htmlspecialchars($c['name']) ?></option>
         <?php endforeach; ?>
       </select>
+      <button id="importBtn" onclick="importFromMonitor()" class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 shadow-sm transition">
+        <i data-lucide="download" class="w-4 h-4"></i> 从监测导入缺口
+      </button>
       <button id="mineBtn" onclick="mineIntents()" class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 shadow-sm transition">
         <i data-lucide="sparkles" class="w-4 h-4"></i> 开始挖掘
       </button>
@@ -503,6 +570,44 @@ function setFilter(filter) {
 }
 
 /* ── Toggle Covered ── */
+async function importFromMonitor() {
+    const btn = document.getElementById('importBtn');
+    const cid = document.querySelector('select[name="customer"]')?.value || '';
+    if (!cid) { alert('请先选择客户'); return; }
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> 导入中...';
+    lucide.createIcons();
+    try {
+        const res = await fetch('', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: `action=import_from_monitor&customer_id=${encodeURIComponent(cid)}`
+        });
+        const data = await res.json();
+        if (data.ok) {
+            if (data.imported > 0) {
+                alert(`成功导入 ${data.imported} 个监测缺口关键词为 P0 意图问题，页面即将刷新`);
+                location.reload();
+            } else {
+                alert('没有发现新的非品牌词缺口（引用率为0%的关键词），或已全部导入');
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="download" class="w-4 h-4"></i> 从监测导入缺口';
+                lucide.createIcons();
+            }
+        } else {
+            alert(data.error || '导入失败');
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="download" class="w-4 h-4"></i> 从监测导入缺口';
+            lucide.createIcons();
+        }
+    } catch(e) {
+        alert('请求失败：' + e.message);
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="download" class="w-4 h-4"></i> 从监测导入缺口';
+        lucide.createIcons();
+    }
+}
+
 async function toggleCovered(id, btn) {
     try {
         const res = await fetch('', {
