@@ -219,11 +219,17 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
     <script src="/admin/assets/js/tailwind.play-cdn.js"></script>
     
     <script src="/admin/assets/js/lucide.min.js"></script>
+    <script src="/admin/assets/js/htmx.min.js"></script>
+    <script src="/admin/assets/js/htmx-preload.min.js"></script>
+    <style>
+        #nav-progress{position:fixed;top:0;left:0;width:0;height:3px;background:#3b82f6;z-index:9999;transition:width .2s ease,opacity .3s ease;pointer-events:none}
+        #nav-progress.done{width:100%;opacity:0}
+    </style>
     <?php if (isset($additional_css)): ?>
         <?php echo $additional_css; ?>
     <?php endif; ?>
 </head>
-<body class="bg-gray-50">
+<body class="bg-gray-50" hx-boost="true" hx-ext="preload">
     <!-- 导航栏 -->
     <nav class="relative bg-white shadow-sm border-b z-50">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -250,6 +256,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                                     <div class="invisible absolute left-0 top-full z-50 w-64 translate-y-0 rounded-lg border border-gray-200 bg-white py-2 opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100">
                                         <?php foreach (($item['children'] ?? []) as $child): ?>
                                             <a href="<?php echo htmlspecialchars(admin_url($child['page'])); ?>"
+                                               preload
                                                class="<?php echo isActiveMenu($child['page'], $current_page, $sub_page_mapping) ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'; ?> block px-4 py-3 transition-colors">
                                                 <span class="block text-sm font-semibold"><?php echo htmlspecialchars($child['name']); ?></span>
                                                 <span class="mt-0.5 block text-xs text-gray-500"><?php echo htmlspecialchars($child['desc']); ?></span>
@@ -259,6 +266,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                                 </div>
                             <?php else: ?>
                                 <a href="<?php echo htmlspecialchars(admin_url($item['page'])); ?>"
+                                   preload
                                    class="<?php echo $base_class; ?> shrink-0 rounded-md px-2.5 py-2 text-sm transition-colors duration-200">
                                     <?php echo htmlspecialchars($item['name']); ?>
                                 </a>

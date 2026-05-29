@@ -41,6 +41,34 @@ $admin_copyright = function_exists('get_setting')
         </div>
     </footer>
 
+    <!-- 顶部进度条 -->
+    <div id="nav-progress"></div>
+
+    <!-- HTMX 导航加速 -->
+    <script>
+        (function(){
+            var bar = document.getElementById('nav-progress');
+            var timer;
+            function startBar(){
+                clearTimeout(timer);
+                bar.style.opacity='1';
+                bar.style.transition='width 2s ease';
+                bar.style.width='80%';
+            }
+            function doneBar(){
+                bar.style.transition='width .1s ease';
+                bar.style.width='100%';
+                timer=setTimeout(function(){bar.style.opacity='0';bar.style.width='0';bar.style.transition='none';},300);
+            }
+            document.body.addEventListener('htmx:beforeRequest', startBar);
+            document.body.addEventListener('htmx:afterSettle', function(){
+                doneBar();
+                // Lucide 图标重新渲染
+                if(typeof lucide!=='undefined') lucide.createIcons();
+            });
+        })();
+    </script>
+
     <!-- 全局JavaScript -->
     <script>
         window.ADMIN_BASE_PATH = <?php echo json_encode(rtrim(ADMIN_BASE_PATH, '/'), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
