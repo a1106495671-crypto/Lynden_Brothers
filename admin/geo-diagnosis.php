@@ -39,11 +39,12 @@ try {
             admin_redirect('geo-diagnosis.php?id=' . urlencode($diagnosisId));
         } else {
             $diagnosisId = geo_diagnosis_create($db, [
-                'brand_name' => clean_input($_POST['brand_name'] ?? ''),
-                'domain' => clean_input($_POST['domain'] ?? ''),
-                'industry' => clean_input($_POST['industry'] ?? ''),
-                'email' => clean_input($_POST['email'] ?? ''),
-                'evidence' => trim((string) ($_POST['evidence'] ?? '')),
+                'brand_name'  => clean_input($_POST['brand_name'] ?? ''),
+                'domain'      => clean_input($_POST['domain'] ?? ''),
+                'industry'    => clean_input($_POST['industry'] ?? ''),
+                'email'       => clean_input($_POST['email'] ?? ''),
+                'evidence'    => trim((string) ($_POST['evidence'] ?? '')),
+                'customer_id' => clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? '')),
             ]);
             admin_redirect('geo-diagnosis.php?id=' . urlencode($diagnosisId));
         }
@@ -59,9 +60,18 @@ $recentReports = geo_diagnosis_recent($db);
 $industries = geo_diagnosis_industries();
 $page_title = '雷达诊断';
 
+// 拉取当前客户的真实监测缺口数据
+$monitorGapData = [];
+$currentCustomerId = $current_customer_context['customer_id'] ?? '';
+if ($currentCustomerId !== '') {
+    $brandForGap = $current_customer_context['name'] ?? ($currentReport['brand_name'] ?? '');
+    $monitorGapData = geo_diagnosis_monitor_data($db, $currentCustomerId, $brandForGap);
+}
+
 $scoresForChart = [];
 $benchmarkForChart = [];
 $actionsBySignal = [];
+$diagnosisSource = ['key' => 'unknown', 'label' => '未知来源', 'class' => 'bg-gray-100 text-gray-700', 'note' => '暂无诊断来源信息'];
 $trendData = ['labels' => [], 'overall' => [], 'hit_rate' => [], 'signals' => [], 'delta' => null];
 if ($currentReport) {
     $trendData = geo_diagnosis_history($db, (string) ($currentReport['brand_id'] ?? ''));
@@ -69,6 +79,38 @@ if ($currentReport) {
         $actionsBySignal[(string) $action['signal_key']][] = $action;
     }
     foreach ($currentReport['scores'] as $score) {
+        $rawMetric = json_decode((string) ($score['raw_metric'] ?? '{}'), true);
+        $rawMetric = is_array($rawMetric) ? $rawMetric : [];
+        $dataSource = (string) ($rawMetric['data_source'] ?? '');
+        if ($dataSource === 'real_monitor') {
+            $diagnosisSource = [
+                'key' => 'real_monitor',
+                'label' => '真实 AI 监测数据',
+                'class' => 'bg-blue-100 text-blue-700',
+                'note' => '引用率和 UGC 覆盖分数来自实际 AI 平台查询记录，非估算。',
+            ];
+        } elseif (!empty($rawMetric['search_provider']) || $dataSource === 'real_search') {
+            $diagnosisSource = [
+                'key' => 'real_search',
+                'label' => '实时搜索诊断',
+                'class' => 'bg-green-100 text-green-700',
+                'note' => '已调用搜索 API 扫描第三方提及、UGC 覆盖、权威来源和官网信号。',
+            ];
+        } elseif ($dataSource === 'site_crawl_estimate' && $diagnosisSource['key'] !== 'real_search') {
+            $diagnosisSource = [
+                'key' => 'site_crawl_estimate',
+                'label' => '官网抓取估算',
+                'class' => 'bg-amber-100 text-amber-800',
+                'note' => '未配置搜索 API；已抓取官网估算结构、事实密度和站点身份，但第三方声量仍不可验证。',
+            ];
+        } elseif ($dataSource === 'estimated' && $diagnosisSource['key'] === 'unknown') {
+            $diagnosisSource = [
+                'key' => 'estimated',
+                'label' => '本地估算',
+                'class' => 'bg-red-100 text-red-700',
+                'note' => '未配置搜索 API，当前分数只基于输入资料和规则估算，不能代表真实全网声量。',
+            ];
+        }
         $scoresForChart[] = [
             'key' => $score['signal_key'],
             'name' => $score['name'] ?: $score['signal_key'],
@@ -183,7 +225,12 @@ require_once __DIR__ . '/includes/header.php';
                             <?php endif; ?>
                         </div>
                         <?php if ($currentReport): ?>
-                            <div class="text-sm text-gray-500">完成时间：<?php echo htmlspecialchars((string) $currentReport['completed_at']); ?></div>
+                            <div class="flex flex-col items-start gap-2 md:items-end">
+                                <span class="rounded-full px-3 py-1 text-xs font-semibold <?php echo htmlspecialchars($diagnosisSource['class']); ?>">
+                                    <?php echo htmlspecialchars($diagnosisSource['label']); ?>
+                                </span>
+                                <div class="text-sm text-gray-500">完成时间：<?php echo htmlspecialchars((string) $currentReport['completed_at']); ?></div>
+                            </div>
                         <?php endif; ?>
                     </div>
 
@@ -196,11 +243,18 @@ require_once __DIR__ . '/includes/header.php';
                             </div>
                         </div>
                     <?php else: ?>
+                        <?php if ($diagnosisSource['key'] !== 'real_search'): ?>
+                            <div class="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">
+                                <?php echo htmlspecialchars($diagnosisSource['note']); ?> 要判断喜茶这类知名品牌的真实 AI 权威度，请在下方“雷达数据源配置”接入 Bing、SerpAPI、Google CSE 或博查搜索 API 后重新生成诊断。
+                            </div>
+                        <?php endif; ?>
 	                        <div class="grid grid-cols-1 gap-8 px-6 py-6 xl:grid-cols-2">
 	                            <div class="flex min-h-[440px] min-w-0 flex-col">
                                 <div class="mb-6 flex items-start justify-between gap-4">
                                     <div>
-                                        <div class="text-sm font-medium text-gray-500">客户内容 AI 权威分</div>
+                                        <div class="text-sm font-medium text-gray-500">
+                                            <?php echo $diagnosisSource['key'] === 'real_search' ? '客户内容 AI 权威分' : '本地诊断估算分'; ?>
+                                        </div>
                                         <div class="mt-3 flex items-end gap-2">
                                             <span id="overall-score-preview" class="text-6xl font-bold leading-none text-gray-900"><?php echo htmlspecialchars((string) round((float) $currentReport['overall_score'], 1)); ?></span>
                                             <span class="pb-2 text-sm text-gray-500">/ 100</span>
@@ -307,6 +361,9 @@ require_once __DIR__ . '/includes/header.php';
                                                 <div>
                                                     <div class="text-xs font-medium text-gray-500">找到的证据来源</div>
                                                     <p class="mt-1 text-gray-700"><?php echo htmlspecialchars((string) ($scoreDetails['hint'] ?? '当前基于品牌资料、官网域名、行业基准和已知平台线索估算；接入搜索 API 后会展示真实 URL 证据。')); ?></p>
+                                                    <?php if (!empty($scoreDetails['crawled'])): ?>
+                                                        <p class="mt-1 text-xs text-green-700">已抓取官网首页参与估算。</p>
+                                                    <?php endif; ?>
                                                 </div>
                                                 <div class="grid grid-cols-1 gap-2 text-xs text-gray-600 sm:grid-cols-3">
                                                     <div class="rounded-md bg-gray-50 px-3 py-2">当前 <?php echo htmlspecialchars((string) round($scoreValue, 1)); ?> 分</div>
@@ -368,6 +425,70 @@ require_once __DIR__ . '/includes/header.php';
                     <?php endif; ?>
 	                </section>
 	            </div>
+
+            <?php if (!empty($monitorGapData)): ?>
+                <section class="mt-6 rounded-lg border border-blue-200 bg-white shadow-sm">
+                    <div class="border-b border-blue-100 bg-blue-50 px-6 py-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h2 class="text-lg font-semibold text-gray-900">真实 AI 引用缺口分析</h2>
+                                <p class="mt-0.5 text-sm text-gray-500">基于 <?php echo (int) $monitorGapData['total_records']; ?> 条真实 AI 平台查询记录 · 非品牌词查询 <?php echo (int) $monitorGapData['non_branded_total']; ?> 次</p>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-3xl font-bold <?php echo (float) $monitorGapData['non_branded_rate'] >= 30 ? 'text-green-600' : ((float) $monitorGapData['non_branded_rate'] >= 10 ? 'text-amber-500' : 'text-red-500'); ?>">
+                                    <?php echo $monitorGapData['non_branded_rate']; ?>%
+                                </div>
+                                <div class="text-xs text-gray-500">非品牌词实际引用率</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 gap-6 px-6 py-6 md:grid-cols-2">
+                        <?php if (!empty($monitorGapData['gap_keywords'])): ?>
+                        <div>
+                            <h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-red-700">
+                                <span class="inline-block h-2 w-2 rounded-full bg-red-500"></span>
+                                待突破关键词（引用率 0%）
+                            </h3>
+                            <div class="space-y-2">
+                                <?php foreach ($monitorGapData['gap_keywords'] as $gapKw): ?>
+                                    <div class="flex items-center justify-between rounded-md border border-red-100 bg-red-50 px-3 py-2">
+                                        <span class="text-sm text-gray-800"><?php echo htmlspecialchars($gapKw); ?></span>
+                                        <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600">0%</span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <p class="mt-3 text-xs text-gray-500">这些关键词是你最需要写内容突破的方向，针对每个问题写一篇直接回答的知乎文章。</p>
+                        </div>
+                        <?php endif; ?>
+                        <?php if (!empty($monitorGapData['win_keywords'])): ?>
+                        <div>
+                            <h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-green-700">
+                                <span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
+                                已赢得引用的关键词
+                            </h3>
+                            <div class="space-y-2">
+                                <?php foreach ($monitorGapData['win_keywords'] as $winKw): ?>
+                                    <?php
+                                    $qd = $monitorGapData['by_query'][$winKw] ?? [];
+                                    $winRate = $qd['rate'] ?? 0;
+                                    ?>
+                                    <div class="flex items-center justify-between rounded-md border border-green-100 bg-green-50 px-3 py-2">
+                                        <span class="text-sm text-gray-800"><?php echo htmlspecialchars($winKw); ?></span>
+                                        <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700"><?php echo (int) $winRate; ?>%</span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <p class="mt-3 text-xs text-gray-500">分析这些内容的格式和发布平台，复制到待突破关键词上。</p>
+                        </div>
+                        <?php endif; ?>
+                        <?php if (empty($monitorGapData['gap_keywords']) && empty($monitorGapData['win_keywords'])): ?>
+                        <div class="col-span-2 rounded-md bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+                            当前监测关键词均为品牌词，建议添加通用 GEO 关键词（如"GEO公司推荐"、"AI搜索引擎优化"）后重新监测。
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </section>
+            <?php endif; ?>
 
             <?php if ($currentReport): ?>
                 <section class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">

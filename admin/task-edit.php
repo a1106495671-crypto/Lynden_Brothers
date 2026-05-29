@@ -139,7 +139,7 @@ $ai_models = $db->query("
 ")->fetchAll();
 $authors = $db->query("SELECT * FROM authors ORDER BY name")->fetchAll();
 $knowledge_bases = $db->query("SELECT * FROM knowledge_bases ORDER BY name")->fetchAll();
-$geo_customers = $db->query("SELECT id, name FROM customers ORDER BY name")->fetchAll();
+$geo_customers = $db->query("SELECT customer_id AS id, name FROM customers ORDER BY name")->fetchAll();
 
 // 获取任务统计
 $stats = [];

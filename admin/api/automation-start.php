@@ -49,33 +49,44 @@ $services    = trim($input['services'] ?? '');
 $competitors = trim($input['competitors'] ?? '');
 $positioning = trim($input['positioning'] ?? '');
 $articleCount = max(1, min(50, intval($input['article_count'] ?? 10)));
+$mediaAccountIds = [];
+if (is_array($input['media_account_ids'] ?? null)) {
+    $mediaAccountIds = array_values(array_unique(array_filter(array_map('intval', $input['media_account_ids']))));
+}
+$mediaAccountIdsJson = json_encode($mediaAccountIds, JSON_UNESCAPED_UNICODE);
 
 try {
+    $db->exec("ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS media_account_ids TEXT DEFAULT '[]'");
+
     // 生成唯一 workflow ID
     $workflowId = 'wf_' . date('YmdHis') . '_' . substr(md5(uniqid(mt_rand(), true)), 0, 8);
 
     // 创建工作流记录
     $stmt = $db->prepare("
         INSERT INTO automation_workflows
-            (workflow_id, brand_name, industry, website, services, competitors, positioning, article_count, status, current_step)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', 'collect')
+            (workflow_id, brand_name, industry, website, services, competitors, positioning, article_count, media_account_ids, status, current_step)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'collect')
     ");
     $stmt->execute([
         $workflowId, $brandName, $industry, $website,
-        $services, $competitors, $positioning, $articleCount
+        $services, $competitors, $positioning, $articleCount, $mediaAccountIdsJson
     ]);
 
     // 创建所有步骤记录
     $steps = [
-        ['collect',    1],
-        ['keywords',   2],
-        ['titles',     3],
-        ['knowledge',  4],
-        ['customer',   5],
-        ['task',       6],
-        ['generate',   7],
-        ['distribute', 8],
-        ['monitor',    9],
+        ['collect',          1],
+        ['diagnosis',        2],
+        ['keywords',         3],
+        ['titles',           4],
+        ['knowledge',        5],
+        ['customer',         6],
+        ['knowledge_graph',  7],
+        ['intent_mining',    8],
+        ['task',             9],
+        ['generate',        10],
+        ['distribute',      11],
+        ['monitor',         12],
+        ['panorama',        13],
     ];
 
     $stepStmt = $db->prepare("
@@ -93,6 +104,18 @@ try {
         SET status = 'running', started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
         WHERE workflow_id = ? AND step_id = 'collect'
     ")->execute([$workflowId]);
+
+    // 启动后台 worker 执行工作流
+    $workerScript = dirname(__DIR__, 2) . '/bin/automation_worker.php';
+    $logFile = dirname(__DIR__, 2) . '/bin/logs/automation_' . date('Y-m-d') . '.log';
+    $logDir = dirname($logFile);
+    if (!is_dir($logDir)) {
+        @mkdir($logDir, 0755, true);
+    }
+
+    $cmd = 'php ' . escapeshellarg($workerScript) . ' ' . escapeshellarg($workflowId)
+         . ' >> ' . escapeshellarg($logFile) . ' 2>&1 &';
+    exec($cmd);
 
     echo json_encode([
         'success'     => true,

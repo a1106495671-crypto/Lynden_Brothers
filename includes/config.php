@@ -21,8 +21,8 @@ function env_value($key, $default = null) {
 require_once __DIR__ . '/db_support.php';
 
 // 网站基本配置
-define('SITE_NAME', env_value('SITE_NAME', 'GEO+AI内容生成系统'));
-define('SITE_FULL_NAME', env_value('SITE_FULL_NAME', 'GEO+AI内容生成系统'));
+define('SITE_NAME', env_value('SITE_NAME', '董逻辑MGEO'));
+define('SITE_FULL_NAME', env_value('SITE_FULL_NAME', '董逻辑MGEO'));
 define('SITE_URL', env_value('SITE_URL', 'http://localhost'));
 define('SITE_DESCRIPTION', env_value('SITE_DESCRIPTION', '基于AI的智能内容生成与发布平台'));
 define('SITE_KEYWORDS', env_value('SITE_KEYWORDS', 'GEO,AI内容生成,SEO,智能写作,内容发布'));
@@ -201,6 +201,130 @@ function encrypt_ai_api_key($api_key) {
 
 function decrypt_ai_api_key($stored_api_key) {
     return decrypt_sensitive_value($stored_api_key);
+}
+
+/**
+ * 获取当前激活的 AI 模型配置（从 ai_models 表读取优先级最高的活跃模型）
+ * 返回 ['api_key' => ..., 'api_url' => ..., 'model_id' => ...] 或空数组
+ */
+function get_active_ai_config(): array {
+    global $db;
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    try {
+        $stmt = $db->query(
+            "SELECT api_key, api_url, model_id FROM ai_models
+             WHERE status='active'
+               AND (model_type='chat' OR model_type IS NULL OR model_type='')
+               AND COALESCE(api_key, '') <> ''
+               AND COALESCE(model_id, '') <> ''
+             ORDER BY priority ASC NULLS LAST, id ASC"
+        );
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $apiKey = trim(function_exists('decrypt_ai_api_key') ? decrypt_ai_api_key((string)($row['api_key'] ?? '')) : ($row['api_key'] ?? ''));
+            $apiUrl = rtrim(trim($row['api_url'] ?? ''), '/');
+            $modelId = trim($row['model_id'] ?? '');
+            if ($apiKey && $apiUrl && $modelId) {
+                $cache = ['api_key' => $apiKey, 'api_url' => $apiUrl, 'model_id' => $modelId];
+                return $cache;
+            }
+        }
+    } catch (Throwable $e) {}
+    $cache = [];
+    return $cache;
+}
+
+/**
+ * 统一 AI 调用函数（读取当前激活模型，自动 fallback）
+ */
+function geo_call_ai(string $prompt, int $maxTokens = 3000, float $temperature = 0.7): array {
+    $cfg = get_active_ai_config();
+    if (empty($cfg['api_key'])) {
+        return ['content' => '', 'model_used' => 'none', 'error' => 'no_api_key'];
+    }
+    $apiUrl = $cfg['api_url'];
+    if (!str_ends_with($apiUrl, '/chat/completions') && !str_ends_with($apiUrl, '/completions')) {
+        $apiUrl .= '/chat/completions';
+    }
+    $payload = json_encode([
+        'model'       => $cfg['model_id'],
+        'messages'    => [['role' => 'user', 'content' => $prompt]],
+        'max_tokens'  => $maxTokens,
+        'temperature' => $temperature,
+    ], JSON_UNESCAPED_UNICODE);
+    $ch = curl_init($apiUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $payload,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 20,
+        CURLOPT_TIMEOUT        => 240,
+        CURLOPT_HTTPHEADER     => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $cfg['api_key'],
+        ],
+    ]);
+    if (function_exists('apply_curl_network_defaults')) {
+        apply_curl_network_defaults($ch);
+    }
+    $raw  = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    $curlErrno = curl_errno($ch);
+    curl_close($ch);
+
+    if ($curlError !== '') {
+        if (function_exists('log_ai_api_call')) {
+            log_ai_api_call([
+                'source' => 'geo_call_ai',
+                'model_id' => $cfg['model_id'],
+                'api_url' => $apiUrl,
+                'http_code' => 0,
+                'ok' => false,
+                'error' => "cURL {$curlErrno}: {$curlError}",
+            ]);
+        }
+        return ['content' => '', 'model_used' => 'none', 'error' => "cURL {$curlErrno}: {$curlError}"];
+    }
+
+    $data = json_decode((string) $raw, true);
+    if ($code === 200) {
+        $message = $data['choices'][0]['message'] ?? [];
+        $content = is_array($message) ? (string) ($message['content'] ?? '') : '';
+        if ($content === '' && is_array($message) && !empty($message['reasoning_content'])) {
+            $content = (string) $message['reasoning_content'];
+        }
+        if (function_exists('log_ai_api_call')) {
+            log_ai_api_call([
+                'source' => 'geo_call_ai',
+                'model_id' => $cfg['model_id'],
+                'api_url' => $apiUrl,
+                'http_code' => $code,
+                'ok' => $content !== '',
+                'prompt_tokens' => is_array($data) ? ($data['usage']['prompt_tokens'] ?? null) : null,
+                'completion_tokens' => is_array($data) ? ($data['usage']['completion_tokens'] ?? null) : null,
+                'total_tokens' => is_array($data) ? ($data['usage']['total_tokens'] ?? null) : null,
+                'error' => $content === '' ? 'empty_content' : '',
+            ]);
+        }
+        return ['content' => $content, 'model_used' => $cfg['model_id'], 'error' => null];
+    }
+
+    $errMsg = is_array($data) ? (string) ($data['error']['message'] ?? $data['message'] ?? '') : '';
+    if ($errMsg === '') {
+        $errMsg = trim(mb_substr((string) $raw, 0, 300));
+    }
+    if (function_exists('log_ai_api_call')) {
+        log_ai_api_call([
+            'source' => 'geo_call_ai',
+            'model_id' => $cfg['model_id'],
+            'api_url' => $apiUrl,
+            'http_code' => $code,
+            'ok' => false,
+            'error' => $errMsg,
+        ]);
+    }
+    return ['content' => '', 'model_used' => 'none', 'error' => "HTTP {$code}" . ($errMsg !== '' ? ": {$errMsg}" : '')];
 }
 
 function apply_curl_network_defaults($ch) {
@@ -414,4 +538,30 @@ function write_log($message, $level = 'INFO') {
     $log_message = "[$timestamp] [$level] $message" . PHP_EOL;
     
     file_put_contents($log_file, $log_message, FILE_APPEND | LOCK_EX);
+}
+
+function log_ai_api_call(array $context): void {
+    $safe = [
+        'time' => date('Y-m-d H:i:s'),
+        'source' => (string) ($context['source'] ?? ''),
+        'model_name' => (string) ($context['model_name'] ?? ''),
+        'model_id' => (string) ($context['model_id'] ?? ''),
+        'api_url' => (string) ($context['api_url'] ?? ''),
+        'http_code' => (int) ($context['http_code'] ?? 0),
+        'ok' => !empty($context['ok']),
+        'prompt_tokens' => isset($context['prompt_tokens']) ? (int) $context['prompt_tokens'] : null,
+        'completion_tokens' => isset($context['completion_tokens']) ? (int) $context['completion_tokens'] : null,
+        'total_tokens' => isset($context['total_tokens']) ? (int) $context['total_tokens'] : null,
+        'error' => mb_substr((string) ($context['error'] ?? ''), 0, 300),
+    ];
+
+    $dir = __DIR__ . '/../bin/logs';
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    file_put_contents(
+        $dir . '/ai_api_calls_' . date('Y-m-d') . '.jsonl',
+        json_encode($safe, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL,
+        FILE_APPEND | LOCK_EX
+    );
 }

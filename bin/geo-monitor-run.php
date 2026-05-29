@@ -17,6 +17,8 @@ chdir($projectRoot);
 require_once $projectRoot . '/includes/config.php';
 require_once $projectRoot . '/includes/database_admin.php';
 require_once $projectRoot . '/includes/citation_simulator_service.php';
+require_once $projectRoot . '/includes/geo_monitor_alert_service.php';
+require_once $projectRoot . '/includes/playwright_monitor_client.php';
 
 set_time_limit(600);
 
@@ -100,11 +102,33 @@ foreach (['kimi', 'deepseek', 'tongyi', 'wenxin', 'doubao', 'yuanbao'] as $pkey)
 }
 
 if (empty($providers)) {
-    gm_log('没有可用的 AI 提供商（未配置或已停用），退出。');
-    exit(1);
+    $fallbackAi = function_exists('get_active_ai_config') ? get_active_ai_config() : [];
+    if (!empty($fallbackAi['api_key']) && !empty($fallbackAi['api_url']) && !empty($fallbackAi['model_id'])) {
+        $providerKey = $fallbackAi['model_id'] ?? 'default_ai_model';
+        $providers[$providerKey] = [
+            'name' => $fallbackAi['name'] ?? $fallbackAi['model_id'] ?? 'AI模型',
+            'api_key' => $fallbackAi['api_key'],
+            'api_url' => $fallbackAi['api_url'],
+            'model_id' => $fallbackAi['model_id'],
+            'configured' => true,
+        ];
+        gm_log('未配置专用监测提供商，使用模型：' . ($providers[$providerKey]['name'] ?? 'default'));
+    } else {
+        gm_log('没有可用的 AI 提供商（未配置或已停用），退出。');
+        exit(1);
+    }
 }
 
 gm_log('可用提供商：' . implode(', ', array_keys($providers)));
+
+// ── Playwright 浏览器监测（最准确模式） ────────────────────────────────────
+$playwrightAvailable = playwright_is_available();
+$playwrightPlatforms = ['kimi', 'deepseek', 'doubao', 'tongyi'];
+if ($playwrightAvailable) {
+    gm_log('Playwright 服务在线，支持平台：' . implode(', ', $playwrightPlatforms));
+} else {
+    gm_log('Playwright 服务未启动，回退到 API 模式（精度较低）');
+}
 
 // ── 今日日期 ──────────────────────────────────────────────────────────────
 $today = date('Y-m-d');
@@ -121,7 +145,7 @@ foreach ($customers as $customer) {
 
     // 读该客户的监测关键词（含文章关联信息）
     $stmtKw = $db->prepare("
-        SELECT id, keyword, article_id, source_url
+        SELECT id, keyword, article_id, source_url, source_fingerprints, fingerprints_extracted_at
         FROM geo_monitor_keywords
         WHERE customer_id = ? AND enabled = TRUE
         ORDER BY id
@@ -187,13 +211,38 @@ foreach ($customers as $customer) {
                 continue;
             }
 
-            // 调用 AI
+            // 优先使用 Playwright 真实浏览器（最准确）
             $response = null;
-            try {
-                $response = geo_monitor_call_provider($pkey, $providers[$pkey], $kw);
-            } catch (Throwable $e) {
-                gm_log("  [{$pkey}] 调用失败：" . $e->getMessage());
-                continue;
+            $usedPlaywright = false;
+
+            if ($playwrightAvailable && in_array($pkey, $playwrightPlatforms, true)) {
+                try {
+                    $pwCookies = playwright_get_cookies($db, $pkey);
+                    if (!empty($pwCookies)) {
+                        gm_log("  [{$pkey}] 使用 Playwright 真实浏览器");
+                        $pwResult = playwright_monitor($pkey, $kw, $cname, $pwCookies);
+                        if ($pwResult['success']) {
+                            $response = $pwResult['response_text'];
+                            $usedPlaywright = true;
+                        } else {
+                            gm_log("  [{$pkey}] Playwright 失败（{$pwResult['error']}），回退 API");
+                        }
+                    } else {
+                        gm_log("  [{$pkey}] 未配置 Cookie，回退 API");
+                    }
+                } catch (Throwable $e) {
+                    gm_log("  [{$pkey}] Playwright 异常：" . $e->getMessage() . "，回退 API");
+                }
+            }
+
+            // Playwright 未用时，回退 API
+            if (!$usedPlaywright) {
+                try {
+                    $response = geo_monitor_call_provider($pkey, $providers[$pkey] ?? [], $kw);
+                } catch (Throwable $e) {
+                    gm_log("  [{$pkey}] 调用失败：" . $e->getMessage());
+                    continue;
+                }
             }
 
             if ($response === null) {
@@ -305,8 +354,8 @@ foreach ($customers as $customer) {
 gm_log("完成，共写入 {$totalInserted} 条记录。");
 
 // ── 监测数据回填诊断雷达图 ────────────────────────────────────────────────
-foreach ($customers as $cid => $cname) {
-    gm_sync_diagnosis($db, $cid, $cname, $today);
+foreach ($customers as $customer) {
+    gm_sync_diagnosis($db, (string) ($customer['id'] ?? ''), (string) ($customer['name'] ?? ''), $today);
 }
 
 // ── 飞书推送（汇总所有今日 HIGH 级别告警）────────────────────────────────
@@ -539,6 +588,10 @@ PROMPT;
  * 计算并写入告警：竞品在某关键词上的提及率超过品牌时产生告警
  */
 function gm_compute_alerts(PDO $db, string $cid, string $cname, array $competitors, string $today): void {
+    $summary = geo_monitor_refresh_alerts($db, $cid, $cname, $competitors, $today);
+    gm_log("  [告警汇总] 检查 {$summary['checked_records']} 条记录，写入/更新 {$summary['created_or_updated']} 条告警");
+    return;
+
     if (empty($competitors)) return;
 
     // 取最近 7 天该客户所有记录
@@ -721,10 +774,10 @@ function gm_generate_and_push_draft(PDO $db, array $alert, string $webhookUrl): 
     $masterSentence = $facts['master_sentence'] ?? '';
     $coreServices = $facts['core_services'] ?? '';
 
-    // 用 DeepSeek 生成文章草稿
-    $apiKey = citation_simulator_get_provider_key('deepseek', 'api_key');
-    if ($apiKey === '') {
-        gm_log("[Step6] DeepSeek API Key 未配置，跳过草稿生成");
+    // 用激活模型生成文章草稿
+    $aiCfg = get_active_ai_config();
+    if (empty($aiCfg['api_key'])) {
+        gm_log("[Step6] AI API Key 未配置，跳过草稿生成");
         return;
     }
 
@@ -747,13 +800,17 @@ function gm_generate_and_push_draft(PDO $db, array $alert, string $webhookUrl): 
 PROMPT;
 
     $payload = json_encode([
-        'model'    => 'deepseek-chat',
+        'model'    => $aiCfg['model_id'],
         'messages' => [['role' => 'user', 'content' => $prompt]],
         'max_tokens'  => 2000,
         'temperature' => 0.7,
     ], JSON_UNESCAPED_UNICODE);
 
-    $ch = curl_init('https://api.deepseek.com/chat/completions');
+    $aiApiUrl = rtrim($aiCfg['api_url'], '/');
+    if (!str_ends_with($aiApiUrl, '/chat/completions')) {
+        $aiApiUrl .= '/chat/completions';
+    }
+    $ch = curl_init($aiApiUrl);
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $payload,
@@ -761,7 +818,7 @@ PROMPT;
         CURLOPT_TIMEOUT        => 60,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey,
+            'Authorization: Bearer ' . $aiCfg['api_key'],
         ],
     ]);
     $raw  = curl_exec($ch);
@@ -769,7 +826,7 @@ PROMPT;
     curl_close($ch);
 
     if ($code !== 200) {
-        gm_log("[Step6] DeepSeek 生成失败，HTTP {$code}");
+        gm_log("[Step6] AI 生成失败，HTTP {$code}");
         return;
     }
 
@@ -1003,6 +1060,12 @@ function gm_verify_accuracy(PDO $db, string $cid, string $cname, string $kw,
  * 不注入搜索上下文的裸 AI 调用（用于内部校验）
  */
 function gm_call_provider_raw(string $pkey, array $pcfg, string $prompt): ?string {
+    if (!empty($pcfg['api_key']) && !empty($pcfg['api_url'])) {
+        return gm_call_openai_compatible($pcfg, [
+            ['role' => 'user', 'content' => $prompt],
+        ], 400, 0.1, $pkey);
+    }
+
     $fields = $pcfg['fields'] ?? [];
     $apiKey = '';
     foreach ($fields as $fkey => $fcfg) {
@@ -1051,6 +1114,16 @@ function gm_call_provider_raw(string $pkey, array $pcfg, string $prompt): ?strin
  * 调用 AI 提供商（含 Bocha 搜索上下文注入）
  */
 function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?string {
+    $searchCtx    = citation_simulator_search_context($query);
+    $systemPrompt = "你是一个中文AI助手。请基于以下实时网络搜索结果回答用户问题。\n\n" . $searchCtx;
+
+    if (!empty($pcfg['api_key']) && !empty($pcfg['api_url'])) {
+        return gm_call_openai_compatible($pcfg, [
+            ['role' => 'system', 'content' => $systemPrompt],
+            ['role' => 'user',   'content' => $query],
+        ], 800, 0.3, $pkey);
+    }
+
     $rawKey = citation_simulator_get_provider_key($pkey, 'api_key');
     if ($rawKey === '') return null;
 
@@ -1079,9 +1152,6 @@ function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?s
     } else {
         $apiKey = $rawKey;
     }
-
-    $searchCtx    = citation_simulator_search_context($query);
-    $systemPrompt = "你是一个中文AI助手。请基于以下实时网络搜索结果回答用户问题。\n\n" . $searchCtx;
 
     $endpointMap = [
         'kimi'     => ['url' => 'https://api.moonshot.cn/v1/chat/completions',                   'model' => 'moonshot-v1-8k'],
@@ -1121,6 +1191,47 @@ function geo_monitor_call_provider(string $pkey, array $pcfg, string $query): ?s
     curl_close($ch);
 
     if ($raw === false || $code !== 200) return null;
+
+    $data = json_decode($raw, true);
+    return $data['choices'][0]['message']['content'] ?? null;
+}
+
+function gm_call_openai_compatible(array $pcfg, array $messages, int $maxTokens = 800, float $temperature = 0.3, string $providerLabel = ''): ?string {
+    $apiKey = trim((string) ($pcfg['api_key'] ?? ''));
+    $apiUrl = ai_build_chat_completions_url((string) ($pcfg['api_url'] ?? ''));
+    $modelId = trim((string) ($pcfg['model_id'] ?? ''));
+    if ($apiKey === '' || $apiUrl === '' || $modelId === '') {
+        return null;
+    }
+
+    $payload = json_encode([
+        'model' => $modelId,
+        'messages' => $messages,
+        'max_tokens' => $maxTokens,
+        'temperature' => $temperature,
+    ], JSON_UNESCAPED_UNICODE);
+
+    $ch = curl_init($apiUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ],
+    ]);
+    $raw = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    if ($raw === false || $code !== 200) {
+        $label = $providerLabel !== '' ? $providerLabel : ($modelId !== '' ? $modelId : 'provider');
+        gm_log("  [{$label}] 调用失败 HTTP {$code}" . ($error !== '' ? "：{$error}" : ''));
+        return null;
+    }
 
     $data = json_decode($raw, true);
     return $data['choices'][0]['message']['content'] ?? null;

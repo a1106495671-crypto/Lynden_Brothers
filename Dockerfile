@@ -1,23 +1,15 @@
 FROM php:8.2-cli
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    libpq-dev \
-    libcurl4-openssl-dev \
-    libonig-dev \
-    libxml2-dev \
-    libzip-dev \
-    unzip \
-    curl \
-    && docker-php-ext-install pdo_pgsql mbstring curl zip \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# 用 mlocati/php-extension-installer 下载预编译扩展，无需现场编译
+ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+RUN chmod +x /usr/local/bin/install-php-extensions \
+    && install-php-extensions pdo_pgsql mbstring curl zip
 
-# 安装 Node.js (用于知乎发布脚本)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
+# 安装 Node.js + Playwright（知乎发布脚本用）
+RUN apt-get update && apt-get install -y nodejs npm \
     && npm install -g playwright \
-    && npx playwright install --with-deps chromium
+    && npx playwright install --with-deps chromium \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 安装 PHP 内置服务器需要的 router
 WORKDIR /app

@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile
     container_name: geo-app
     restart: always
+    env_file:
+      - .env
     ports:
       - "${HOST_PORT:-18081}:18081"
     environment:
@@ -50,6 +52,8 @@ services:
       dockerfile: Dockerfile
     container_name: geo-worker
     restart: always
+    env_file:
+      - .env
     command: ["php", "bin/worker.php"]
     environment:
       - DB_HOST=postgres
@@ -70,6 +74,8 @@ services:
       dockerfile: Dockerfile
     container_name: geo-cron
     restart: always
+    env_file:
+      - .env
     command: >
       sh -c "while true; do php bin/cron.php; sleep 60; done"
     environment:
@@ -84,6 +90,19 @@ services:
         condition: service_healthy
     networks:
       - geo-net
+
+  playwright:
+    build:
+      context: .
+      dockerfile: Dockerfile.playwright
+    container_name: geo-playwright
+    restart: always
+    environment:
+      - PORT=3456
+      - TZ=Asia/Shanghai
+    networks:
+      - geo-net
+    shm_size: '2gb'
 
 volumes:
   geo-pgdata:

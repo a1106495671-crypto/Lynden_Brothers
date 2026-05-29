@@ -16,6 +16,14 @@ HOST_PORT_VALUE="${HOST_PORT:-18080}"
 pkill -f "php -S ${HOST_VALUE}:${HOST_PORT_VALUE} router.php" || true
 pkill -f "php -S localhost:${HOST_PORT_VALUE} router.php" || true
 
+# 停止后台 worker
+WORKER_PID_FILE="${PROJECT_DIR}/.local/worker.pid"
+if [ -f "${WORKER_PID_FILE}" ]; then
+    kill "$(cat "${WORKER_PID_FILE}")" 2>/dev/null || true
+    rm -f "${WORKER_PID_FILE}"
+    echo "worker.php 已停止"
+fi
+
 if command -v pg_ctl >/dev/null 2>&1 && [ -f "${POSTGRES_DATA_DIR}/PG_VERSION" ]; then
     pg_ctl -D "${POSTGRES_DATA_DIR}" stop || true
 fi

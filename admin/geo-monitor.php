@@ -9,6 +9,7 @@ session_start();
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
+require_once __DIR__ . '/../includes/geo_monitor_alert_service.php';
 
 require_admin_login();
 
@@ -106,6 +107,10 @@ if (!empty($competitorsFromDb)) {
 $comp0 = $competitorsFromCustomer[0] ?? '竞品A';
 $comp1 = $competitorsFromCustomer[1] ?? '竞品B';
 
+try {
+    geo_monitor_refresh_alerts($db, $customerId, $brandName, $competitorsFromCustomer);
+} catch (Throwable $_refreshAlerts) {}
+
 // ── 内容收录：关键词生命周期数据（真实） ──────────────────────────────────
 $kwLifecycle = [];
 try {
@@ -202,71 +207,63 @@ try {
     $realAlerts = $stmtAlerts->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $_ae) {}
 $hasRealAlerts = !empty($realAlerts);
+$realAlertCount = count($realAlerts);
 
 // 确定性随机辅助：给定索引和范围，返回稳定整数
 $sr = static function(int $slot, int $min, int $max) use ($customerSeed): int {
     return $min + (abs((int) crc32($customerSeed . ':' . $slot)) % ($max - $min + 1));
 };
 
-// 基准可见率（品牌起点 30-55，行业均值 40-55）
-$brandBase    = $sr(0, 30, 55);
-$industryBase = $sr(1, 40, 55);
-// 最终可见率（品牌 65-92，行业 55-70）
-$brandPeak    = $sr(2, 65, 92);
-$industryPeak = $sr(3, 55, 70);
-
-// ── 趋势图：优先用真实 by_date 数据，回退 mock ───────────────────────
+// ── 趋势图：全部使用真实监测数据 ──────────────────────────────────────
 $trendPoints = [];
-if ($hasRealData && !empty($realMonitorData['by_date'])) {
-    // 生成以今天结尾的 90 天日期列表
-    $trEndDate = new DateTimeImmutable('today');
-    $trDateList = [];
-    for ($ti = 89; $ti >= 0; $ti--) {
-        $trDateList[] = $trEndDate->modify("-{$ti} days")->format('Y-m-d');
-    }
-    // 前向填充：无监测数据的天沿用最近一次真实比率
-    $trLastRate = null;
-    $trFilled   = [];
-    foreach ($trDateList as $td) {
-        if (isset($realMonitorData['by_date'][$td])) {
-            $trLastRate = $realMonitorData['by_date'][$td]['rate'];
-        }
-        $trFilled[$td] = $trLastRate;
-    }
-    // 反向填充前段空值（用第一个真实值补齐）
-    $trFirstKnown = null;
-    foreach ($trDateList as $td) { if ($trFilled[$td] !== null) { $trFirstKnown = $trFilled[$td]; break; } }
-    foreach ($trDateList as $td) { if ($trFilled[$td] === null) { $trFilled[$td] = $trFirstKnown ?? 0; } }
 
-    foreach ($trDateList as $tIdx => $td) {
-        $progress = $tIdx / 89;
-        $trendPoints[] = [
-            'date'     => (new DateTimeImmutable($td))->format('m-d'),
-            'brand'    => (int) $trFilled[$td],
-            'industry' => (int) min(80, max(30, round($industryBase + ($industryPeak - $industryBase) * $progress + ($sr($tIdx + 200, 0, 8) - 4) * 0.5))),
-            'origin'   => $tIdx === 0 ? 'radar_baseline' : 'live',
-            'partial'  => $tIdx === 89,
-        ];
+// 查询跨客户行业均值（所有客户的平均每日提及率）
+$industryByDate = [];
+try {
+    $stmtIndustryTrend = $db->prepare("
+        SELECT day, ROUND(AVG(rate), 0) AS avg_rate
+        FROM (
+            SELECT customer_id, queried_at AS day,
+                   CASE WHEN COUNT(*) > 0 THEN ROUND(COUNT(*) FILTER (WHERE brand_mentioned = TRUE)::numeric / COUNT(*) * 100, 0) ELSE 0 END AS rate
+            FROM geo_monitor_records
+            WHERE queried_at >= CURRENT_DATE - INTERVAL '90 days'
+            GROUP BY customer_id, queried_at
+        ) sub
+        GROUP BY day
+        ORDER BY day ASC
+    ");
+    $stmtIndustryTrend->execute();
+    foreach ($stmtIndustryTrend->fetchAll(PDO::FETCH_ASSOC) as $iRow) {
+        $industryByDate[$iRow['day']] = (int) $iRow['avg_rate'];
     }
-} else {
-    $trendStart = new DateTimeImmutable('2026-02-17');
-    for ($index = 0; $index < 90; $index++) {
-        $date = $trendStart->modify('+' . $index . ' days')->format('m-d');
-        $progress = $index / 89;
-        $noise    = ($sr($index + 100, 0, 12) - 6);
+} catch (Throwable $_it) {}
+
+if ($hasRealData && !empty($realMonitorData['by_date'])) {
+    // 只保留有真实监测数据的日期，不做前向填充
+    foreach ($realMonitorData['by_date'] as $td => $dData) {
         $trendPoints[] = [
-            'date'     => $date,
-            'brand'    => (int) min(98, max(20, round($brandBase + ($brandPeak - $brandBase) * $progress + $noise * 0.6))),
-            'industry' => (int) min(80, max(30, round($industryBase + ($industryPeak - $industryBase) * $progress + ($sr($index + 200, 0, 8) - 4) * 0.5))),
-            'origin'   => $index === 0 ? 'radar_baseline' : 'live',
-            'partial'  => $index === 89,
+            'date'      => (new DateTimeImmutable($td))->format('m-d'),
+            'brand'     => (int) $dData['rate'],
+            'industry'  => $industryByDate[$td] ?? null,
+            'has_industry' => isset($industryByDate[$td]),
+            'origin'    => 'live',
         ];
     }
 }
 
-$latestBrandRate    = end($trendPoints)['brand'];
-$latestIndustryRate = end($trendPoints)['industry'];
-$brandRiseTotal     = $latestBrandRate - $trendPoints[0]['brand'];
+// 获取最新行业均值（取最近一次跨客户平均，供雷达图使用）
+$latestIndustryRate = 50;
+if (!empty($industryByDate)) {
+    $latestIndustryRate = (int) end($industryByDate);
+}
+
+if (!empty($trendPoints)) {
+    $latestBrandRate = end($trendPoints)['brand'];
+    $brandRiseTotal  = $latestBrandRate - $trendPoints[0]['brand'];
+} else {
+    $latestBrandRate = 0;
+    $brandRiseTotal  = 0;
+}
 reset($trendPoints);
 
 // ── 雷达图：mock 保底值（不依赖真实数据时使用）─────────────────────
@@ -578,7 +575,7 @@ try {
 } catch (Throwable $_artE) {}
 
 $renewalItems = [
-    ['label' => '可见率提升', 'value' => $trendPoints[0]['brand'] . '% → ' . $latestBrandRate . '%', 'desc' => '从诊断基线到本月监测，客户可见率提升 ' . $brandRiseTotal . ' 个百分点。'],
+    ['label' => '可见率提升', 'value' => ($trendPoints[0]['brand'] ?? 0) . '% → ' . $latestBrandRate . '%', 'desc' => !empty($trendPoints) ? '从诊断基线到本月监测，客户可见率提升 ' . $brandRiseTotal . ' 个百分点。' : '持续监测后自动计算提升幅度。'],
     ['label' => '竞品挤出', 'value' => $sr(99, 1, 3) . ' 个', 'desc' => '推荐型问题中，竞品的平均排名被压到品牌之后。'],
     ['label' => '原话证据', 'value' => count($conversations) . ' 条', 'desc' => '可直接展示 AI 如何提到品牌、竞品和引用来源。'],
     ['label' => '续费触发', 'value' => 'T-14 自动', 'desc' => '合同到期日 ' . $contractEndAt . '，到期前 14 天自动生成证据包并提醒负责人。'],
@@ -586,11 +583,46 @@ $renewalItems = [
 
 
 $thresholdRows = [
-    ['type' => 'dropped_out', 'level' => 'HIGH', 'rule' => '核心词从进引用集掉出', 'result' => '自动触发应急 SOP'],
-    ['type' => 'hit_rate_fall', 'level' => 'HIGH', 'rule' => '命中率单周跌幅 ≥ 15pp', 'result' => '自动触发应急 SOP'],
-    ['type' => 'hit_rate_soft', 'level' => 'MEDIUM', 'rule' => '命中率单周跌幅 5-15pp', 'result' => '进入本周优化清单'],
-    ['type' => 'source_low', 'level' => 'MEDIUM', 'rule' => '引用来源数 < 20', 'result' => '补信源与案例资料'],
-    ['type' => 'normal_rotation', 'level' => 'LOW', 'rule' => '引用来源 40-60% 正常轮换', 'result' => '仅记录到月度复盘'],
+    [
+        'name'  => '品牌消失',
+        'level' => 'HIGH',
+        'icon'  => '🚨',
+        'rule'  => '品牌之前在 AI 回答中被提及，现在突然不再被提及了',
+        'cause' => 'AI 模型更新或竞品内容覆盖了品牌信源',
+        'action' => '立即排查并补充品牌内容',
+    ],
+    [
+        'name'  => '提及率骤降',
+        'level' => 'HIGH',
+        'icon'  => '📉',
+        'rule'  => '品牌在 AI 回答中的出现比例，一周内下降超过 15 个百分点',
+        'cause' => '竞品发布了大量新内容，挤压了品牌曝光',
+        'action' => '启动应急内容补充，压制竞品',
+    ],
+    [
+        'name'  => '提及率下滑',
+        'level' => 'MEDIUM',
+        'icon'  => '⚠️',
+        'rule'  => '品牌在 AI 回答中的出现比例，一周内下降 5-15 个百分点',
+        'cause' => '品牌内容更新频率不足，被竞品逐步追赶',
+        'action' => '纳入本周内容优化计划，补充高质量文章',
+    ],
+    [
+        'name'  => '信源不足',
+        'level' => 'MEDIUM',
+        'icon'  => '📄',
+        'rule'  => '品牌被 AI 引用的独立来源少于 20 个，可信度受限',
+        'cause' => '品牌内容传播渠道单一，缺乏多平台背书',
+        'action' => '拓展内容分发渠道，增加权威媒体引用',
+    ],
+    [
+        'name'  => '引用正常',
+        'level' => 'LOW',
+        'icon'  => '✅',
+        'rule'  => '品牌引用来源在 40-60% 范围内自然轮换，属于健康状态',
+        'cause' => 'AI 平台正常的内容更新机制',
+        'action' => '无需干预，仅记录到月度复盘',
+    ],
 ];
 
 $quotaRows = [
@@ -622,10 +654,10 @@ require_once __DIR__ . '/includes/header.php';
             <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo max(1, count($competitorsFromCustomer)); ?> 个</div>
             <p class="mt-1 text-xs text-gray-400">当前追踪竞品数量</p>
         </div>
-        <div class="rounded-xl border border-red-200 <?php echo count($alerts) > 0 ? 'bg-red-50' : 'bg-white'; ?> p-5 shadow-sm">
-            <p class="text-sm font-semibold <?php echo count($alerts) > 0 ? 'text-red-700' : 'text-gray-500'; ?>">异常告警</p>
-            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo count($alerts); ?> 项</div>
-            <p class="mt-1 text-xs <?php echo count($alerts) > 0 ? 'text-red-500' : 'text-gray-400'; ?>"><?php echo count($alerts) > 0 ? '点击异常告警 tab 查看详情' : '暂无异常'; ?></p>
+        <div class="rounded-xl border border-red-200 <?php echo $realAlertCount > 0 ? 'bg-red-50' : 'bg-white'; ?> p-5 shadow-sm">
+            <p class="text-sm font-semibold <?php echo $realAlertCount > 0 ? 'text-red-700' : 'text-gray-500'; ?>">异常告警</p>
+            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo $realAlertCount; ?> 项</div>
+            <p class="mt-1 text-xs <?php echo $realAlertCount > 0 ? 'text-red-500' : 'text-gray-400'; ?>"><?php echo $realAlertCount > 0 ? '点击异常告警 tab 查看详情' : '暂无真实告警'; ?></p>
         </div>
         <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <p class="text-sm font-semibold text-gray-500">续费证据包</p>
@@ -691,12 +723,15 @@ require_once __DIR__ . '/includes/header.php';
                         <?php endforeach; ?>
                     </div>
                 </div>
+                <div id="trend-empty" class="hidden h-[360px] w-full flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 text-center">
+                    <svg class="mb-3 h-12 w-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                    <p class="text-sm font-medium text-gray-500">监测数据不足</p>
+                    <p class="mt-1 text-xs text-gray-400">请持续运行监测任务，至少积累 2 天数据后显示趋势图</p>
+                </div>
                 <svg id="trend-chart" class="h-[360px] w-full" viewBox="0 0 860 360" role="img" aria-label="数据趋势分析图"></svg>
                 <div class="mt-3 flex flex-wrap justify-center gap-5 text-sm text-gray-500">
                     <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-blue-500"></span>品牌提及率</span>
-                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-gray-500"></span>行业均值</span>
-                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-emerald-500"></span>基线</span>
-                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-orange-500"></span>partial 数据延后</span>
+                    <span class="inline-flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-gray-500"></span>行业均值（跨客户）</span>
                 </div>
             </div>
         </div>
@@ -842,13 +877,24 @@ require_once __DIR__ . '/includes/header.php';
             <div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
                 <div class="lg:col-span-3 grid grid-cols-1 gap-4 xl:grid-cols-2">
                     <?php
-                    // 优先使用真实告警；无数据时显示 mock（并标注）
-                    $displayAlerts = $hasRealAlerts ? $realAlerts : $alerts;
+                    // 只展示真实告警；无数据时展示空状态，避免演示样例混淆业务判断。
+                    $displayAlerts = $realAlerts;
                     $isRealAlertData = $hasRealAlerts;
                     ?>
                     <?php if (!$isRealAlertData): ?>
-                        <div class="xl:col-span-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                            暂无真实告警数据，以下为演示样例。每日监测脚本积累数据后自动替换。
+                        <div class="xl:col-span-2 rounded-xl border border-gray-200 bg-white p-8 text-center">
+                            <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+                                <i data-lucide="check-circle-2" class="h-6 w-6"></i>
+                            </div>
+                            <h3 class="mt-4 text-lg font-bold text-gray-900">暂无真实异常告警</h3>
+                            <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-gray-600">
+                                当前客户有 <?php echo (int) $realMonitorData['total']; ?> 条监测记录、<?php echo count($platformStats); ?> 个平台统计，但还没有触发竞品超越或命中率异常。告警只会在每日监测脚本写入 <code class="rounded bg-gray-100 px-1">geo_monitor_alerts</code> 后出现。
+                            </p>
+                            <div class="mt-5 flex flex-wrap justify-center gap-3 text-sm">
+                                <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="rounded-lg border border-gray-300 bg-white px-4 py-2 font-semibold text-gray-700 hover:bg-gray-50">检查客户关键词</a>
+                                <a href="<?php echo htmlspecialchars(admin_url('monitor-cookies.php')); ?>" class="rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 font-semibold text-indigo-700 hover:bg-indigo-100">🤖 配置 AI 平台 Cookie</a>
+                                <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="rounded-lg bg-slate-900 px-4 py-2 font-semibold text-white hover:bg-slate-700">刷新监测页</a>
+                            </div>
                         </div>
                     <?php endif; ?>
                     <?php foreach ($displayAlerts as $alert): ?>
@@ -864,6 +910,11 @@ require_once __DIR__ . '/includes/header.php';
                         if ($isRealAlertData) {
                             $alertTitle = match($alert['alert_type'] ?? '') {
                                 'competitor_surpass' => '竞品「' . htmlspecialchars($alert['competitor_name'], ENT_QUOTES, 'UTF-8') . '」超越品牌',
+                                'keyword_zero_visibility' => '关键词「' . htmlspecialchars($alert['keyword'], ENT_QUOTES, 'UTF-8') . '」零可见',
+                                'core_rate_low' => '核心关键词平均提及率过低',
+                                'source_diversity_low' => '品牌提及来源覆盖不足',
+                                'visibility_drop' => '品牌提及率周环比下跌',
+                                'accuracy_low' => 'AI 回答语义准确度不足',
                                 default              => htmlspecialchars($alert['alert_type'] ?? '', ENT_QUOTES, 'UTF-8'),
                             };
                             $alertDesc = htmlspecialchars($alert['detail'] ?? '', ENT_QUOTES, 'UTF-8');
@@ -897,6 +948,30 @@ require_once __DIR__ . '/includes/header.php';
                                 <div class="mt-3 rounded-lg bg-white/80 p-3 text-sm text-gray-700">
                                     <span class="font-semibold">建议处置：</span>针对关键词「<?php echo htmlspecialchars($alert['keyword'] ?? '', ENT_QUOTES, 'UTF-8'); ?>」补充信源文章，压制竞品曝光。
                                 </div>
+                            <?php elseif ($isRealAlertData): ?>
+                                <?php
+                                $actionText = match($alert['alert_type'] ?? '') {
+                                    'keyword_zero_visibility' => '优先补充该关键词的问答型内容、品牌事实页和第三方信源，发布后重新跑监测。',
+                                    'core_rate_low' => '检查低提及关键词，补齐品牌母句、服务边界、案例证据和可引用摘要。',
+                                    'source_diversity_low' => '增加不同平台的可索引信源，至少覆盖官网、问答平台和第三方内容平台。',
+                                    'visibility_drop' => '对比下跌前后的关键词和平台，优先修复跌幅最大的内容入口。',
+                                    'accuracy_low' => '修正品牌知识库中的事实口径，并补充可核验来源，降低 AI 误答。',
+                                    default => '进入本周优化清单，补充内容、信源和复测关键词。',
+                                };
+                                ?>
+                                <div class="mt-4 grid grid-cols-2 gap-2 rounded-lg bg-white/80 p-3 text-sm">
+                                    <div class="text-center">
+                                        <div class="text-xl font-bold text-blue-700"><?php echo htmlspecialchars((string) $alert['brand_rate'], ENT_QUOTES, 'UTF-8'); ?></div>
+                                        <div class="text-xs text-gray-500">当前指标</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="text-xl font-bold text-slate-700"><?php echo htmlspecialchars((string) $alert['competitor_rate'], ENT_QUOTES, 'UTF-8'); ?></div>
+                                        <div class="text-xs text-gray-500">阈值/对照</div>
+                                    </div>
+                                </div>
+                                <div class="mt-3 rounded-lg bg-white/80 p-3 text-sm text-gray-700">
+                                    <span class="font-semibold">建议处置：</span><?php echo htmlspecialchars($actionText, ENT_QUOTES, 'UTF-8'); ?>
+                                </div>
                             <?php elseif (!$isRealAlertData): ?>
                                 <div class="mt-4 rounded-lg bg-white/80 p-3 text-sm text-gray-700">
                                     <p><span class="font-semibold">阈值：</span><?php echo htmlspecialchars($alert['threshold'] ?? '', ENT_QUOTES, 'UTF-8'); ?></p>
@@ -907,16 +982,25 @@ require_once __DIR__ . '/includes/header.php';
                     <?php endforeach; ?>
                 </div>
                 <div class="rounded-xl border border-gray-200 bg-white p-5">
-                    <h3 class="text-lg font-bold text-gray-900">MVP 告警阈值</h3>
+                    <h3 class="text-lg font-bold text-gray-900">告警规则说明</h3>
+                    <p class="mt-1 text-xs text-gray-500">系统根据以下规则自动生成异常告警</p>
                     <div class="mt-4 space-y-3">
                         <?php foreach ($thresholdRows as $row): ?>
-                            <div class="rounded-lg bg-gray-50 p-3">
-                                <div class="flex items-center justify-between gap-2">
-                                    <span class="text-sm font-bold text-gray-900"><?php echo htmlspecialchars($row['type'], ENT_QUOTES, 'UTF-8'); ?></span>
-                                    <span class="rounded-full px-2 py-1 text-xs font-bold <?php echo $row['level'] === 'HIGH' ? 'bg-red-100 text-red-700' : ($row['level'] === 'MEDIUM' ? 'bg-orange-100 text-orange-700' : 'bg-gray-200 text-gray-600'); ?>"><?php echo htmlspecialchars($row['level'], ENT_QUOTES, 'UTF-8'); ?></span>
+                            <div class="rounded-lg border-l-4 <?php echo $row['level'] === 'HIGH' ? 'border-red-400 bg-red-50' : ($row['level'] === 'MEDIUM' ? 'border-orange-400 bg-orange-50' : 'border-green-400 bg-green-50'); ?> p-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-base"><?php echo $row['icon']; ?></span>
+                                    <span class="text-sm font-bold text-gray-900"><?php echo htmlspecialchars($row['name'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                    <span class="rounded-full px-2 py-0.5 text-xs font-bold <?php echo $row['level'] === 'HIGH' ? 'bg-red-200 text-red-800' : ($row['level'] === 'MEDIUM' ? 'bg-orange-200 text-orange-800' : 'bg-green-200 text-green-800'); ?>"><?php echo htmlspecialchars($row['level'], ENT_QUOTES, 'UTF-8'); ?></span>
                                 </div>
-                                <p class="mt-2 text-xs leading-5 text-gray-600"><?php echo htmlspecialchars($row['rule'], ENT_QUOTES, 'UTF-8'); ?></p>
-                                <p class="mt-1 text-xs font-semibold text-gray-700"><?php echo htmlspecialchars($row['result'], ENT_QUOTES, 'UTF-8'); ?></p>
+                                <p class="mt-2 text-xs leading-5 text-gray-700"><?php echo htmlspecialchars($row['rule'], ENT_QUOTES, 'UTF-8'); ?></p>
+                                <div class="mt-2 flex items-start gap-1 text-xs text-gray-600">
+                                    <span class="mt-0.5 shrink-0 font-semibold text-gray-500">常见原因：</span>
+                                    <span><?php echo htmlspecialchars($row['cause'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                </div>
+                                <div class="mt-1 flex items-start gap-1 text-xs text-gray-600">
+                                    <span class="mt-0.5 shrink-0 font-semibold text-gray-500">建议处置：</span>
+                                    <span class="font-medium text-gray-800"><?php echo htmlspecialchars($row['action'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                </div>
                             </div>
                         <?php endforeach; ?>
                     </div>
@@ -1333,10 +1417,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderTrendChart() {
         const svg = document.getElementById('trend-chart');
+        const emptyEl = document.getElementById('trend-empty');
         if (!svg) return;
         const activeRange = document.querySelector('[data-trend-range].bg-blue-600')?.dataset.trendRange || '30';
         const count = activeRange === '7' ? 7 : (activeRange === '30' ? 30 : trendPoints.length);
         const points = trendPoints.slice(-count);
+
+        // 数据不足时显示空状态
+        if (points.length < 2) {
+            svg.classList.add('hidden');
+            if (emptyEl) emptyEl.classList.remove('hidden');
+            return;
+        }
+        svg.classList.remove('hidden');
+        if (emptyEl) emptyEl.classList.add('hidden');
+
         const width = 860;
         const height = 360;
         const padX = 56;
@@ -1360,24 +1455,28 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<line x1="${plotStartX}" y1="${y}" x2="${plotEndX}" y2="${y}" stroke="#E5E7EB" />
                 <text x="${padX - 12}" y="${y + 4}" text-anchor="end" font-size="12" fill="#9CA3AF">${value}%</text>`;
         }).join('');
+        // 品牌柱子：只画有真实数据的点
         const bars = points.map((point, index) => {
             const center = xFor(index);
             const y = yFor(point.brand);
             const h = height - padBottom - y;
-            const fill = point.origin === 'radar_baseline' ? '#10B981' : (point.partial ? '#F97316' : '#4F83E8');
-            return `<rect x="${center - barWidth / 2}" y="${y}" width="${barWidth}" height="${h}" rx="7" fill="${fill}" opacity="0.84" />`;
+            return `<rect x="${center - barWidth / 2}" y="${y}" width="${barWidth}" height="${h}" rx="7" fill="#4F83E8" opacity="0.84" />`;
         }).join('');
-        const linePoints = points.map((point, index) => {
-            const x = xFor(index);
-            const y = yFor(point.industry);
-            return `${x.toFixed(1)},${y.toFixed(1)}`;
-        }).join(' ');
-        const industryLine = `<polyline points="${linePoints}" fill="none" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />`;
-        const dots = points.map((point, index) => {
-            const x = xFor(index);
-            const y = yFor(point.industry);
-            return `<circle cx="${x}" cy="${y}" r="${activeRange === '90' ? 3.2 : 5}" fill="#64748B" />`;
-        }).join('');
+        // 行业均值折线：只连接有行业数据的点
+        const industryPoints = points.filter(p => p.has_industry);
+        let industryLine = '';
+        let dots = '';
+        if (industryPoints.length >= 2) {
+            const lineCoords = industryPoints.map((point) => {
+                const idx = points.indexOf(point);
+                return `${xFor(idx).toFixed(1)},${yFor(point.industry).toFixed(1)}`;
+            }).join(' ');
+            industryLine = `<polyline points="${lineCoords}" fill="none" stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />`;
+            dots = industryPoints.map((point) => {
+                const idx = points.indexOf(point);
+                return `<circle cx="${xFor(idx)}" cy="${yFor(point.industry)}" r="${activeRange === '90' ? 3.2 : 5}" fill="#64748B" />`;
+            }).join('');
+        }
         const labelEvery = activeRange === '7' ? 1 : (activeRange === '30' ? 7 : 15);
         const labels = points.map((point, index) => {
             const isLast = index === points.length - 1;

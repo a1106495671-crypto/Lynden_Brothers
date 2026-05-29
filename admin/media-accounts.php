@@ -130,7 +130,7 @@ function ma_option_label(array $opts, string $key): string {
         <?php if (!empty($filters)): ?>
             <a href="media-accounts.php" class="text-xs text-blue-600 hover:underline">清除全部筛选</a>
         <?php endif; ?>
-        <a href="customers.php" class="text-xs text-slate-500 hover:text-slate-700">切换客户 →</a>
+        <a href="<?php echo htmlspecialchars(admin_url('customers.php?switch_customer=1#customer-switcher')); ?>" class="text-xs text-slate-500 hover:text-slate-700">切换客户 →</a>
     </div>
 </div>
 <?php else: ?>

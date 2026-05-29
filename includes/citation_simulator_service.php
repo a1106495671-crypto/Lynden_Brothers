@@ -712,14 +712,21 @@ function citation_simulator_build_result(array $input, array $aiProviders, array
         'domain' => trim((string) ($input['domain'] ?? '')),
     ];
 
-    // 真实反查：mode=real 且至少有 kimi/deepseek 之一配置了 key
-    $useReal = $apiConfig !== null
-        && ($apiConfig['mode'] ?? 'local') === 'real'
-        && !empty(array_filter(['kimi', 'deepseek'], static fn($p) => !empty(($apiConfig['providers'][$p]['configured'] ?? false))));
-
-    $citations = $useReal
-        ? citation_simulator_real_citations($input, $selectedProviders, $apiConfig)
-        : citation_simulator_generate_stub_citations($input, $selectedProviders);
+    $mode = $apiConfig['mode'] ?? 'local';
+    if ($apiConfig !== null && $mode === 'real') {
+        $configuredSelected = array_values(array_filter(
+            $selectedProviders,
+            static fn($p) => !empty(($apiConfig['providers'][$p]['configured'] ?? false))
+                && (($apiConfig['providers'][$p]['op_status'] ?? 'normal') !== 'disabled')
+        ));
+        if (!$configuredSelected) {
+            throw new RuntimeException('真实反查模式下没有可用的已配置 provider，请先配置并启用至少一个 AI / 搜索源');
+        }
+        $citations = citation_simulator_real_citations($input, $configuredSelected, $apiConfig);
+        $selectedProviders = $configuredSelected;
+    } else {
+        $citations = citation_simulator_generate_stub_citations($input, $selectedProviders);
+    }
 
     $sources = citation_simulator_aggregate_ranked_sources($citations, $brand);
     $simulation = citation_simulator_simulate_actions($sources, $selectedActions, $actionDefs);
@@ -1252,28 +1259,25 @@ function citation_simulator_parse_real_response(string $responseText, string $pr
 }
 
 /**
- * 真实反查入口：对已配置的 provider 发起 API 调用，未配置的自动降级为 stub
+ * 真实反查入口：只对已配置的 provider 发起 API 调用；真实模式不再静默降级为本地估算
  * 返回格式与 citation_simulator_generate_stub_citations() 完全一致
  */
 function citation_simulator_real_citations(array $input, array $selectedProviders, array $apiConfig): array {
     $queryText = trim((string) ($input['query_text'] ?? ''));
     $industry = trim((string) ($input['industry_context'] ?? ''));
     $citations = [];
-    $stubProviders = [];
 
     foreach ($selectedProviders as $provider) {
         $providerCfg = $apiConfig['providers'][$provider] ?? [];
         $configured = !empty($providerCfg['configured']);
 
         if (!$configured) {
-            $stubProviders[] = $provider;
-            continue;
+            throw new RuntimeException("真实反查 provider 未配置：{$provider}");
         }
 
         $apiKey = citation_simulator_get_provider_key($provider);
         if ($apiKey === '') {
-            $stubProviders[] = $provider;
-            continue;
+            throw new RuntimeException("真实反查 provider 缺少 API Key：{$provider}");
         }
 
         $responseText = null;
@@ -1292,12 +1296,9 @@ function citation_simulator_real_citations(array $input, array $selectedProvider
         } elseif ($provider === 'bocha') {
             $responseText = citation_simulator_call_bocha($apiKey, $queryText);
         }
-        // 其他 provider 留给后续接入
 
         if ($responseText === null) {
-            // API 调用失败，降级为 stub
-            $stubProviders[] = $provider;
-            continue;
+            throw new RuntimeException("真实反查调用失败：{$provider}");
         }
 
         $parsed = citation_simulator_parse_real_response($responseText, $provider, $input);
@@ -1305,26 +1306,11 @@ function citation_simulator_real_citations(array $input, array $selectedProvider
             $citations[] = $c;
         }
 
-        // 真实回答里没找到竞品或平台，用 stub 补齐背景选手（保持排行榜完整）
-        $hasNonClient = !empty(array_filter($parsed, static fn($c) => ($c['source_type'] ?? '') !== 'brand'));
-        if (!$hasNonClient) {
-            $bgStub = citation_simulator_generate_stub_citations($input, [$provider]);
-            foreach ($bgStub as $c) {
-                if (($c['source_type'] ?? '') !== 'brand') {
-                    $citations[] = $c;
-                }
-            }
-        }
     }
 
-    // 未配置或调用失败的 provider 用 stub 补齐
-    if (!empty($stubProviders)) {
-        $stubCitations = citation_simulator_generate_stub_citations($input, $stubProviders);
-        foreach ($stubCitations as $c) {
-            $citations[] = $c;
-        }
+    if (empty($citations)) {
+        throw new RuntimeException('真实反查完成，但没有解析到可用引用源；请检查模型回答或搜索源返回内容');
     }
 
     return $citations;
 }
-

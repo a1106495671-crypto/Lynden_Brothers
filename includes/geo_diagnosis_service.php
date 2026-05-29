@@ -63,9 +63,13 @@ function geo_diagnosis_ensure_schema(PDO $db): void {
             weight NUMERIC(4,2) NOT NULL,
             raw_metric JSONB,
             details_json JSONB,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (diagnosis_id, signal_key)
         )
     ");
+    if (!db_column_exists($db, 'geo_diagnosis_signal_scores', 'updated_at')) {
+        $db->exec("ALTER TABLE geo_diagnosis_signal_scores ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+    }
     $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_scores_run ON geo_diagnosis_signal_scores(diagnosis_id)");
 
     $db->exec("
@@ -173,6 +177,7 @@ function geo_diagnosis_seed_definitions(PDO $db): void {
         '企业服务' => 70,
         'B2B SaaS' => 72,
         '消费品' => 68,
+        '餐饮 / 新茶饮' => 66,
         '教育' => 70,
         '医疗' => 76,
         '金融' => 78,
@@ -202,7 +207,7 @@ function geo_diagnosis_signal_catalog(): array {
 }
 
 function geo_diagnosis_industries(): array {
-    return ['GEO服务商', 'AI营销服务', 'B2B专业服务', '企业服务', 'B2B SaaS', '消费品', '教育', '医疗', '金融', '本地生活'];
+    return ['GEO服务商', 'AI营销服务', 'B2B专业服务', '企业服务', 'B2B SaaS', '消费品', '餐饮 / 新茶饮', '教育', '医疗', '金融', '本地生活'];
 }
 
 function geo_diagnosis_data_source_config(): array {
@@ -327,6 +332,14 @@ function geo_diagnosis_create(PDO $db, array $input): string {
         $brandId = (string) $brandStmt->fetchColumn();
 
         $scores = geo_diagnosis_calculate_scores($db, $brandName, $domain, $industry, $evidence);
+        // 如果有关联客户，用真实监测数据覆盖估算分数
+        $customerId = trim((string) ($input['customer_id'] ?? ''));
+        if ($customerId !== '') {
+            $monitorData = geo_diagnosis_monitor_data($db, $customerId, $brandName);
+            if (!empty($monitorData)) {
+                $scores = geo_diagnosis_apply_monitor_data($scores, $monitorData);
+            }
+        }
         $overall = geo_diagnosis_overall_score($scores);
         $benchmark = geo_diagnosis_industry_benchmark($db, $industry);
         $hitRate = geo_diagnosis_hit_rate($overall);
@@ -397,6 +410,7 @@ function geo_diagnosis_create(PDO $db, array $input): string {
 function geo_diagnosis_calculate_scores(PDO $db, string $brand, string $domain, string $industry, string $evidence): array {
     // 优先走真实搜索 API；provider=disabled 或 API 调用失败时自动降级为估算
     $cfg = geo_diagnosis_data_source_config();
+    $sourceMode = 'estimated';
     if (($cfg['provider'] ?? 'disabled') !== 'disabled' && ($cfg['api_key'] ?? '') !== '') {
         $realScores = geo_diagnosis_real_calculate_scores($brand, $domain, $industry, $evidence, $cfg);
         if ($realScores !== null) {
@@ -404,7 +418,7 @@ function geo_diagnosis_calculate_scores(PDO $db, string $brand, string $domain, 
         }
     }
 
-    // ── 降级估算（原有逻辑） ──
+    // ── 降级估算：本地资料 + 可选官网抓取。没有搜索 API 时不能判断真实全网声量。 ──
     $signals = geo_diagnosis_signal_catalog();
     $authority = geo_diagnosis_domain_authority($db, $domain);
     $authorityWeight = (float) ($authority['weight'] ?? 0.2);
@@ -412,29 +426,41 @@ function geo_diagnosis_calculate_scores(PDO $db, string $brand, string $domain, 
     $brandLen = mb_strlen($brand, 'UTF-8');
     $hasChinese = preg_match('/\p{Han}/u', $brand) === 1;
     $hasDomain = $domain !== '';
-    $evidenceLen = mb_strlen($evidence, 'UTF-8');
-    $numbers = preg_match_all('/\d+(\.\d+)?%?|\d{4}年|\d{4}-\d{1,2}/u', $evidence, $m);
-    $links = preg_match_all('#https?://|www\.|\.com|\.cn|\.org|\.edu|\.gov#i', $evidence, $m2);
-    $structureHints = preg_match_all('/FAQ|问答|清单|步骤|表格|案例|数据|报告|白皮书|schema|JSON-LD/i', $evidence, $m3);
-    $platformHints = preg_match_all('/知乎|小红书|B站|bilibili|公众号|即刻|豆瓣|抖音|头条|Reddit/i', $evidence, $m4);
-    $identityHints = preg_match_all('/关于|About|联系|Contact|作者|编辑|隐私|备案|ICP|公司|团队/i', $evidence, $m5);
+
+    $homepageHtml = '';
+    if (!empty($cfg['enable_site_crawl']) && $domain !== '') {
+        $homepageHtml = (string) (geo_diagnosis_crawl_url('https://' . $domain, (int) ($cfg['timeout_seconds'] ?? 10)) ?? '');
+        if ($homepageHtml !== '') {
+            $sourceMode = 'site_crawl_estimate';
+        }
+    }
+
+    $homepageText = $homepageHtml !== '' ? mb_substr(trim(preg_replace('/\s+/u', ' ', strip_tags($homepageHtml))), 0, 6000) : '';
+    $combinedEvidence = trim($evidence . "\n" . $homepageText);
+    $evidenceLen = mb_strlen($combinedEvidence, 'UTF-8');
+    $numbers = preg_match_all('/\d+(\.\d+)?%?|\d{4}年|\d{4}-\d{1,2}/u', $combinedEvidence, $m);
+    $links = preg_match_all('#https?://|www\.|\.com|\.cn|\.org|\.edu|\.gov#i', $combinedEvidence . "\n" . $homepageHtml, $m2);
+    $structureHints = preg_match_all('/FAQ|问答|清单|步骤|表格|案例|数据|报告|白皮书|schema|JSON-LD|application\/ld\+json|itemtype|schema\.org|<h[1-6]|<ul|<ol|<table/i', $combinedEvidence . "\n" . $homepageHtml, $m3);
+    $platformHints = preg_match_all('/知乎|小红书|B站|bilibili|公众号|即刻|豆瓣|抖音|头条|Reddit|微博/i', $combinedEvidence, $m4);
+    $identityHints = preg_match_all('/关于|About|联系|Contact|作者|编辑|隐私|备案|ICP|公司|团队|门店|加盟|品牌|隐私政策|用户协议/i', $combinedEvidence . "\n" . $homepageHtml, $m5);
+    $homepageBonus = $homepageHtml !== '' ? 1 : 0;
 
     $scoresByKey = [
         'third_party_mention' => min(100, 22 + $authorityWeight * 35 + min(24, $platformHints * 8) + (($seed % 13))),
-        'fact_density' => min(100, 18 + min(46, $numbers * 7 + $links * 5) + min(24, $evidenceLen / 16) + (($seed >> 3) % 10)),
-        'structure' => min(100, 28 + min(42, $structureHints * 10) + ($hasDomain ? 12 : 0) + (($seed >> 5) % 12)),
+        'fact_density' => min(100, 18 + min(46, $numbers * 7 + $links * 5) + min(24, $evidenceLen / 120) + $homepageBonus * 8 + (($seed >> 3) % 8)),
+        'structure' => min(100, 28 + min(42, $structureHints * 4) + ($hasDomain ? 12 : 0) + $homepageBonus * 8 + (($seed >> 5) % 8)),
         'authoritative_links' => min(100, 12 + $authorityWeight * 62 + min(18, $links * 4) + (($seed >> 7) % 8)),
         'ugc_coverage' => min(100, 18 + min(44, $platformHints * 12) + ($hasChinese ? 12 : 4) + min(12, $brandLen * 1.2) + (($seed >> 9) % 10)),
-        'site_identity' => min(100, 30 + ($hasDomain ? 18 : 0) + min(34, $identityHints * 9) + (str_ends_with($domain, '.cn') ? 8 : 0) + (($seed >> 11) % 10)),
+        'site_identity' => min(100, 30 + ($hasDomain ? 18 : 0) + min(34, $identityHints * 5) + $homepageBonus * 10 + (str_ends_with($domain, '.cn') ? 8 : 0) + (($seed >> 11) % 8)),
     ];
 
     $details = [
-        'third_party_mention' => ['hint' => '基于品牌名、平台线索和权威域名种子库估算第三方提及质量', 'domain_tier' => $authority['tier'] ?? 'T5'],
-        'fact_density' => ['hint' => '基于输入资料里的数字、日期、链接和事实表达密度估算', 'fact_hints' => $numbers + $links],
-        'structure' => ['hint' => '基于 FAQ、清单、案例、表格、结构化数据等线索估算', 'structure_hints' => $structureHints],
-        'authoritative_links' => ['hint' => '基于官网域名权威分层和资料里的外链线索估算', 'authority_weight' => $authorityWeight],
-        'ugc_coverage' => ['hint' => '基于知乎、小红书、B站、公众号等平台线索估算', 'platform_hints' => $platformHints],
-        'site_identity' => ['hint' => '基于官网、关于我们、联系方式、作者、备案、隐私政策等线索估算', 'identity_hints' => $identityHints],
+        'third_party_mention' => ['hint' => '本地估算：未接搜索 API，无法验证真实第三方提及；仅参考输入资料里的平台线索和域名种子库', 'domain_tier' => $authority['tier'] ?? 'T5'],
+        'fact_density' => ['hint' => $homepageHtml !== '' ? '官网抓取 + 输入资料估算事实密度' : '仅基于输入资料估算事实密度', 'fact_hints' => $numbers + $links, 'crawled' => $homepageHtml !== ''],
+        'structure' => ['hint' => $homepageHtml !== '' ? '官网抓取估算结构化信号' : '仅基于输入资料里的结构化线索估算', 'structure_hints' => $structureHints, 'crawled' => $homepageHtml !== ''],
+        'authoritative_links' => ['hint' => '本地估算：未接搜索 API，无法验证权威媒体/政府/高校来源', 'authority_weight' => $authorityWeight],
+        'ugc_coverage' => ['hint' => '本地估算：未接搜索 API，无法验证知乎/小红书/B站/公众号真实覆盖', 'platform_hints' => $platformHints],
+        'site_identity' => ['hint' => $homepageHtml !== '' ? '官网抓取估算站点身份信号' : '基于官网域名和输入资料估算站点身份', 'identity_hints' => $identityHints, 'crawled' => $homepageHtml !== ''],
     ];
 
     $out = [];
@@ -451,11 +477,122 @@ function geo_diagnosis_calculate_scores(PDO $db, string $brand, string $domain, 
                 'domain' => $domain,
                 'industry' => $industry,
                 'evidence_length' => $evidenceLen,
+                'data_source' => $sourceMode,
+                'search_provider' => '',
+                'crawled_homepage' => $homepageHtml !== '',
             ],
             'details' => $details[$signal['key']] ?? [],
         ];
     }
     return $out;
+}
+
+/**
+ * 从 geo_monitor_records 提取真实引用数据，区分品牌词和通用词。
+ * 返回结构化分析，用于替代估算分数。
+ */
+function geo_diagnosis_monitor_data(PDO $db, string $customerId, string $brand): array {
+    $stmt = $db->prepare("
+        SELECT query_text, brand_mentioned, mention_count, competitors_found, provider, queried_at
+        FROM geo_monitor_records
+        WHERE customer_id = ?
+        ORDER BY created_at DESC
+    ");
+    $stmt->execute([$customerId]);
+    $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($records)) {
+        return [];
+    }
+
+    // 品牌词特征：包含品牌名或常见变体
+    $brandWords = [];
+    foreach (preg_split('/[\s\-_\/]+/u', mb_strtolower($brand)) as $w) {
+        if (mb_strlen($w) >= 2) $brandWords[] = $w;
+    }
+
+    $byQuery = [];
+    foreach ($records as $r) {
+        $q = $r['query_text'];
+        if (!isset($byQuery[$q])) {
+            $ql = mb_strtolower($q);
+            $isBranded = false;
+            foreach ($brandWords as $w) {
+                if (mb_strpos($ql, $w) !== false) { $isBranded = true; break; }
+            }
+            $byQuery[$q] = ['total' => 0, 'mentioned' => 0, 'branded' => $isBranded, 'competitors' => []];
+        }
+        $byQuery[$q]['total']++;
+        if ($r['brand_mentioned']) $byQuery[$q]['mentioned']++;
+        $comps = json_decode($r['competitors_found'] ?? '[]', true) ?: [];
+        if ($comps) $byQuery[$q]['competitors'] = array_unique(array_merge($byQuery[$q]['competitors'], $comps));
+    }
+
+    $nonBrandedTotal = 0; $nonBrandedMentioned = 0;
+    $gaps = []; $wins = [];
+    foreach ($byQuery as $q => $d) {
+        $rate = $d['total'] > 0 ? round(100.0 * $d['mentioned'] / $d['total'], 0) : 0;
+        $byQuery[$q]['rate'] = $rate;
+        if (!$d['branded']) {
+            $nonBrandedTotal += $d['total'];
+            $nonBrandedMentioned += $d['mentioned'];
+            if ($d['mentioned'] === 0) $gaps[] = $q;
+            else $wins[] = $q;
+        }
+    }
+
+    $nonBrandedRate = $nonBrandedTotal > 0
+        ? round(100.0 * $nonBrandedMentioned / $nonBrandedTotal, 1)
+        : 0.0;
+
+    return [
+        'total_records'       => count($records),
+        'non_branded_total'   => $nonBrandedTotal,
+        'non_branded_cited'   => $nonBrandedMentioned,
+        'non_branded_rate'    => $nonBrandedRate,
+        'by_query'            => $byQuery,
+        'gap_keywords'        => $gaps,
+        'win_keywords'        => $wins,
+        'data_source'         => 'real_monitor',
+    ];
+}
+
+/**
+ * 当有真实监测数据时，用引用率替换估算分数中的 ugc_coverage 和 third_party_mention。
+ */
+function geo_diagnosis_apply_monitor_data(array $scores, array $monitorData): array {
+    if (empty($monitorData)) return $scores;
+
+    $rate    = (float) ($monitorData['non_branded_rate'] ?? 0);
+    $total   = (int)   ($monitorData['non_branded_total'] ?? 0);
+    $cited   = (int)   ($monitorData['non_branded_cited'] ?? 0);
+    $gaps    = $monitorData['gap_keywords'] ?? [];
+    $wins    = $monitorData['win_keywords'] ?? [];
+
+    // ugc_coverage = 非品牌词实际引用率（0-100）
+    $ugcScore = $rate;
+    // third_party_mention：有赢得引用的关键词则加分，全部为 0% 则压低
+    $mentionBonus = count($wins) > 0 ? min(30, count($wins) * 10) : 0;
+    $mentionScore = min(100, $rate * 0.6 + $mentionBonus);
+
+    foreach ($scores as &$s) {
+        if ($s['key'] === 'ugc_coverage') {
+            $s['score'] = round($ugcScore, 2);
+            $s['raw_metric']['data_source'] = 'real_monitor';
+            $s['raw_metric']['non_branded_total'] = $total;
+            $s['raw_metric']['non_branded_cited'] = $cited;
+            $s['details']['hint'] = "真实监测数据：{$total} 次非品牌词查询，{$cited} 次提及，引用率 {$rate}%";
+            $s['details']['gap_keywords'] = $gaps;
+            $s['details']['win_keywords'] = $wins;
+        }
+        if ($s['key'] === 'third_party_mention') {
+            $s['score'] = round($mentionScore, 2);
+            $s['raw_metric']['data_source'] = 'real_monitor';
+            $s['details']['hint'] = "基于真实 AI 平台查询结果估算第三方提及度";
+        }
+    }
+    unset($s);
+    return $scores;
 }
 
 function geo_diagnosis_overall_score(array $scores): float {
@@ -1151,6 +1288,7 @@ function geo_diagnosis_real_calculate_scores(
                 'domain'          => $domain,
                 'industry'        => $industry,
                 'evidence_length' => mb_strlen($evidence, 'UTF-8'),
+                'data_source'     => 'real_search',
                 'search_provider' => $provider,
             ],
             'details'     => $detailsByKey[$signal['key']] ?? [],

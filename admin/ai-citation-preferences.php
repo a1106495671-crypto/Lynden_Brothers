@@ -167,7 +167,7 @@ require_once __DIR__ . '/includes/header.php';
             <span class="text-xs text-blue-500">偏好已应用 · <?= pref_h($savedPref['applied_at']) ?></span>
         <?php endif; ?>
     </div>
-    <a href="<?= pref_h(admin_url('customers.php')) ?>" class="text-xs text-blue-600 hover:underline">切换客户</a>
+    <a href="<?= pref_h(admin_url('customers.php?switch_customer=1#customer-switcher')) ?>" class="text-xs text-blue-600 hover:underline">切换客户</a>
 </div>
 <?php endif; ?>
 

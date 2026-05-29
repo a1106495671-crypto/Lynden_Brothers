@@ -26,6 +26,117 @@ function sim_type_label(string $type): string {
     return citation_simulator_type_label($type);
 }
 
+function sim_ensure_content_queue(PDO $db): void {
+    $db->exec("CREATE TABLE IF NOT EXISTS geo_content_queue (
+        id SERIAL PRIMARY KEY,
+        customer_id VARCHAR(100),
+        week_num SMALLINT DEFAULT 1,
+        platform VARCHAR(50),
+        keyword VARCHAR(200),
+        title TEXT DEFAULT '',
+        angle TEXT,
+        content_format VARCHAR(50),
+        priority VARCHAR(5) DEFAULT 'P1',
+        status VARCHAR(20) DEFAULT 'pending',
+        article_title TEXT,
+        article_content TEXT,
+        source VARCHAR(50) DEFAULT '',
+        created_at TIMESTAMP DEFAULT NOW(),
+        processed_at TIMESTAMP
+    )");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS title TEXT DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS angle TEXT DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS content_format VARCHAR(50) DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN status SET DEFAULT 'pending'");
+    $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN priority SET DEFAULT 'P1'");
+    $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN created_at SET DEFAULT NOW()");
+}
+
+function sim_customer_id_for_brand(PDO $db, array $formData): string {
+    $brandName = trim((string) ($formData['brand_name'] ?? ''));
+    $domain = trim((string) ($formData['domain'] ?? ''));
+    if ($domain !== '') {
+        $stmt = $db->prepare("SELECT customer_id FROM customers WHERE lower(domain) = lower(?) ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$domain]);
+        $found = (string) ($stmt->fetchColumn() ?: '');
+        if ($found !== '') {
+            return $found;
+        }
+    }
+    if ($brandName !== '') {
+        $stmt = $db->prepare("SELECT customer_id FROM customers WHERE name ILIKE ? ORDER BY id DESC LIMIT 1");
+        $stmt->execute(['%' . $brandName . '%']);
+        $found = (string) ($stmt->fetchColumn() ?: '');
+        if ($found !== '') {
+            return $found;
+        }
+    }
+    return $domain !== '' ? preg_replace('/[^a-z0-9]+/i', '-', strtolower($domain)) : preg_replace('/[^a-z0-9\x{4e00}-\x{9fa5}]+/u', '-', strtolower($brandName ?: 'sim-brand'));
+}
+
+function sim_dispatch_actions_to_content_queue(PDO $db, array $formData, array $result, array $actionDefs): int {
+    $selected = array_values(array_filter((array) ($result['selected_actions'] ?? [])));
+    if (!$selected) {
+        throw new RuntimeException('请至少选择一个优化动作再派发');
+    }
+
+    sim_ensure_content_queue($db);
+    $defsByKey = [];
+    foreach ($actionDefs as $def) {
+        $defsByKey[(string) $def['key']] = $def;
+    }
+
+    $customerId = sim_customer_id_for_brand($db, $formData);
+    $keyword = trim((string) ($result['query_text'] ?? $formData['query_text'] ?? ''));
+    $brandName = trim((string) ($formData['brand_name'] ?? ''));
+    $insert = $db->prepare("
+        INSERT INTO geo_content_queue (customer_id, week_num, platform, keyword, title, angle, content_format, priority, status, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'citation_simulator')
+    ");
+
+    $platformByCategory = [
+        'ugc' => '知乎',
+        'pr_media' => '搜狐号',
+        'site' => '官网',
+        'community' => '知乎',
+        'academic' => '微信公众号',
+    ];
+    $formatByCategory = [
+        'ugc' => '测评/问答',
+        'pr_media' => '媒体通稿',
+        'site' => '事实页/指南',
+        'community' => '讨论帖',
+        'academic' => '证据清单',
+    ];
+
+    $count = 0;
+    foreach ($selected as $index => $key) {
+        $def = $defsByKey[$key] ?? null;
+        if (!$def) {
+            continue;
+        }
+        $category = (string) ($def['category'] ?? 'other');
+        $platform = $platformByCategory[$category] ?? '知乎';
+        $format = $formatByCategory[$category] ?? 'GEO内容';
+        $angle = sprintf(
+            '%s：围绕“%s”补充可被 AI 引用的证据。动作说明：%s。目标：提升 %s 在该问题下的引用稳定性。',
+            (string) $def['label'],
+            $keyword,
+            (string) ($def['description'] ?? ''),
+            $brandName !== '' ? $brandName : '本品牌'
+        );
+        $priority = $index === 0 ? 'P0' : 'P1';
+        $week = min(4, $index + 1);
+        $title = sprintf('针对「%s」执行：%s', $keyword, (string) $def['label']);
+        $insert->execute([$customerId, $week, $platform, $keyword, $title, $angle, $format, $priority]);
+        $count++;
+    }
+
+    return $count;
+}
+
 try {
     geo_diagnosis_ensure_schema($db);
     citation_simulator_ensure_schema($db);
@@ -55,6 +166,8 @@ try {
     // 真实 API 查询只在 POST run_simulation / run_batch 时触发；GET 页面加载始终用本地模拟避免超时
     $isRunSimulation = $_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'run_simulation';
     $isRunBatch      = $_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'run_batch';
+    $isSaveSimulation = $_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'save_simulation';
+    $isDispatchActions = $_SERVER['REQUEST_METHOD'] === 'POST' && $postAction === 'dispatch_actions';
     $effectiveConfig = ($isRunSimulation || $isRunBatch) ? $apiConfig : null;
 
     // 批量关键词状态
@@ -66,6 +179,16 @@ try {
     if ($isRunSimulation) {
         citation_simulator_save_result($db, $formData, $result);
         $message = ($apiConfig['mode'] === 'real') ? '真实反查完成，结果已保存' : '引用模拟结果已保存';
+    }
+
+    if ($isSaveSimulation || $isDispatchActions) {
+        $queryId = citation_simulator_save_result($db, $formData, $result);
+        $message = '引用模拟结果已保存';
+        if ($isDispatchActions) {
+            $dispatched = sim_dispatch_actions_to_content_queue($db, $formData, $result, $actionDefs);
+            $db->prepare("UPDATE geo_simulator_simulations SET dispatched = TRUE WHERE query_id = ?")->execute([$queryId]);
+            $message = '已保存模拟结果，并派发 ' . $dispatched . ' 个优化任务到内容生成队列';
+        }
     }
 
     if ($isRunBatch) {
@@ -425,7 +548,6 @@ require_once __DIR__ . '/includes/header.php';
                         </div>
                         <form method="POST" class="px-6 py-6">
                             <input type="hidden" name="csrf_token" value="<?php echo sim_h(generate_csrf_token()); ?>">
-                            <input type="hidden" name="action" value="save_simulation">
                             <input type="hidden" name="brand_name" value="<?php echo sim_h($formData['brand_name']); ?>">
                             <input type="hidden" name="domain" value="<?php echo sim_h($formData['domain']); ?>">
                             <input type="hidden" name="industry_context" value="<?php echo sim_h($formData['industry_context']); ?>">
@@ -471,11 +593,11 @@ require_once __DIR__ . '/includes/header.php';
                                 </div>
                             </div>
                             <div class="mt-6 flex flex-col gap-3 sm:flex-row">
-                                <button type="submit" class="inline-flex flex-1 items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
+                                <button type="submit" name="action" value="save_simulation" class="inline-flex flex-1 items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
                                     <i data-lucide="calculator" class="mr-2 h-4 w-4"></i>
                                     保存模拟结果
                                 </button>
-                                <button type="button" onclick="AdminUtils.showToast('任务派发接口待接入，当前先保留为演示入口', 'info')" class="inline-flex flex-1 items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+                                <button type="submit" name="action" value="dispatch_actions" class="inline-flex flex-1 items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
                                     <i data-lucide="send" class="mr-2 h-4 w-4"></i>
                                     派发到任务管理
                                 </button>

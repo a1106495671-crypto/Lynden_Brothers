@@ -11,6 +11,9 @@ if (!defined('FEISHU_TREASURE')) {
     die('Access denied');
 }
 
+require_once __DIR__ . '/geo_diagnosis_service.php';
+require_once __DIR__ . '/distribution_service.php';
+
 class DatabaseAdmin {
     private static $instance = null;
     private $pdo;
@@ -22,6 +25,7 @@ class DatabaseAdmin {
         $this->ensureApiSchema();
         $this->ensureCompatibilitySchema();
         $this->ensurePgvectorSchema();
+        $this->ensureGeoFeatureSchemas();
         $this->ensureSopTasksSchema();
         $this->ensureSopNodeStatusSchema();
         $this->ensureGeoMonitorSchema();
@@ -92,6 +96,7 @@ class DatabaseAdmin {
             model_type VARCHAR(20) DEFAULT 'chat',
             api_url VARCHAR(500) DEFAULT 'https://api.tu-zi.com',
             daily_limit INTEGER DEFAULT 0, -- 每日调用限制，0为不限制
+            priority INTEGER DEFAULT 10,
             used_today INTEGER DEFAULT 0,
             total_used INTEGER DEFAULT 0,
             status VARCHAR(20) DEFAULT 'active', -- active, inactive
@@ -243,6 +248,14 @@ class DatabaseAdmin {
             slug VARCHAR(100) UNIQUE NOT NULL,
             description TEXT DEFAULT '',
             sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- 标签表
+        CREATE TABLE IF NOT EXISTS tags (
+            id BIGSERIAL PRIMARY KEY,
+            name VARCHAR(50) NOT NULL UNIQUE,
+            slug VARCHAR(50) NOT NULL UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -517,10 +530,10 @@ class DatabaseAdmin {
 
             $promptStmt = $this->pdo->prepare("INSERT INTO prompts (name, type, content, variables) VALUES (?, ?, ?, ?)");
             foreach ([
-                ['默认标题生成', 'title', "请根据关键词\"{{keyword}}\"生成5个吸引人的文章标题。要求：\n1. 标题要有吸引力和点击欲望\n2. 包含关键词但不生硬\n3. 字数控制在15-30字之间\n4. 适合SEO优化\n5. 符合中文表达习惯\n\n请直接输出标题列表，每行一个标题。", 'keyword'],
-                ['默认内容生成', 'content', "请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇详细的文章。\n\n要求：\n1. 文章结构清晰，包含引言、正文和结论\n2. 内容丰富，字数在800-1500字之间\n3. 自然融入关键词，避免堆砌\n4. 使用Markdown格式，包含适当的标题层级\n5. 内容要有价值，对读者有帮助\n\n{{#if Knowledge}}参考知识：\n{{Knowledge}}{{/if}}\n\n请开始写作：", 'title,keyword,Knowledge'],
-                ['默认关键词提取', 'keyword', "请从以下文章内容中提取5-10个最重要的关键词，用逗号分隔：\n\n{{content}}", 'content'],
-                ['默认描述生成', 'description', "请为以下文章内容生成一个简洁的描述，长度控制在120-160字符以内，适合用作SEO描述：\n\n{{content}}", 'content'],
+                ['默认标题生成', 'title', "请根据关键词\"{{keyword}}\"生成8个GEO内容标题。\n\n要求：\n1. 覆盖定义、标准、流程、成本、风险、对比、案例、FAQ等不同意图\n2. 标题要像用户会问AI助手的问题，不要标题党\n3. 每个标题必须包含关键词或自然变体\n4. 字数控制在15-35字\n\n每行一个标题，不要编号。", 'keyword'],
+                ['默认内容生成', 'content', "你是一名中文GEO内容编辑。请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇证据型知识文章。\n\n{{#if Knowledge}}## 可用品牌/知识资料\n{{Knowledge}}\n{{/if}}\n\n要求：\n1. 开头100字内直接回答问题，不写泛泛引言\n2. 必须包含判断标准、事实与证据、适合与不适合、FAQ、下一步验证清单\n3. 没有证据的数据不能编造，必须标注当前资料未提供\n4. 禁止最好、第一、领先、顶级、保证效果等无法证明的营销词\n5. 使用Markdown格式，字数1200-1800字\n\n请直接输出完整文章，不要额外解释。", 'title,keyword,Knowledge'],
+                ['默认关键词提取', 'keyword', "请从以下文章中提取5-8个GEO监测关键词，用逗号分隔。\n\n{{content}}\n\n要求：优先提取用户会问AI助手的问题式关键词，覆盖品牌词、品类词、场景词、决策词；不要提取过宽泛的词。", 'content'],
+                ['默认描述生成', 'description', "请为以下文章生成一段适合GEO和搜索摘要的描述。\n\n{{content}}\n\n要求：120-160字；说明文章回答的问题、适用人群和可验证价值；不要使用夸张营销词。", 'content'],
             ] as $prompt) {
                 $promptStmt->execute($prompt);
             }
@@ -665,6 +678,9 @@ class DatabaseAdmin {
                 'knowledge_base_id' => "ALTER TABLE tasks ADD COLUMN knowledge_base_id INTEGER DEFAULT NULL",
                 'category_mode' => "ALTER TABLE tasks ADD COLUMN category_mode VARCHAR(20) DEFAULT 'smart'",
                 'fixed_category_id' => "ALTER TABLE tasks ADD COLUMN fixed_category_id INTEGER DEFAULT NULL",
+                'author_type' => "ALTER TABLE tasks ADD COLUMN author_type VARCHAR(20) DEFAULT 'random'",
+                'custom_author_id' => "ALTER TABLE tasks ADD COLUMN custom_author_id INTEGER DEFAULT NULL",
+                'content_prompt_id' => "ALTER TABLE tasks ADD COLUMN content_prompt_id INTEGER DEFAULT NULL",
             ],
             'admins' => [
                 'display_name' => "ALTER TABLE admins ADD COLUMN display_name VARCHAR(100) DEFAULT ''",
@@ -693,11 +709,15 @@ class DatabaseAdmin {
             'title_libraries' => [
                 'description' => "ALTER TABLE title_libraries ADD COLUMN description TEXT DEFAULT ''",
                 'is_ai_generated' => "ALTER TABLE title_libraries ADD COLUMN is_ai_generated INTEGER DEFAULT 0",
+                'ai_model_id' => "ALTER TABLE title_libraries ADD COLUMN ai_model_id INTEGER DEFAULT NULL",
+                'prompt_id' => "ALTER TABLE title_libraries ADD COLUMN prompt_id INTEGER DEFAULT NULL",
+                'generation_rounds' => "ALTER TABLE title_libraries ADD COLUMN generation_rounds INTEGER DEFAULT 1",
             ],
             'titles' => [
                 'keyword' => "ALTER TABLE titles ADD COLUMN keyword VARCHAR(200) DEFAULT ''",
                 'is_ai_generated' => "ALTER TABLE titles ADD COLUMN is_ai_generated BOOLEAN DEFAULT FALSE",
                 'used_count' => "ALTER TABLE titles ADD COLUMN used_count INTEGER DEFAULT 0",
+                'usage_count' => "ALTER TABLE titles ADD COLUMN usage_count INTEGER DEFAULT 0",
             ],
             'knowledge_bases' => [
                 'description' => "ALTER TABLE knowledge_bases ADD COLUMN description TEXT DEFAULT ''",
@@ -706,8 +726,19 @@ class DatabaseAdmin {
                 'word_count' => "ALTER TABLE knowledge_bases ADD COLUMN word_count INTEGER DEFAULT 0",
                 'usage_count' => "ALTER TABLE knowledge_bases ADD COLUMN usage_count INTEGER DEFAULT 0",
             ],
+            'authors' => [
+                'avatar' => "ALTER TABLE authors ADD COLUMN avatar VARCHAR(200) DEFAULT ''",
+                'website' => "ALTER TABLE authors ADD COLUMN website VARCHAR(200) DEFAULT ''",
+            ],
+            'articles' => [
+                'is_featured' => "ALTER TABLE articles ADD COLUMN is_featured INTEGER DEFAULT 0",
+                'like_count' => "ALTER TABLE articles ADD COLUMN like_count INTEGER DEFAULT 0",
+                'comment_count' => "ALTER TABLE articles ADD COLUMN comment_count INTEGER DEFAULT 0",
+                'featured_image' => "ALTER TABLE articles ADD COLUMN featured_image VARCHAR(500) DEFAULT ''",
+            ],
             'ai_models' => [
                 'model_type' => "ALTER TABLE ai_models ADD COLUMN model_type VARCHAR(20) DEFAULT 'chat'",
+                'priority' => "ALTER TABLE ai_models ADD COLUMN priority INTEGER DEFAULT 10",
             ],
             'knowledge_chunks' => [
                 'embedding_model_id' => "ALTER TABLE knowledge_chunks ADD COLUMN embedding_model_id INTEGER DEFAULT NULL",
@@ -745,6 +776,7 @@ class DatabaseAdmin {
         ");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_base ON knowledge_chunks(knowledge_base_id, chunk_index)");
         $this->pdo->exec("UPDATE ai_models SET model_type = COALESCE(NULLIF(model_type, ''), 'chat')");
+        $this->pdo->exec("UPDATE ai_models SET priority = COALESCE(priority, 10)");
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS admin_activity_logs (
             id BIGSERIAL PRIMARY KEY,
             admin_id INTEGER DEFAULT NULL,
@@ -929,6 +961,18 @@ class DatabaseAdmin {
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_scenario VARCHAR(1)   DEFAULT 'B'");
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_brand_name VARCHAR(200) DEFAULT ''");
         $this->pdo->exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_customer_id VARCHAR(80)  DEFAULT ''");
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS task_materials (
+                id BIGSERIAL PRIMARY KEY,
+                task_id BIGINT NOT NULL,
+                material_type VARCHAR(20) NOT NULL,
+                material_id BIGINT NOT NULL,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_task_materials_task ON task_materials(task_id, material_type)");
     }
 
     private function ensureAutomationSchema(): void {
@@ -947,6 +991,7 @@ class DatabaseAdmin {
                 status          VARCHAR(20)  NOT NULL DEFAULT 'pending',
                 current_step    VARCHAR(40)  DEFAULT '',
                 customer_id     VARCHAR(80)  DEFAULT '',
+                diagnosis_id    VARCHAR(64)  DEFAULT '',
                 keyword_library_id BIGINT    DEFAULT NULL,
                 title_library_id   BIGINT    DEFAULT NULL,
                 knowledge_base_id  BIGINT    DEFAULT NULL,
@@ -957,6 +1002,7 @@ class DatabaseAdmin {
                 completed_at    TIMESTAMP    DEFAULT NULL
             )
         ");
+        $this->pdo->exec("ALTER TABLE automation_workflows ADD COLUMN IF NOT EXISTS diagnosis_id VARCHAR(64) DEFAULT ''");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_workflows_status ON automation_workflows(status)");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_workflows_wf_id ON automation_workflows(workflow_id)");
 
@@ -979,6 +1025,66 @@ class DatabaseAdmin {
             )
         ");
         $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_automation_steps_wf_id ON automation_workflow_steps(workflow_id)");
+    }
+
+    private function ensureGeoFeatureSchemas(): void {
+        geo_diagnosis_ensure_schema($this->pdo);
+        ensure_distribution_schema($this->pdo);
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS geo_brand_knowledge (
+                id BIGSERIAL PRIMARY KEY,
+                customer_id VARCHAR(80) NOT NULL,
+                category VARCHAR(40) NOT NULL DEFAULT 'stat',
+                title VARCHAR(200) NOT NULL,
+                content TEXT NOT NULL,
+                source VARCHAR(120) DEFAULT '',
+                citability_score SMALLINT DEFAULT 3,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_geo_brand_knowledge_customer ON geo_brand_knowledge(customer_id, category)");
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS geo_intent_questions (
+                id BIGSERIAL PRIMARY KEY,
+                customer_id VARCHAR(80) NOT NULL,
+                theme VARCHAR(120) DEFAULT '',
+                question TEXT NOT NULL,
+                intent_type VARCHAR(50) DEFAULT '',
+                priority VARCHAR(10) DEFAULT 'P1',
+                covered BOOLEAN DEFAULT FALSE,
+                reason TEXT DEFAULT '',
+                suggested_action TEXT DEFAULT '',
+                dimension VARCHAR(30) DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $this->pdo->exec("ALTER TABLE geo_intent_questions ADD COLUMN IF NOT EXISTS reason TEXT DEFAULT ''");
+        $this->pdo->exec("ALTER TABLE geo_intent_questions ADD COLUMN IF NOT EXISTS suggested_action TEXT DEFAULT ''");
+        $this->pdo->exec("ALTER TABLE geo_intent_questions ADD COLUMN IF NOT EXISTS dimension VARCHAR(30) DEFAULT ''");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_geo_intent_questions_customer ON geo_intent_questions(customer_id, priority, covered)");
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS geo_panorama_reports (
+                id BIGSERIAL PRIMARY KEY,
+                customer_id VARCHAR(80) NOT NULL,
+                brand_name VARCHAR(200) NOT NULL DEFAULT '',
+                report_md TEXT NOT NULL,
+                prompt_used TEXT DEFAULT '',
+                model_used VARCHAR(200) DEFAULT '',
+                overall_rate NUMERIC(5,2) DEFAULT 0,
+                total_records INTEGER DEFAULT 0,
+                platform_stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+                kw_stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+                comp_overall JSONB NOT NULL DEFAULT '{}'::jsonb,
+                signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+                alerts JSONB NOT NULL DEFAULT '[]'::jsonb,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ");
+        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_geo_panorama_reports_customer ON geo_panorama_reports(customer_id, created_at DESC)");
     }
 
     private function ensureCustomerSchema(): void {
@@ -1032,8 +1138,7 @@ class DatabaseAdmin {
         $activeChatModels = (int) $this->pdo->query("
             SELECT COUNT(*)
             FROM ai_models
-            WHERE status = 'active'
-              AND COALESCE(NULLIF(model_type, ''), 'chat') = 'chat'
+            WHERE COALESCE(NULLIF(model_type, ''), 'chat') = 'chat'
         ")->fetchColumn();
 
         if ($activeChatModels === 0) {
@@ -1041,7 +1146,7 @@ class DatabaseAdmin {
                 INSERT INTO ai_models (
                     name, version, api_key, model_id, model_type, api_url,
                     daily_limit, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'chat', ?, 0, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, 'chat', ?, 0, 'inactive', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ");
             $stmt->execute([
                 '本地占位聊天模型',
@@ -1057,8 +1162,8 @@ class DatabaseAdmin {
             $stmt = $this->pdo->prepare("INSERT INTO prompts (name, type, content, variables) VALUES (?, 'content', ?, ?)");
             $stmt->execute([
                 '默认内容生成',
-                "请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇详细的文章。",
-                'title,keyword',
+                "你是一名中文GEO内容编辑。请根据标题\"{{title}}\"和关键词\"{{keyword}}\"写一篇证据型知识文章。必须包含直接答案、判断标准、事实与证据、适合与不适合、FAQ、下一步验证清单；没有证据的数据不能编造。{{#if Knowledge}}\n\n参考知识：{{Knowledge}}{{/if}}\n\n请直接输出完整文章。",
+                'title,keyword,Knowledge',
             ]);
         }
 

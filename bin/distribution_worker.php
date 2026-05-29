@@ -16,8 +16,9 @@ $limit = isset($argv[1]) ? (int) $argv[1] : 5;
 $summary = distribution_execute_queued_jobs($db, $limit);
 
 echo sprintf(
-    "Distribution jobs executed: total=%d success=%d failed=%d\n",
+    "Distribution jobs executed: total=%d success=%d failed=%d skipped=%d\n",
     $summary['total'],
     $summary['success'],
-    $summary['failed']
+    $summary['failed'],
+    $summary['skipped'] ?? 0
 );

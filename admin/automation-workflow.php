@@ -14,6 +14,16 @@ require_admin_login();
 
 session_write_close();
 
+$automationMediaAccounts = [];
+try {
+    $automationMediaAccounts = $db->query("
+        SELECT id, platform, account_name, publish_mode, status
+        FROM media_accounts
+        WHERE status = 'active'
+        ORDER BY platform, id
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $_mediaAccountError) {}
+
 $page_title = '品牌入驻自动化';
 ?>
 <?php require_once __DIR__ . '/includes/header.php'; ?>
@@ -44,6 +54,9 @@ $page_title = '品牌入驻自动化';
     .step-card:nth-child(7) { animation-delay: 0.3s; }
     .step-card:nth-child(8) { animation-delay: 0.35s; }
     .step-card:nth-child(9) { animation-delay: 0.4s; }
+    .step-card:nth-child(10) { animation-delay: 0.45s; }
+    .step-card:nth-child(11) { animation-delay: 0.5s; }
+    .step-card:nth-child(12) { animation-delay: 0.55s; }
     /* 日志滚动 */
     .log-scroll::-webkit-scrollbar { width: 6px; }
     .log-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -81,6 +94,10 @@ $page_title = '品牌入驻自动化';
                 <i data-lucide="play" class="h-4 w-4"></i>
                 启动自动化
             </button>
+            <button id="btn-resume" onclick="resumeFromError()" class="hidden inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:shadow-xl hover:shadow-amber-500/30 active:scale-[0.98]">
+                <i data-lucide="rotate-ccw" class="h-4 w-4"></i>
+                继续处理
+            </button>
         </div>
     </div>
 </div>
@@ -117,15 +134,19 @@ $page_title = '品牌入驻自动化';
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="steps-container">
             <?php
             $steps = [
-                ['id' => 'collect',     'no' => '01', 'name' => '搜集品牌资料',  'desc' => '搜索官网与媒体报道，整理品牌基本信息', 'icon' => 'search',           'color' => 'blue'],
-                ['id' => 'keywords',    'no' => '02', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
-                ['id' => 'titles',      'no' => '03', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
-                ['id' => 'knowledge',   'no' => '04', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
-                ['id' => 'customer',    'no' => '05', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
-                ['id' => 'task',        'no' => '06', 'name' => '创建并启动任务','desc' => '关联标题库与AI模型，启动生成任务',     'icon' => 'zap',              'color' => 'cyan'],
-                ['id' => 'generate',    'no' => '07', 'name' => '等待文章生成',  'desc' => '监控文章生成进度直至完成',           'icon' => 'file-text',        'color' => 'teal'],
-                ['id' => 'distribute',  'no' => '08', 'name' => '分发到媒体',    'desc' => '发布到知乎等媒体平台',               'icon' => 'send',             'color' => 'emerald'],
-                ['id' => 'monitor',     'no' => '09', 'name' => '设置监测',      'desc' => '添加监测关键词，跟踪引用变化',       'icon' => 'activity',         'color' => 'green'],
+                ['id' => 'collect',          'no' => '01', 'name' => '搜集品牌资料',  'desc' => '搜索官网与媒体报道，整理品牌基本信息', 'icon' => 'search',           'color' => 'blue'],
+                ['id' => 'diagnosis',        'no' => '02', 'name' => '生成雷达诊断',  'desc' => '生成六维GEO权威性基线评分',          'icon' => 'radar',            'color' => 'violet'],
+                ['id' => 'keywords',         'no' => '03', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
+                ['id' => 'titles',           'no' => '04', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
+                ['id' => 'knowledge',        'no' => '05', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
+                ['id' => 'customer',         'no' => '06', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
+                ['id' => 'knowledge_graph',  'no' => '07', 'name' => '生成知识图谱',  'desc' => '为五类结构化知识生成可引用的品牌事实条目', 'icon' => 'network',          'color' => 'fuchsia'],
+                ['id' => 'intent_mining',    'no' => '08', 'name' => '意图挖掘',      'desc' => '从7个维度挖掘用户真实问题，发现覆盖空白', 'icon' => 'crosshair',        'color' => 'rose'],
+                ['id' => 'task',             'no' => '09', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
+                ['id' => 'generate',         'no' => '10', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
+                ['id' => 'distribute',       'no' => '11', 'name' => '启动媒体分发',  'desc' => '按所选账号创建外部分发任务，自动账号尝试发布，人工账号创建待办',   'icon' => 'send',             'color' => 'emerald'],
+                ['id' => 'monitor',          'no' => '12', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
+                ['id' => 'panorama',         'no' => '13', 'name' => '生成全景诊断',  'desc' => '基于监测结果生成并保存全景诊断档案', 'icon' => 'scan-search',      'color' => 'blue'],
             ];
 
             $color_map = [
@@ -137,6 +158,8 @@ $page_title = '品牌入驻自动化';
                 'cyan'    => ['bg' => 'bg-cyan-50',    'border' => 'border-cyan-200',    'icon' => 'bg-cyan-100 text-cyan-600',    'badge' => 'bg-cyan-600',    'ring' => 'ring-cyan-500/20'],
                 'teal'    => ['bg' => 'bg-teal-50',    'border' => 'border-teal-200',    'icon' => 'bg-teal-100 text-teal-600',    'badge' => 'bg-teal-600',    'ring' => 'ring-teal-500/20'],
                 'emerald' => ['bg' => 'bg-emerald-50', 'border' => 'border-emerald-200', 'icon' => 'bg-emerald-100 text-emerald-600','badge' => 'bg-emerald-600','ring' => 'ring-emerald-500/20'],
+                'fuchsia' => ['bg' => 'bg-fuchsia-50', 'border' => 'border-fuchsia-200', 'icon' => 'bg-fuchsia-100 text-fuchsia-600', 'badge' => 'bg-fuchsia-600', 'ring' => 'ring-fuchsia-500/20'],
+                'rose'    => ['bg' => 'bg-rose-50',    'border' => 'border-rose-200',    'icon' => 'bg-rose-100 text-rose-600',    'badge' => 'bg-rose-600',    'ring' => 'ring-rose-500/20'],
                 'green'   => ['bg' => 'bg-green-50',   'border' => 'border-green-200',   'icon' => 'bg-green-100 text-green-600',  'badge' => 'bg-green-600',  'ring' => 'ring-green-500/20'],
             ];
 
@@ -190,7 +213,11 @@ $page_title = '品牌入驻自动化';
                     <p class="text-xs text-gray-500" id="brand-industry">--</p>
                 </div>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div class="grid grid-cols-4 md:grid-cols-7 gap-3 text-xs">
+                <div class="rounded-lg bg-gray-50 p-3">
+                    <span class="text-gray-400 block mb-1">诊断</span>
+                    <span class="font-semibold text-gray-900" id="stat-diagnoses">--</span>
+                </div>
                 <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">关键词</span>
                     <span class="font-semibold text-gray-900" id="stat-keywords">--</span>
@@ -200,12 +227,48 @@ $page_title = '品牌入驻自动化';
                     <span class="font-semibold text-gray-900" id="stat-titles">--</span>
                 </div>
                 <div class="rounded-lg bg-gray-50 p-3">
+                    <span class="text-gray-400 block mb-1">知识图谱</span>
+                    <span class="font-semibold text-gray-900" id="stat-knowledge-graph">--</span>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-3">
+                    <span class="text-gray-400 block mb-1">意图问题</span>
+                    <span class="font-semibold text-gray-900" id="stat-intent-questions">--</span>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-3">
                     <span class="text-gray-400 block mb-1">文章</span>
                     <span class="font-semibold text-gray-900" id="stat-articles">--</span>
                 </div>
                 <div class="rounded-lg bg-gray-50 p-3">
-                    <span class="text-gray-400 block mb-1">已发布</span>
+                    <span class="text-gray-400 block mb-1">站内发布</span>
                     <span class="font-semibold text-gray-900" id="stat-published">--</span>
+                </div>
+            </div>
+            <div id="diagnosis-detail" class="mt-3 hidden rounded-lg border border-violet-100 bg-violet-50 p-3 text-xs">
+                <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <span class="text-violet-500 block mb-1">雷达诊断结果</span>
+                        <span class="font-semibold text-gray-900" id="diagnosis-summary">--</span>
+                        <span class="ml-2 text-gray-500" id="diagnosis-extra"></span>
+                    </div>
+                    <a id="diagnosis-link" href="#" class="inline-flex items-center gap-1 text-violet-700 font-medium hover:text-violet-900">
+                        查看诊断报告
+                        <i data-lucide="arrow-right" class="h-3 w-3"></i>
+                    </a>
+                </div>
+            </div>
+            <div class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                <div class="rounded-lg border border-gray-100 bg-white p-3">
+                    <span class="text-gray-400 block mb-1">文章生成队列</span>
+                    <span class="font-semibold text-gray-900" id="runtime-generation">--</span>
+                </div>
+                <div class="rounded-lg border border-gray-100 bg-white p-3">
+                    <span class="text-gray-400 block mb-1">外部分发队列</span>
+                    <span class="font-semibold text-gray-900" id="runtime-distribution">--</span>
+                    <span class="mt-1 block text-[10px] text-gray-400" id="runtime-next-distribution">--</span>
+                </div>
+                <div class="rounded-lg border border-gray-100 bg-white p-3">
+                    <span class="text-gray-400 block mb-1">GEO监测</span>
+                    <span class="font-semibold text-gray-900" id="runtime-monitor">--</span>
                 </div>
             </div>
         </div>
@@ -304,6 +367,25 @@ $page_title = '品牌入驻自动化';
                         <option value="20">20 篇（完整）</option>
                     </select>
                 </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">发布平台 / 账号</label>
+                    <?php if (empty($automationMediaAccounts)): ?>
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">暂无启用媒体账号，后续不会创建媒体分发任务。</div>
+                    <?php else: ?>
+                        <div class="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <?php foreach ($automationMediaAccounts as $account): ?>
+                                <?php $mode = (string) ($account['publish_mode'] ?? 'manual'); ?>
+                                <label class="flex items-start gap-3 rounded-md bg-white px-3 py-2 text-sm">
+                                    <input type="checkbox" class="automation-media-account mt-1 rounded border-gray-300 text-violet-600 focus:ring-violet-500" value="<?php echo (int) $account['id']; ?>" <?php echo $mode === 'browser' ? 'checked' : ''; ?>>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block font-medium text-gray-800"><?php echo htmlspecialchars($account['account_name']); ?></span>
+                                        <span class="text-xs text-gray-500"><?php echo htmlspecialchars($account['platform']); ?> · <?php echo $mode === 'browser' ? '浏览器自动发布，需验证时会弹窗等待人工处理' : '人工辅助，只创建待办不自动发出'; ?></span>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
             </div>
             <!-- 弹窗底部 -->
             <div class="border-t border-gray-200 px-6 py-4 flex items-center justify-between bg-gray-50">
@@ -323,17 +405,21 @@ $page_title = '品牌入驻自动化';
 $additional_js = <<<'JS'
 <script>
 // ── 状态管理 ──────────────────────────────────────────────────────────────────
-const STEP_IDS = ['collect','keywords','titles','knowledge','customer','task','generate','distribute','monitor'];
+const STEP_IDS = ['collect','diagnosis','keywords','titles','knowledge','customer','knowledge_graph','intent_mining','task','generate','distribute','monitor','panorama'];
 const STEP_META = {
-    collect:    { name: '搜集品牌资料',  icon: 'search' },
-    keywords:   { name: '生成关键词库',  icon: 'tags' },
-    titles:     { name: '生成标题库',    icon: 'heading' },
-    knowledge:  { name: '生成知识库',    icon: 'book-open' },
-    customer:   { name: '创建客户',      icon: 'building-2' },
-    task:       { name: '创建并启动任务',icon: 'zap' },
-    generate:   { name: '等待文章生成',  icon: 'file-text' },
-    distribute: { name: '分发到媒体',    icon: 'send' },
-    monitor:    { name: '设置监测',      icon: 'activity' },
+    collect:         { name: '搜集品牌资料',  icon: 'search' },
+    diagnosis:       { name: '生成雷达诊断',  icon: 'radar' },
+    keywords:        { name: '生成关键词库',  icon: 'tags' },
+    titles:          { name: '生成标题库',    icon: 'heading' },
+    knowledge:       { name: '生成知识库',    icon: 'book-open' },
+    customer:        { name: '创建客户',      icon: 'building-2' },
+    knowledge_graph: { name: '生成知识图谱',  icon: 'network' },
+    intent_mining:   { name: '意图挖掘',      icon: 'crosshair' },
+    task:            { name: '创建并启动任务',icon: 'zap' },
+    generate:        { name: '首篇文章生成',  icon: 'file-text' },
+    distribute:      { name: '启动媒体分发',  icon: 'send' },
+    monitor:         { name: '启动监测',      icon: 'activity' },
+    panorama:        { name: '生成全景诊断',  icon: 'scan-search' },
 };
 
 let workflowState = {
@@ -341,12 +427,32 @@ let workflowState = {
     currentStep: null,
     steps: {},           // { stepId: { status, startedAt, finishedAt, elapsed, output } }
     brandInfo: null,
+    diagnosis: null,
+    runtime: null,
+    completionIssues: [],
     startTime: null,
     logs: [],
 };
 
 let logCount = 0;
 let elapsedTimer = null;
+let lastCompletionIssueSignature = '';
+
+function parsePgTimestamp(value) {
+    if (!value) return null;
+    const normalized = String(value).replace(' ', 'T').replace(/\.\d+$/, '');
+    const time = new Date(normalized).getTime();
+    return Number.isNaN(time) ? null : time;
+}
+
+function parseStepOutput(raw) {
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch (err) {
+        return { raw };
+    }
+}
 
 // ── 弹窗控制 ──────────────────────────────────────────────────────────────────
 function openStartModal() {
@@ -387,6 +493,7 @@ async function startAutomation() {
         competitors: document.getElementById('input-competitors').value.trim(),
         positioning: document.getElementById('input-positioning').value.trim(),
         article_count: parseInt(document.getElementById('input-article-count').value) || 10,
+        media_account_ids: Array.from(document.querySelectorAll('.automation-media-account:checked')).map(el => parseInt(el.value, 10)).filter(Boolean),
     };
 
     try {
@@ -440,56 +547,26 @@ async function pollWorkflowStatus() {
         const data = await resp.json();
 
         if (data.success && data.workflow) {
-            const wf = data.workflow;
-
-            // 更新步骤状态
-            if (wf.steps) {
-                wf.steps.forEach(step => {
-                    const prev = workflowState.steps[step.step_id];
-                    workflowState.steps[step.step_id] = {
-                        status: step.status,
-                        startedAt: step.started_at,
-                        finishedAt: step.finished_at,
-                        elapsed: step.elapsed_seconds,
-                        output: step.output_data ? JSON.parse(step.output_data) : null,
-                        error: step.error_message,
-                    };
-
-                    // 新日志
-                    if (prev && prev.status !== step.status) {
-                        if (step.status === 'running') {
-                            addLog('info', `▶ ${STEP_META[step.step_id]?.name || step.step_id} 开始执行`);
-                        } else if (step.status === 'completed') {
-                            addLog('success', `✓ ${STEP_META[step.step_id]?.name || step.step_id} 完成` + (step.elapsed_seconds ? ` (${step.elapsed_seconds}s)` : ''));
-                        } else if (step.status === 'error') {
-                            addLog('error', `✗ ${STEP_META[step.step_id]?.name || step.step_id} 失败: ${step.error_message || '未知错误'}`);
-                        }
-                    }
-
-                    updateStepUI(step.step_id, workflowState.steps[step.step_id]);
-                });
-            }
-
-            // 更新品牌统计
-            if (wf.stats) {
-                updateBrandStats(wf.stats);
-            }
-
-            // 全局状态
-            workflowState.status = wf.status || 'running';
+            applyWorkflowPayload(data, true);
             updatePipelineProgress();
             updateGlobalStatus();
 
             // 继续轮询
-            if (workflowState.status === 'running') {
+            if (workflowState.status === 'running' || hasBackgroundRuntime()) {
                 pollTimer = setTimeout(pollWorkflowStatus, 2000);
             } else if (workflowState.status === 'completed') {
                 stopElapsedTimer();
-                addLog('success', '🎉 全部流程执行完成！');
-                showToast('自动化流程已完成！', 'success');
+                if ((workflowState.completionIssues || []).length > 0) {
+                    addLog('warn', '流程走完，但未真正完成：' + workflowState.completionIssues.join('；'));
+                    showToast('流程有未完成项，请看日志', 'warn');
+                } else {
+                    addLog('success', '🎉 全部流程执行完成！');
+                    showToast('自动化流程已完成！', 'success');
+                }
             } else if (workflowState.status === 'error') {
                 stopElapsedTimer();
                 addLog('error', '流程执行出错，请检查日志');
+                pollTimer = setTimeout(pollWorkflowStatus, 10000);
             }
         } else {
             // API 返回错误，继续轮询
@@ -501,6 +578,147 @@ async function pollWorkflowStatus() {
     }
 }
 
+function applyWorkflowPayload(data, logChanges) {
+    const wf = data.workflow;
+    workflowState.workflowId = wf.id;
+    workflowState.status = wf.status || 'running';
+    workflowState.currentStep = wf.current_step || null;
+    workflowState.brandInfo = {
+        brand_name: wf.brand_name,
+        industry: wf.industry,
+        website: wf.website || '',
+        services: wf.services || '',
+        competitors: wf.competitors || '',
+        positioning: wf.positioning || '',
+        article_count: wf.article_count || 0,
+    };
+    workflowState.completionIssues = Array.isArray(wf.completion_issues) ? wf.completion_issues : [];
+    workflowState.startTime = parsePgTimestamp(wf.created_at) || workflowState.startTime || Date.now();
+
+    STEP_IDS.forEach(id => {
+        if (!workflowState.steps[id]) {
+            workflowState.steps[id] = { status: 'pending' };
+        }
+    });
+
+    if (wf.steps) {
+        wf.steps.forEach(step => {
+            const prev = workflowState.steps[step.step_id];
+            workflowState.steps[step.step_id] = {
+                status: step.status,
+                startedAt: step.started_at,
+                finishedAt: step.finished_at,
+                elapsed: step.elapsed_seconds,
+                output: parseStepOutput(step.output_data),
+                error: step.error_message,
+            };
+
+            if (logChanges && prev && prev.status !== step.status) {
+                if (step.status === 'running') {
+                    addLog('info', `▶ ${STEP_META[step.step_id]?.name || step.step_id} 开始执行`);
+                } else if (step.status === 'completed') {
+                    addLog('success', `✓ ${STEP_META[step.step_id]?.name || step.step_id} 完成` + (step.elapsed_seconds ? ` (${step.elapsed_seconds}s)` : ''));
+                } else if (step.status === 'error') {
+                    addLog('error', `✗ ${STEP_META[step.step_id]?.name || step.step_id} 失败: ${step.error_message || '未知错误'}`);
+                }
+            }
+
+            updateStepUI(step.step_id, workflowState.steps[step.step_id]);
+        });
+    }
+
+    showBrandInfoCard();
+    if (data.stats) {
+        updateBrandStats(data.stats);
+        updateLiveStepSummaries();
+    }
+    updateDiagnosisDetail(data.diagnosis || null);
+    if (data.runtime) {
+        updateRuntimeStats(data.runtime, logChanges);
+        applyDistributionTruthFromRuntime();
+        updateLiveStepSummaries();
+    }
+    updateCompletionIssues(logChanges);
+}
+
+function applyDistributionTruthFromRuntime() {
+    const runtime = workflowState.runtime || {};
+    const distributeStep = workflowState.steps.distribute;
+    if (!distributeStep || workflowState.status !== 'completed' || distributeStep.status !== 'completed') return;
+
+    const total = (runtime.distribution_queued || 0)
+        + (runtime.distribution_running || 0)
+        + (runtime.distribution_success || 0)
+        + (runtime.distribution_failed || 0)
+        + (runtime.distribution_manual_queued || 0);
+
+    if (total > 0 && (runtime.distribution_success || 0) === 0) {
+        distributeStep.status = 'error';
+        distributeStep.error = `媒体分发未实发成功：成功 0 / 总任务 ${total}`;
+        updateStepUI('distribute', distributeStep);
+    }
+}
+
+async function resumeLatestWorkflow() {
+    if (workflowState.workflowId) return;
+
+    try {
+        const resp = await fetch(window.adminUrl('api/automation-status.php?latest=1'));
+        const data = await resp.json();
+        if (!data.success || !data.workflow) return;
+
+        applyWorkflowPayload(data, false);
+        updatePipelineProgress();
+        updateGlobalStatus();
+        addLog('info', '已恢复最近一次工作流：' + data.workflow.id);
+
+        if (workflowState.status === 'running' || hasBackgroundRuntime()) {
+            startElapsedTimer();
+            pollWorkflowStatus();
+        } else if (workflowState.status === 'error' && data.workflow.error_message) {
+            addLog('error', data.workflow.error_message);
+        }
+    } catch (err) {
+        // 恢复失败不影响用户手动启动。
+    }
+}
+
+async function resumeFromError() {
+    if (!workflowState.workflowId || workflowState.status !== 'error') return;
+
+    const btn = document.getElementById('btn-resume');
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader-2" class="h-4 w-4 animate-spin"></i>恢复中...';
+    lucide.createIcons({ nodes: [btn] });
+
+    try {
+        const resp = await fetch(window.adminUrl('api/automation-resume.php'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workflow_id: workflowState.workflowId }),
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            addLog('info', '已从失败步骤继续执行');
+            workflowState.status = 'running';
+            updateGlobalStatus();
+            startElapsedTimer();
+            pollWorkflowStatus();
+        } else {
+            addLog('error', '恢复失败: ' + (data.error || '未知错误'));
+            showToast('恢复失败: ' + (data.error || '请稍后重试'), 'error');
+        }
+    } catch (err) {
+        addLog('error', '恢复请求失败: ' + err.message);
+        showToast('网络错误，请稍后重试', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="rotate-ccw" class="h-4 w-4"></i>继续处理';
+        lucide.createIcons({ nodes: [btn] });
+    }
+}
+
 // ── UI 更新 ───────────────────────────────────────────────────────────────────
 
 function updateStepUI(stepId, stepData) {
@@ -509,6 +727,7 @@ function updateStepUI(stepId, stepData) {
     const iconWrap = document.getElementById('step-icon-' + stepId);
     const statusEl = document.getElementById('step-status-' + stepId);
     const metaEl = document.getElementById('step-meta-' + stepId);
+    const outputEl = document.getElementById('step-output-' + stepId);
 
     if (!card) return;
 
@@ -555,7 +774,29 @@ function updateStepUI(stepId, stepData) {
         metaEl.querySelector('span:first-child').innerHTML = '<i data-lucide="clock" class="h-3 w-3"></i> ' + sec + 's';
     }
 
+    if (outputEl) {
+        outputEl.textContent = renderStepOutputSummary(stepId, stepData.output);
+    }
+
     if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function renderStepOutputSummary(stepId, output) {
+    if (!output || typeof output !== 'object') return '';
+    if (stepId === 'diagnosis') {
+        const score = output.overall_score !== undefined && output.overall_score !== null ? `评分 ${output.overall_score}` : '';
+        const rate = output.predicted_hit_rate || '';
+        return [score, rate].filter(Boolean).join(' · ');
+    }
+    if (stepId === 'keywords' && output.keyword_count !== undefined) return `${output.keyword_count} 个`;
+    if (stepId === 'titles' && output.title_count !== undefined) return `${output.title_count} 个`;
+    if (stepId === 'generate' && output.article_count !== undefined) return `${output.article_count} 篇`;
+    if (stepId === 'distribute' && output.media_jobs_created !== undefined) {
+        return `自动 ${output.auto_success || 0}/${output.auto_jobs || 0} · 手动 ${output.manual_jobs || 0} · 失败 ${output.auto_failed || 0}`;
+    }
+    if (stepId === 'monitor' && output.keyword_count !== undefined) return `${output.keyword_count} 词`;
+    if (stepId === 'panorama' && output.report_id !== undefined) return `档案 #${output.report_id}`;
+    return '';
 }
 
 function updatePipelineProgress() {
@@ -569,15 +810,47 @@ function updatePipelineProgress() {
 
 function updateGlobalStatus() {
     const el = document.getElementById('global-status');
+    const btnResume = document.getElementById('btn-resume');
+    const backgroundActive = hasBackgroundRuntime();
     const statusMap = {
         idle:      { text: '就绪',   dot: 'bg-gray-400',   bg: 'bg-gray-100',   textColor: 'text-gray-600' },
         running:   { text: '运行中', dot: 'bg-blue-500 animate-pulse', bg: 'bg-blue-50', textColor: 'text-blue-700' },
+        background:{ text: '后台运行', dot: 'bg-blue-500 animate-pulse', bg: 'bg-blue-50', textColor: 'text-blue-700' },
         completed: { text: '已完成', dot: 'bg-emerald-500', bg: 'bg-emerald-50', textColor: 'text-emerald-700' },
+        incomplete:{ text: '未完成', dot: 'bg-yellow-500', bg: 'bg-yellow-50', textColor: 'text-yellow-800' },
         error:     { text: '出错',   dot: 'bg-red-500',    bg: 'bg-red-50',     textColor: 'text-red-700' },
     };
-    const s = statusMap[workflowState.status] || statusMap.idle;
+    const hasIssues = workflowState.status === 'completed' && (workflowState.completionIssues || []).length > 0;
+    const s = hasIssues ? statusMap.incomplete : (backgroundActive ? statusMap.background : (statusMap[workflowState.status] || statusMap.idle));
     el.className = `inline-flex items-center gap-1.5 rounded-full ${s.bg} px-3 py-1.5 text-xs font-medium ${s.textColor}`;
     el.innerHTML = `<span class="h-2 w-2 rounded-full ${s.dot}"></span>${s.text}`;
+
+    // 出错时显示「从失败处继续」按钮
+    if (workflowState.status === 'error' && workflowState.workflowId) {
+        btnResume.classList.remove('hidden');
+    } else {
+        btnResume.classList.add('hidden');
+    }
+}
+
+function hasBackgroundRuntime() {
+    return workflowState.status === 'completed' && workflowState.runtime && (
+        (workflowState.runtime.generation_pending || 0) > 0 ||
+        (workflowState.runtime.generation_running || 0) > 0 ||
+        (workflowState.runtime.distribution_queued || 0) > 0 ||
+        (workflowState.runtime.distribution_running || 0) > 0
+    );
+}
+
+function updateCompletionIssues(logChanges = false) {
+    const issues = workflowState.completionIssues || [];
+    const signature = JSON.stringify(issues);
+    if (!issues.length || !logChanges || signature === lastCompletionIssueSignature) {
+        lastCompletionIssueSignature = signature;
+        return;
+    }
+    issues.forEach(issue => addLog('warn', '未完成：' + issue));
+    lastCompletionIssueSignature = signature;
 }
 
 function showBrandInfoCard() {
@@ -588,10 +861,146 @@ function showBrandInfoCard() {
 }
 
 function updateBrandStats(stats) {
+    workflowState.stats = stats;
+    if (stats.diagnoses !== undefined) document.getElementById('stat-diagnoses').textContent = stats.diagnoses;
     if (stats.keywords !== undefined) document.getElementById('stat-keywords').textContent = stats.keywords;
     if (stats.titles !== undefined) document.getElementById('stat-titles').textContent = stats.titles;
+    if (stats.knowledge_graph !== undefined) document.getElementById('stat-knowledge-graph').textContent = stats.knowledge_graph;
+    if (stats.intent_questions !== undefined) document.getElementById('stat-intent-questions').textContent = stats.intent_questions;
     if (stats.articles !== undefined) document.getElementById('stat-articles').textContent = stats.articles;
     if (stats.published !== undefined) document.getElementById('stat-published').textContent = stats.published;
+}
+
+function updateLiveStepSummaries() {
+    const stats = workflowState.stats || {};
+    const runtime = workflowState.runtime || {};
+    const set = (id, text) => {
+        const el = document.getElementById('step-output-' + id);
+        if (el) el.textContent = text || '';
+    };
+
+    if (stats.articles !== undefined) {
+        const queue = (runtime.generation_pending || 0) + (runtime.generation_running || 0);
+        const failed = runtime.generation_failed || 0;
+        set('generate', `已生成 ${stats.articles || 0} 篇` + (queue || failed ? ` · 队列 ${queue} · 失败 ${failed}` : ''));
+    }
+
+    const autoQueue = (runtime.distribution_queued || 0) + (runtime.distribution_running || 0);
+    const manual = runtime.distribution_manual_queued || 0;
+    const success = runtime.distribution_success || 0;
+    const failed = runtime.distribution_failed || 0;
+    if (autoQueue || manual || success || failed) {
+        set('distribute', `待发 ${autoQueue} · 手动 ${manual} · 实发成功 ${success} · 失败 ${failed}`);
+    }
+
+    if (runtime.monitor_keywords !== undefined) {
+        set('monitor', `关键词 ${runtime.monitor_keywords || 0} · 记录 ${runtime.monitor_records || 0} · 提及 ${runtime.monitor_mentions || 0}`);
+    }
+    if (runtime.panorama_reports !== undefined) {
+        const latest = runtime.latest_panorama_report_id ? ` · 最新 #${runtime.latest_panorama_report_id}` : '';
+        set('panorama', `档案 ${runtime.panorama_reports || 0} 份${latest}`);
+    }
+
+    const diagStep = workflowState.steps?.diagnosis;
+    if (diagStep?.output?.overall_score !== undefined) {
+        const sourceLabel = diagStep.output.data_source === 'real_search' ? '实时搜索' : '估算';
+        set('diagnosis', `${sourceLabel}评分 ${diagStep.output.overall_score} · ${diagStep.output.predicted_hit_rate || ''}`);
+    }
+
+    // 知识图谱统计（从步骤输出中读取）
+    const kgStep = workflowState.steps?.knowledge_graph;
+    if (kgStep?.output?.total_inserted) {
+        const cats = kgStep.output.by_category || {};
+        const catNames = {stat:'数据',case:'案例',credential:'资质',capability:'能力',claim:'主张'};
+        const parts = Object.entries(cats).map(([k,v]) => `${catNames[k]||k} ${v}`).join(' · ');
+        set('knowledge_graph', `共 ${kgStep.output.total_inserted} 条` + (parts ? `：${parts}` : ''));
+    }
+
+    // 意图挖掘统计（从步骤输出中读取）
+    const imStep = workflowState.steps?.intent_mining;
+    if (imStep?.output?.total_questions) {
+        const dims = imStep.output.by_dimension || {};
+        const ga = imStep.output.gap_analysis || {};
+        const gapText = ga.gap_count ? ` · 空白 ${ga.gap_count}` : '';
+        set('intent_mining', `共 ${imStep.output.total_questions} 个问题${gapText}`);
+    }
+}
+
+function updateDiagnosisDetail(diagnosis) {
+    workflowState.diagnosis = diagnosis || null;
+    const box = document.getElementById('diagnosis-detail');
+    if (!box) return;
+
+    if (!diagnosis || !diagnosis.id) {
+        box.classList.add('hidden');
+        return;
+    }
+
+    const score = diagnosis.overall_score !== null && diagnosis.overall_score !== undefined
+        ? Number(diagnosis.overall_score).toFixed(1).replace(/\.0$/, '')
+        : '--';
+    const hitRate = diagnosis.predicted_hit_rate || '命中率待估';
+    const weakest = diagnosis.weakest_signal ? `短板：${diagnosis.weakest_signal}` : '';
+    const actions = diagnosis.action_count !== undefined ? `优化动作 ${diagnosis.action_count} 个` : '';
+    const source = diagnosis.data_source === 'real_search' ? '实时搜索诊断' : '估算诊断';
+
+    document.getElementById('diagnosis-summary').textContent = `${source} · 评分 ${score} / 100 · ${hitRate}`;
+    document.getElementById('diagnosis-extra').textContent = [weakest, actions].filter(Boolean).join(' · ');
+    document.getElementById('diagnosis-link').href = window.adminUrl('geo-diagnosis.php?id=' + encodeURIComponent(diagnosis.id));
+    box.classList.remove('hidden');
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+let lastRuntimeSignature = '';
+
+function updateRuntimeStats(runtime, logChanges = false) {
+    workflowState.runtime = runtime;
+
+    const generationText = [
+        `待生成 ${runtime.generation_pending || 0}`,
+        `生成中 ${runtime.generation_running || 0}`,
+        `失败 ${runtime.generation_failed || 0}`,
+    ].join(' / ');
+
+    const distributionText = [
+        `待发 ${runtime.distribution_queued || 0}`,
+        `发布中 ${runtime.distribution_running || 0}`,
+        `手动 ${runtime.distribution_manual_queued || 0}`,
+        `实发成功 ${runtime.distribution_success || 0}`,
+        `失败 ${runtime.distribution_failed || 0}`,
+    ].join(' / ');
+
+    const monitorText = [
+        `关键词 ${runtime.monitor_keywords || 0}`,
+        `记录 ${runtime.monitor_records || 0}`,
+        `提及 ${runtime.monitor_mentions || 0}`,
+        `全景 ${runtime.panorama_reports || 0}`,
+    ].join(' / ');
+
+    document.getElementById('runtime-generation').textContent = generationText;
+    document.getElementById('runtime-distribution').textContent = distributionText;
+    document.getElementById('runtime-monitor').textContent = monitorText;
+
+    const nextEl = document.getElementById('runtime-next-distribution');
+    if (runtime.next_distribution_at) {
+        nextEl.textContent = '下次发布：' + String(runtime.next_distribution_at).replace('T', ' ').slice(0, 16);
+    } else {
+        nextEl.textContent = '暂无排队发布时间';
+    }
+
+    const signature = JSON.stringify({
+        gp: runtime.generation_pending || 0,
+        gr: runtime.generation_running || 0,
+        dq: runtime.distribution_queued || 0,
+        dr: runtime.distribution_running || 0,
+        ds: runtime.distribution_success || 0,
+        mr: runtime.monitor_records || 0,
+        pr: runtime.panorama_reports || 0,
+    });
+    if (logChanges && lastRuntimeSignature && signature !== lastRuntimeSignature) {
+        addLog('info', `后台状态：${generationText}；${distributionText}；${monitorText}`);
+    }
+    lastRuntimeSignature = signature;
 }
 
 // ── 日志系统 ──────────────────────────────────────────────────────────────────
@@ -740,6 +1149,8 @@ function runDemo() {
             // 更新统计
             if (id === 'keywords') updateBrandStats({ keywords: 32 });
             if (id === 'titles') updateBrandStats({ titles: 20 });
+            if (id === 'knowledge_graph') updateBrandStats({ knowledge_graph: 22 });
+            if (id === 'intent_mining') updateBrandStats({ intent_questions: 28 });
             if (id === 'generate') updateBrandStats({ articles: 10 });
             if (id === 'distribute') updateBrandStats({ published: 8 });
 
@@ -748,12 +1159,18 @@ function runDemo() {
                 workflowState.status = 'completed';
                 updateGlobalStatus();
                 stopElapsedTimer();
-                addLog('success', '🎉 全部流程执行完成！');
+                if ((workflowState.completionIssues || []).length > 0) {
+                    addLog('warn', '流程走完，但仍有未完成项。');
+                } else {
+                    addLog('success', '🎉 全部流程执行完成！');
+                }
             }
         }, delay);
         delay += 1000 + Math.random() * 1000;
     });
 }
+
+document.addEventListener('DOMContentLoaded', resumeLatestWorkflow);
 </script>
 JS;
 

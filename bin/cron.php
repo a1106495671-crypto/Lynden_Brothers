@@ -113,6 +113,10 @@ try {
     cleanupTaskSchedules();
     resetDailyAIUsage();
     autoPublishApprovedArticles();
+    startDueDistributionJobs();
+    startDailyGeoMonitor();
+    runMonitorAutoRespond();
+    runDailyTopicAuto();
 
     $executionTime = round(microtime(true) - $startTime, 2);
     log_message("轻量调度器执行完成，入队 {$queuedCount} 个任务，跳过 {$skippedCount} 个任务");
@@ -232,5 +236,132 @@ function autoPublishApprovedArticles() {
 
     if ($publishedCount > 0) {
         log_message("自动发布了 {$publishedCount} 篇文章");
+    }
+}
+
+function startDueDistributionJobs() {
+    global $db;
+
+    $limit = max(1, (int) env_value('DISTRIBUTION_CRON_START_LIMIT', 3));
+    $started = distribution_start_queued_jobs_async($db, $limit);
+    if ($started > 0) {
+        log_message("已启动到点媒体分发任务 {$started} 条");
+    }
+}
+
+function startDailyGeoMonitor() {
+    global $db;
+
+    if (env_value('GEO_MONITOR_CRON_ENABLED', 'true') === 'false') {
+        return;
+    }
+
+    try {
+        $keywordCount = (int) $db->query("SELECT COUNT(*) FROM geo_monitor_keywords WHERE enabled = TRUE")->fetchColumn();
+    } catch (Throwable $e) {
+        log_message('GEO监测关键词检查失败: ' . $e->getMessage());
+        return;
+    }
+    if ($keywordCount <= 0) {
+        return;
+    }
+
+    try {
+        $todayRecords = (int) $db->query("SELECT COUNT(*) FROM geo_monitor_records WHERE queried_at = CURRENT_DATE")->fetchColumn();
+    } catch (Throwable $e) {
+        log_message('GEO监测今日记录检查失败: ' . $e->getMessage());
+        return;
+    }
+    if ($todayRecords > 0) {
+        return;
+    }
+
+    $lastStarted = (string) get_setting('geo_monitor_last_started_at', '');
+    if ($lastStarted !== '' && strtotime($lastStarted) > time() - 6 * 3600) {
+        log_message('GEO监测今日暂无记录，但最近已启动过，等待后台任务完成');
+        return;
+    }
+
+    $script = realpath(dirname(__DIR__) . '/bin/geo-monitor-run.php') ?: '';
+    if ($script === '') {
+        log_message('GEO监测脚本不存在，跳过');
+        return;
+    }
+
+    $runner = env_value('GEO_MONITOR_PHP_RUNNER', '');
+    if ($runner === '') {
+        $runner = PHP_BINARY ?: 'php';
+    }
+    $parts = preg_split('/\s+/', trim($runner)) ?: [];
+    $parts = array_values(array_filter($parts, static fn($part) => $part !== ''));
+    $runnerCommand = empty($parts) ? 'php ' : implode(' ', array_map('escapeshellarg', $parts)) . ' ';
+
+    $logFile = __DIR__ . '/logs/geo_monitor_' . date('Y-m-d') . '.log';
+    $logDir = dirname($logFile);
+    if (!is_dir($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+
+    set_setting('geo_monitor_last_started_at', date('Y-m-d H:i:s'));
+    $command = $runnerCommand . escapeshellarg($script) . ' >> ' . escapeshellarg($logFile) . ' 2>&1 &';
+    exec($command);
+    log_message("已启动每日GEO监测：{$keywordCount} 个关键词");
+}
+
+function runDailyTopicAuto() {
+    global $projectRoot, $db;
+
+    $hour = (int) date('G');
+    if ($hour !== 7) {
+        return; // 只在每天 07:xx 执行
+    }
+
+    // 防止同一小时重复执行（检查 system_logs）
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) FROM system_logs WHERE type = 'topic_auto' AND created_at >= CURRENT_DATE + INTERVAL '7 hours' AND created_at < CURRENT_DATE + INTERVAL '8 hours'");
+        $stmt->execute();
+        if ((int)$stmt->fetchColumn() > 0) {
+            return;
+        }
+    } catch (Throwable $e) {
+        // system_logs 可能无此 type，忽略
+    }
+
+    $script = $projectRoot . '/bin/topic-auto.php';
+    if (!file_exists($script)) {
+        return;
+    }
+
+    log_message('[topic-auto] 开始每日选题自动化');
+    $output = shell_exec("php " . escapeshellarg($script) . " 2>&1");
+    if ($output) {
+        foreach (explode("\n", trim($output)) as $line) {
+            if (trim($line)) log_message('[topic-auto] ' . $line);
+        }
+    }
+
+    // 记录执行日志防重复
+    try {
+        $db->prepare("INSERT INTO system_logs (type, message, data) VALUES ('topic_auto', '每日选题自动化完成', '{}') ")->execute();
+    } catch (Throwable $e) {}
+}
+
+function runMonitorAutoRespond() {
+    global $projectRoot;
+    // 每天凌晨8点后、且仅在监测数据存在时运行一次
+    $hour = (int) date('G');
+    if ($hour < 8) {
+        return;
+    }
+    $autoRespondScript = $projectRoot . '/bin/geo-monitor-auto-respond.php';
+    if (file_exists($autoRespondScript)) {
+        $output = shell_exec("php " . escapeshellarg($autoRespondScript) . " 2>&1");
+        if ($output) {
+            foreach (explode("\n", trim($output)) as $line) {
+                if (trim($line)) {
+                    log_message('[auto-respond] ' . $line);
+                }
+            }
+        }
     }
 }

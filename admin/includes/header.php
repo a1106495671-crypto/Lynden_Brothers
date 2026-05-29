@@ -52,9 +52,14 @@ $menu_items = [
     'site-settings.php' => ['name' => '网站设置', 'icon' => 'settings'],
     'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield'],
     'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow'],
+    'onboard-chat.php'       => ['name' => '对话式入驻',     'icon' => 'message-square'],
+    'dynamic-workflow.php'   => ['name' => '动态工作流',     'icon' => 'cpu'],
+    'reference-finder.php'   => ['name' => '参考文章发现器', 'icon' => 'book-marked'],
     'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot'],
     'access-logs.php'        => ['name' => '访问日志',      'icon' => 'activity'],
-    'theme-settings.php'     => ['name' => '前台主题',      'icon' => 'layout-template']
+    'theme-settings.php'     => ['name' => '前台主题',      'icon' => 'layout-template'],
+    'geo-scorecard.php'      => ['name' => 'GEO质量看板',   'icon' => 'shield-check'],
+    'geo-content-suggest.php'=> ['name' => 'GEO内容建议',   'icon' => 'lightbulb'],
 ];
 
 if ($is_super_admin) {
@@ -69,12 +74,11 @@ $primary_nav_items = [
         'name' => '诊断',
         'icon' => 'radar',
         'children' => [
-            ['page' => 'geo-diagnosis.php',         'name' => '雷达诊断',     'desc' => '品牌 GEO 权威性诊断'],
-            ['page' => 'geo-panorama.php',           'name' => '全景诊断',     'desc' => 'AI可见度全景分析'],
-            ['page' => 'geo-intent.php',             'name' => '意图挖掘',     'desc' => '发现AI问答意图空白'],
-            ['page' => 'geo-knowledge-graph.php',    'name' => '知识图谱',     'desc' => '结构化品牌可引用事实'],
-            ['page' => 'citation-simulator.php',     'name' => '引用模拟器',   'desc' => '关键词引用机会推演'],
-            ['page' => 'ai-citation-preferences.php','name' => 'AI偏好对照表', 'desc' => '中文 AI 平台偏好'],
+            ['page' => 'geo-diagnosis.php',         'name' => '雷达诊断',       'desc' => '品牌 GEO 权威性诊断'],
+            ['page' => 'geo-panorama.php',           'name' => '全景诊断',       'desc' => 'AI可见度全景分析'],
+            ['page' => 'geo-intent.php',             'name' => '意图挖掘',       'desc' => '发现AI问答意图空白'],
+            ['page' => 'citation-simulator.php',     'name' => '引用模拟器',     'desc' => '关键词引用机会推演'],
+            ['page' => 'reference-finder.php',       'name' => '参考文章发现器', 'desc' => '提炼高引用写作风格Meta-Prompt'],
         ],
     ],
     ['type' => 'link', 'page' => 'sop-center.php', 'name' => '策略', 'icon' => 'book-open-check'],
@@ -83,12 +87,12 @@ $primary_nav_items = [
         'name' => '交付',
         'icon' => 'send',
         'children' => [
-            ['page' => 'tasks.php',           'name' => '任务管理',     'desc' => '任务派发与进度管理'],
-            ['page' => 'materials.php',        'name' => '素材管理',     'desc' => '关键词、标题、图片和知识库'],
-            ['page' => 'geo-content.php',      'name' => '内容生成',     'desc' => 'AI一键生成GEO文章'],
-            ['page' => 'geo-content-queue.php','name' => '批量生成队列', 'desc' => '策略日历批量生成文章'],
-            ['page' => 'articles.php',         'name' => '文章管理',     'desc' => '内容生产与审核'],
-            ['page' => 'distribution.php',     'name' => '媒体分发',     'desc' => '平台铺设与发布'],
+            ['page' => 'onboard-chat.php',      'name' => '品牌入驻',   'desc' => 'AI对话收集信息，自动触发12步入驻'],
+            ['page' => 'tasks.php',             'name' => '任务管理',   'desc' => '任务派发、内容生成与进度管理'],
+            ['page' => 'materials.php',         'name' => '素材管理',   'desc' => '关键词、标题、图片和知识库'],
+            ['page' => 'articles.php',          'name' => '文章管理',   'desc' => '内容生产与审核'],
+            ['page' => 'distribution.php',      'name' => '媒体分发',   'desc' => '平台铺设与发布'],
+            ['page' => 'automation-workflow.php','name' => '高级：完整工作流','desc' => '12步全链路自动化（进阶）'],
         ],
     ],
     [
@@ -96,11 +100,11 @@ $primary_nav_items = [
         'name' => '监测',
         'icon' => 'activity',
         'children' => [
-            ['page' => 'geo-monitor.php',          'name' => 'GEO监测',   'desc' => '关键词引用率实时监测'],
-            ['page' => 'competitor-timeline.php',  'name' => '竞品对比',  'desc' => '品牌vs竞品提及率历史曲线'],
-            ['page' => 'geo-monitor-dashboard.php','name' => '监测大盘',  'desc' => '多客户数据概览大屏'],
-            ['page' => 'geo-article-impact.php',   'name' => '效果归因',  'desc' => '文章发布前后AI提及率对比'],
-            ['page' => 'geo-roadmap.php',          'name' => '执行路线图','desc' => '进度与优先行动清单'],
+            ['page' => 'geo-monitor.php',          'name' => 'GEO监测',    'desc' => '关键词引用率实时监测'],
+            ['page' => 'geo-monitor-dashboard.php','name' => '监测大盘',   'desc' => '多客户数据概览大屏'],
+            ['page' => 'geo-scorecard.php',        'name' => 'GEO质量看板','desc' => '三维评分分布与低分预警'],
+            ['page' => 'competitor-timeline.php',  'name' => '竞品对比',   'desc' => '品牌vs竞品提及率历史曲线'],
+            ['page' => 'geo-article-impact.php',   'name' => '效果归因',   'desc' => '文章发布前后AI提及率对比'],
         ],
     ],
     ['type' => 'link', 'page' => 'ops-dashboard.php', 'name' => '运营', 'icon' => 'layout-dashboard'],
@@ -215,13 +219,19 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
     <script src="/admin/assets/js/tailwind.play-cdn.js"></script>
     
     <script src="/admin/assets/js/lucide.min.js"></script>
+    <script src="/admin/assets/js/htmx.min.js"></script>
+    <script src="/admin/assets/js/htmx-preload.min.js"></script>
+    <style>
+        #nav-progress{position:fixed;top:0;left:0;width:0;height:3px;background:#3b82f6;z-index:9999;transition:width .2s ease,opacity .3s ease;pointer-events:none}
+        #nav-progress.done{width:100%;opacity:0}
+    </style>
     <?php if (isset($additional_css)): ?>
         <?php echo $additional_css; ?>
     <?php endif; ?>
 </head>
-<body class="bg-gray-50">
+<body class="bg-gray-50" hx-boost="true" hx-ext="preload">
     <!-- 导航栏 -->
-    <nav class="bg-white shadow-sm border-b">
+    <nav class="relative bg-white shadow-sm border-b z-50">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="relative flex h-16 items-center justify-between">
                 <div class="flex shrink-0 items-center">
@@ -230,7 +240,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                 </div>
                     
                 <!-- 主导航菜单 -->
-                <nav class="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-1 whitespace-nowrap md:flex">
+                <nav class="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-1 whitespace-nowrap overflow-visible md:flex">
                         <?php foreach ($primary_nav_items as $item): ?>
                             <?php
                             $is_active = isActiveNavItem($item, $current_page, $sub_page_mapping);
@@ -246,6 +256,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                                     <div class="invisible absolute left-0 top-full z-50 w-64 translate-y-0 rounded-lg border border-gray-200 bg-white py-2 opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100">
                                         <?php foreach (($item['children'] ?? []) as $child): ?>
                                             <a href="<?php echo htmlspecialchars(admin_url($child['page'])); ?>"
+                                               preload
                                                class="<?php echo isActiveMenu($child['page'], $current_page, $sub_page_mapping) ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'; ?> block px-4 py-3 transition-colors">
                                                 <span class="block text-sm font-semibold"><?php echo htmlspecialchars($child['name']); ?></span>
                                                 <span class="mt-0.5 block text-xs text-gray-500"><?php echo htmlspecialchars($child['desc']); ?></span>
@@ -255,6 +266,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                                 </div>
                             <?php else: ?>
                                 <a href="<?php echo htmlspecialchars(admin_url($item['page'])); ?>"
+                                   preload
                                    class="<?php echo $base_class; ?> shrink-0 rounded-md px-2.5 py-2 text-sm transition-colors duration-200">
                                     <?php echo htmlspecialchars($item['name']); ?>
                                 </a>
@@ -274,12 +286,11 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                         <button class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors" title="通知">
                             <i data-lucide="bell" class="w-5 h-5"></i>
                         </button>
-                        <!-- 自动化工作流 -->
-                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
+                        <!-- 对话式入驻快捷入口 -->
+                        <a href="<?php echo htmlspecialchars(admin_url('onboard-chat.php')); ?>"
                            class="relative rounded-md p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 transition-colors"
-                           title="品牌入驻自动化">
-                            <i data-lucide="workflow" class="w-5 h-5"></i>
-                            <span id="nav-automation-dot" class="absolute top-1 right-1 hidden h-2 w-2 rounded-full bg-emerald-400 ring-1.5 ring-white animate-pulse"></span>
+                           title="对话式品牌入驻">
+                            <i data-lucide="message-square" class="w-5 h-5"></i>
                         </a>
                     </div>
 
@@ -409,7 +420,7 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                     <span class="text-xs text-slate-300"><?php echo htmlspecialchars($current_customer_context['stage_label'] ?? '阶段待确认'); ?></span>
                 </div>
                 <div class="flex items-center gap-2">
-                    <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="rounded-md border border-white/20 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10">切换客户</a>
+                    <a href="<?php echo htmlspecialchars(admin_url('customers.php?switch_customer=1#customer-switcher')); ?>" class="rounded-md border border-white/20 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/10">切换客户</a>
                     <a href="<?php echo htmlspecialchars(admin_url('customers.php?clear_customer=1')); ?>" class="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-slate-100">退出客户</a>
                 </div>
             </div>

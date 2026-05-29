@@ -163,41 +163,10 @@ if ($selectedCid !== '' && $action === 'generate') {
 只输出表格和建议，不要其他前言。
 PROMPT;
 
-    $aiResult = geo_call_ai($prompt, 3500, 0.6);
-    $rawMd = '';
+    // 7. 调用AI生成策略
+    $aiResult = geo_call_ai($prompt, 3000, 0.6);
     if (empty($aiResult['error'])) {
-        $rawMd = $aiResult['content'];
-    }
-
-    // 解析 Markdown 表格成结构化数组
-    $lines = explode("\n", $rawMd);
-    $notes = [];
-    foreach ($lines as $line) {
-        $line = trim($line);
-        if (str_starts_with($line, '建议：') || str_starts_with($line, '建议:')) {
-            $notes[] = ltrim(substr($line, 3));
-            continue;
-        }
-        if (!str_starts_with($line, '|') || str_contains($line, '---') || str_contains($line, '周次') || str_contains($line, '发布平台')) continue;
-        $cols = array_map('trim', explode('|', trim($line, '|')));
-        if (count($cols) < 5) continue;
-        $weekRaw  = $cols[0] ?? '';
-        $platform = $cols[1] ?? '';
-        $keyword  = $cols[2] ?? '';
-        $angle    = $cols[3] ?? '';
-        $fmt      = $cols[4] ?? '';
-        $pri      = $cols[5] ?? 'P1';
-        if (!$platform || !$keyword) continue;
-        preg_match('/\d+/', $weekRaw, $wm);
-        $weekNum = (int)($wm[0] ?? 1);
-        $calendarRows[] = [
-            'week'     => $weekNum,
-            'platform' => $platform,
-            'keyword'  => $keyword,
-            'angle'    => $angle,
-            'format'   => $fmt,
-            'priority' => $pri,
-        ];
+        $strategyMd = $aiResult['content'];
     }
     $aiNotes = implode("\n", $notes);
     $strategy = ['brandName' => $brandName, 'rawMd' => $rawMd];

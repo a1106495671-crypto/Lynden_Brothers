@@ -15,15 +15,25 @@ try {
         week_num SMALLINT DEFAULT 1,
         platform VARCHAR(50),
         keyword VARCHAR(200),
+        title TEXT DEFAULT '',
         angle TEXT,
         content_format VARCHAR(50),
         priority VARCHAR(5) DEFAULT 'P1',
         status VARCHAR(20) DEFAULT 'pending',
         article_title TEXT,
         article_content TEXT,
+        source VARCHAR(50) DEFAULT '',
         created_at TIMESTAMP DEFAULT NOW(),
         processed_at TIMESTAMP
     )");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS title TEXT DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS angle TEXT DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ADD COLUMN IF NOT EXISTS content_format VARCHAR(50) DEFAULT ''");
+    $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN status SET DEFAULT 'pending'");
+    $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN priority SET DEFAULT 'P1'");
+    $db->exec("ALTER TABLE geo_content_queue ALTER COLUMN created_at SET DEFAULT NOW()");
 } catch (Throwable $e) {}
 
 $customers = $db->query("SELECT customer_id, name FROM customers ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
@@ -31,6 +41,7 @@ $selectedCid = $_GET['customer'] ?? ($customers[0]['customer_id'] ?? '');
 
 // AJAX: generate one article
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'generate_one') {
+    set_time_limit(120);
     header('Content-Type: application/json; charset=utf-8');
     $qid = (int)($_POST['queue_id'] ?? 0);
     if (!$qid) { echo json_encode(['error' => 'invalid id']); exit; }
@@ -78,7 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'gener
 
 ## GEO优化要求
 1. 自然植入品牌名【{$brandName}】至少4次
-2. 包含至少3个可被AI引用的具体数据或事实
+2. 优先使用已给出的品牌事实；没有证据时写“待补充证据”，不要编造数字
 3. 包含1个FAQ板块（至少3个Q&A）
 4. 结尾有明确行动召唤
 5. 使用结构化格式，字数1000-1500字
@@ -129,7 +140,7 @@ require_once __DIR__ . '/includes/header.php';
   <div class="flex items-center justify-between mb-6">
     <div>
       <h1 class="text-2xl font-bold text-gray-900">批量生成队列</h1>
-      <p class="text-sm text-gray-500 mt-1">来自策略日历的文章生成任务，逐篇调用 DeepSeek 生成</p>
+      <p class="text-sm text-gray-500 mt-1">来自策略日历和引用模拟器的文章生成任务，逐篇调用当前默认 AI 模型生成</p>
     </div>
     <div class="flex items-center gap-3">
       <select id="cidSelect" class="rounded-lg border-gray-300 text-sm shadow-sm" onchange="location='?customer='+this.value">

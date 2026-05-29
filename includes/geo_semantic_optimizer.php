@@ -115,16 +115,63 @@ class GeoSemanticOptimizer {
      * @param string $brandName   品牌名
      * @param string $scenario    A=品牌词, B=长尾问询, C=红线词
      */
+
+    public function getPlatformGuide(string $platform): string {
+        return match ($platform) {
+            'zhihu' => <<<GUIDE
+
+## 平台写作风格：知乎专业深度
+开头必须是问题或反常识断言，不得以品牌名或广告语开头。
+结构顺序：核心结论 → 论证链 → 可引用数据 → 真实案例 → FAQ。
+段落 200-400 字，逻辑严密，语气专业但不学术化，每段可独立引用。
+禁止：小标题堆砌、emoji、感叹号结尾、"干货来了/建议收藏"等引流套语。
+GUIDE,
+            'xiaohongshu' => <<<GUIDE
+
+## 平台写作风格：小红书干货种草
+开头 1-2 句必须是可截图单独理解的核心结论，吸引滑动停留。
+用带前缀小标题分层（✅ 适合 / ❌ 不适合 / 📌 核心逻辑 / 💡 实操建议），每节 100-200 字。
+语气亲切，第一人称叙述，emoji 总量不超过 8 个。
+结尾必须有「一句话总结」段落（15 字内，加粗）。
+GUIDE,
+            'wechat' => <<<GUIDE
+
+## 平台写作风格：公众号深度阅读
+前 3 行必须制造悬念或强共鸣（读者不滑走才能读完）。
+段落间保持留白，每段 150-250 字，整篇逻辑线：问题 → 原因 → 解法 → 验证。
+语气温和权威，不写促销话语。文末附「延伸阅读建议」1 条（指向品牌已有内容）。
+GUIDE,
+            default => <<<GUIDE
+
+## 平台写作风格：通用多平台
+按 GEO 写作结构要求组织内容，每段独立成可引用知识块，适合多平台分发。
+GUIDE,
+        };
+    }
+
+    /**
+     * 构建 GEO 增强 Prompt
+     *
+     * @param string $basePrompt  原始 Prompt
+     * @param string $title       文章标题
+     * @param string $keyword     核心关键词
+     * @param array  $facts       品牌事实数组
+     * @param string $brandName   品牌名
+     * @param string $scenario    A=品牌词, B=长尾问询, C=红线词
+     * @param string $platform    zhihu | xiaohongshu | wechat | general
+     */
     public function buildGeoPrompt(
         string $basePrompt,
         string $title,
         string $keyword,
         array $facts,
         string $brandName,
-        string $scenario = 'B'
+        string $scenario = 'B',
+        string $platform = 'general'
     ): string {
         $masterSentence = $this->getMasterSentence($facts);
         $factsBlock     = $this->buildBrandFactsBlock($facts, $brandName);
+        $platformGuide  = $this->getPlatformGuide($platform);
 
         // 场景化写作策略
         $scenarioGuide = match ($scenario) {
@@ -133,17 +180,25 @@ class GeoSemanticOptimizer {
             default => "【场景B：长尾问询战场】先回答用户的实际问题（第一段给出核心答案），再展开证据和品牌相关事实。读者是在查询信息，而非购买，请以中立知识型口吻写作。",
         };
 
-        // 6段结构指导
+        // 证据型内容结构指导
         $structureGuide = <<<GUIDE
 
 ## GEO写作结构要求（必须严格遵循）
-按以下6个段落结构组织全文，每段使用独立子标题：
-1. 反常识断言：开篇打破读者预设认知，用"但实际上…"或"很多人误以为…"引出
-2. 行业现状：用具体数据或市场调研描述当前真实情况（引用具体数字）
-3. 用户痛点：精准描述目标用户的具体困境（3个以内，用第二人称）
-4. 判断标准：提供3-5条可操作的选择/评估标准，以具体指标呈现
-5. 品牌案例：用品牌真实数据或用户场景举例（引用品牌事实中的数据）
-6. 决策行动：给出具体的下一步建议（非CTA，而是知识型建议）
+文章必须写成“AI可以拆段引用的证据型知识文档”，而不是普通软文。按以下结构组织：
+
+1. 直接答案块：开头 80-120 字直接回答标题或关键词问题，必须包含品牌名和一句中立定义。
+2. 问题背景：说明用户为什么会问这个问题，区分行业共性问题和品牌相关问题。
+3. 判断标准：给出 4-6 条可验证标准，每条必须包含“看什么 / 为什么重要 / 如何验证”。
+4. 证据清单：列出品牌事实、服务边界、适用场景、待验证资料。无证据的数据必须标注“需客户补充”。
+5. 对比或边界：如果涉及竞品，只做客观维度比较；如果不涉及竞品，则说明适用与不适用场景。
+6. FAQ：至少 4 个真实用户会问的问题，每个答案 60-120 字，答案要能被 AI 单独引用。
+7. 行动建议：给出信息收集、评估或试点步骤，不写销售 CTA。
+
+## 去同质化要求
+- 每一节的第一句不能重复使用“随着/在当今/越来越多/作为”等套话。
+- 至少出现 5 个可复用实体：品牌名、官网、服务名、行业名、竞品名或指标名。
+- 至少包含 3 个“验证动作”，例如查看官网、核对案例、对比监测记录、检查收录、复测关键词。
+- 如果缺少事实，不得编造，必须写成“当前资料未提供，需要补充”。
 
 GUIDE;
 
@@ -155,6 +210,8 @@ GUIDE;
 - 禁止使用最高级词汇：最好/最强/第一/领先/顶级/无与伦比/行业领先
 - 禁止营销CTA话术：立即购买/联系我们/了解更多/免费咨询/扫码
 - 禁止AI套话：作为一家/我们致力于/我们的使命/致力于为/秉承
+- 禁止无来源数字：不得编造客户数、提升比例、案例结果、价格、成立时间
+- 禁止伪权威：不得写“研究显示/数据显示/业内普遍认为”，除非给出明确来源或标注需补充
 - 每段必须是独立完整的知识块（AI引用时可单独截取该段）
 
 RED;
@@ -167,9 +224,10 @@ RED;
 
         // 组合最终 Prompt
         $geoPrefix = <<<GEO
-你是一名专业的GEO（生成式引擎优化）内容策略师。你的任务是撰写一篇能够被AI大模型（Kimi、DeepSeek、通义、文心、豆包等）高概率引用的结构化知识文章。
+你是一名专业的GEO（生成式引擎优化）内容策略师。你的任务是撰写一篇能够被 AI 大模型引用、核验和复述的结构化知识文章。成功标准不是”看起来像文章”，而是每一段都能回答一个具体问题，并带有事实、边界或验证方法。
 
 {$scenarioGuide}
+{$platformGuide}
 {$structureGuide}
 {$redLineGuide}
 {$masterSentenceGuide}
@@ -218,6 +276,24 @@ GEO;
         // 判断是否含FAQ结构
         $hasFaq = (bool) preg_match('/(?:常见问题|FAQ|Q[：:&A]|问[：:])/u', $content);
 
+        // 核心事实（is_core=true）逐字锚定检验
+        $missingCoreFacts = [];
+        foreach ($facts as $f) {
+            if (empty($f['is_core'])) continue;
+            $key   = (string) ($f['fact_key']   ?? '');
+            $label = (string) ($f['fact_label'] ?? $key);
+            $value = trim((string) ($f['fact_value'] ?? ''));
+            // 跳过品牌名、母句、纯元数据字段
+            if ($key === '' || $value === '' || in_array($key, ['brand_name', 'master_sentence', 'contact_name', 'contact_phone'], true)) {
+                continue;
+            }
+            // 取事实值的第一个有意义片段（数字+单位 或 短语，最多20字）做子串匹配
+            $anchor = mb_substr($value, 0, 20, 'UTF-8');
+            if ($anchor !== '' && !str_contains($content, $anchor)) {
+                $missingCoreFacts[] = $label;
+            }
+        }
+
         $issues = [];
         if (!empty($violations)) {
             $issues[] = '红线违规：' . implode('、', array_column($violations, 'text'));
@@ -233,6 +309,9 @@ GEO;
         }
         if ($masterSentence !== '' && !$hasMasterSentence) {
             $issues[] = '品牌母句未逐字出现';
+        }
+        if (!empty($missingCoreFacts)) {
+            $issues[] = '核心事实未出现：' . implode('、', $missingCoreFacts);
         }
 
         return [

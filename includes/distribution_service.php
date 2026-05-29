@@ -37,7 +37,7 @@ function distribution_platforms(): array {
         'portal_client' => ['name' => '客户端', 'icon' => 'globe-2', 'url' => '', 'media_type' => 'website', 'portal_source' => 'client'],
         'portal_baijia' => ['name' => '官方百家号', 'icon' => 'globe-2', 'url' => '', 'media_type' => 'website', 'portal_source' => 'baijia'],
         'portal_other' => ['name' => '其他门户', 'icon' => 'globe-2', 'url' => '', 'media_type' => 'website', 'portal_source' => 'other_portal'],
-        'zhihu' => ['name' => '知乎', 'icon' => 'message-circle', 'url' => 'https://www.zhihu.com/creator', 'media_type' => 'qa'],
+        'zhihu' => ['name' => '知乎', 'icon' => 'message-circle', 'url' => 'https://zhuanlan.zhihu.com/write', 'media_type' => 'qa'],
         'csdn' => ['name' => 'CSDN', 'icon' => 'code-2', 'url' => 'https://mp.csdn.net/', 'media_type' => 'self_media'],
         'juejin' => ['name' => '掘金', 'icon' => 'pen-tool', 'url' => 'https://juejin.cn/', 'media_type' => 'self_media'],
         'feishu' => ['name' => '飞书', 'icon' => 'send', 'url' => 'https://www.feishu.cn/', 'media_type' => 'owned'],
@@ -262,6 +262,9 @@ function ensure_distribution_schema(PDO $db): void {
     if (!db_column_exists($db, 'media_publish_jobs', 'retry_count')) {
         $db->exec("ALTER TABLE media_publish_jobs ADD COLUMN retry_count INTEGER DEFAULT 0");
     }
+    if (!db_column_exists($db, 'media_publish_jobs', 'adapted_content')) {
+        $db->exec("ALTER TABLE media_publish_jobs ADD COLUMN adapted_content TEXT DEFAULT ''");
+    }
 
     $db->exec("CREATE INDEX IF NOT EXISTS idx_media_accounts_platform ON media_accounts(platform, status)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_media_accounts_filters ON media_accounts(media_type, portal_source, industry, region, status)");
@@ -299,7 +302,7 @@ function distribution_seed_b2b_accounts(PDO $db): void {
             'platform' => 'zhihu',
             'account_name' => '董逻辑MGEO · 知乎专栏',
             'username' => 'dongluoji_mgeo',
-            'login_url' => 'https://www.zhihu.com/creator',
+            'login_url' => 'https://zhuanlan.zhihu.com/write',
             'publish_mode' => 'browser',
             'media_type' => 'qa',
             'industry' => 'it',
@@ -315,7 +318,7 @@ function distribution_seed_b2b_accounts(PDO $db): void {
             'account_name' => '董逻辑MGEO · CSDN博客',
             'username' => 'dongluoji_mgeo',
             'login_url' => 'https://mp.csdn.net/',
-            'publish_mode' => 'browser',
+            'publish_mode' => 'manual',
             'media_type' => 'self_media',
             'industry' => 'it',
             'region' => 'national',
@@ -323,7 +326,7 @@ function distribution_seed_b2b_accounts(PDO $db): void {
             'link_type' => 'url',
             'can_geo_rank' => 1,
             'price_amount' => 0,
-            'notes' => 'CSDN技术博客，开发者和企业技术决策者覆盖广，适合技术选型类内容。',
+            'notes' => 'CSDN技术博客，开发者和企业技术决策者覆盖广。自动脚本未接入前保持手动分发。',
         ],
         [
             'platform' => 'wechat',
@@ -345,7 +348,7 @@ function distribution_seed_b2b_accounts(PDO $db): void {
             'account_name' => '董逻辑MGEO · 掘金',
             'username' => 'dongluoji_mgeo',
             'login_url' => 'https://juejin.cn/',
-            'publish_mode' => 'browser',
+            'publish_mode' => 'manual',
             'media_type' => 'self_media',
             'industry' => 'it',
             'region' => 'national',
@@ -353,7 +356,7 @@ function distribution_seed_b2b_accounts(PDO $db): void {
             'link_type' => 'url',
             'can_geo_rank' => 1,
             'price_amount' => 0,
-            'notes' => '掘金技术社区，开发者聚集，适合工程实践和方法论类文章。',
+            'notes' => '掘金技术社区，开发者聚集。自动脚本未接入前保持手动分发。',
         ],
     ];
 
@@ -759,8 +762,14 @@ function distribution_enqueue_article_jobs(PDO $db, int $articleId, array $accou
     $insert = $db->prepare("
         INSERT INTO media_publish_jobs (
             article_id, account_id, platform, status, title, payload, scheduled_at, updated_at
-        ) VALUES (?, ?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, 'queued', ?, ?, ?, CURRENT_TIMESTAMP)
     ");
+
+    // 加载择时发布助手
+    $optimalTimeFile = __DIR__ . '/optimal_publish_time.php';
+    if (file_exists($optimalTimeFile)) {
+        require_once $optimalTimeFile;
+    }
 
     $payload = json_encode([
         'title' => $article['title'],
@@ -784,7 +793,16 @@ function distribution_enqueue_article_jobs(PDO $db, int $articleId, array $accou
             continue;
         }
 
-        $insert->execute([$articleId, $accountId, $account['platform'], $article['title'], $payload]);
+        // 择时发布：计算该平台最优发布时间
+        $scheduledAt = 'CURRENT_TIMESTAMP';
+        if (function_exists('get_optimal_publish_hour') && function_exists('next_occurrence_of_hour')) {
+            $optHour     = get_optimal_publish_hour($db, $account['platform']);
+            $scheduledAt = next_occurrence_of_hour($optHour);
+        } else {
+            $scheduledAt = date('Y-m-d H:i:s');
+        }
+
+        $insert->execute([$articleId, $accountId, $account['platform'], $article['title'], $payload, $scheduledAt]);
         $createdJobIds[] = function_exists('db_last_insert_id') ? db_last_insert_id($db, 'media_publish_jobs') : (int) $db->lastInsertId();
     }
 
