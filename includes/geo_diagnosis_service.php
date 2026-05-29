@@ -332,6 +332,14 @@ function geo_diagnosis_create(PDO $db, array $input): string {
         $brandId = (string) $brandStmt->fetchColumn();
 
         $scores = geo_diagnosis_calculate_scores($db, $brandName, $domain, $industry, $evidence);
+        // 如果有关联客户，用真实监测数据覆盖估算分数
+        $customerId = trim((string) ($input['customer_id'] ?? ''));
+        if ($customerId !== '') {
+            $monitorData = geo_diagnosis_monitor_data($db, $customerId, $brandName);
+            if (!empty($monitorData)) {
+                $scores = geo_diagnosis_apply_monitor_data($scores, $monitorData);
+            }
+        }
         $overall = geo_diagnosis_overall_score($scores);
         $benchmark = geo_diagnosis_industry_benchmark($db, $industry);
         $hitRate = geo_diagnosis_hit_rate($overall);
@@ -477,6 +485,114 @@ function geo_diagnosis_calculate_scores(PDO $db, string $brand, string $domain, 
         ];
     }
     return $out;
+}
+
+/**
+ * 从 geo_monitor_records 提取真实引用数据，区分品牌词和通用词。
+ * 返回结构化分析，用于替代估算分数。
+ */
+function geo_diagnosis_monitor_data(PDO $db, string $customerId, string $brand): array {
+    $stmt = $db->prepare("
+        SELECT query_text, brand_mentioned, mention_count, competitors_found, provider, queried_at
+        FROM geo_monitor_records
+        WHERE customer_id = ?
+        ORDER BY created_at DESC
+    ");
+    $stmt->execute([$customerId]);
+    $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (empty($records)) {
+        return [];
+    }
+
+    // 品牌词特征：包含品牌名或常见变体
+    $brandWords = [];
+    foreach (preg_split('/[\s\-_\/]+/u', mb_strtolower($brand)) as $w) {
+        if (mb_strlen($w) >= 2) $brandWords[] = $w;
+    }
+
+    $byQuery = [];
+    foreach ($records as $r) {
+        $q = $r['query_text'];
+        if (!isset($byQuery[$q])) {
+            $ql = mb_strtolower($q);
+            $isBranded = false;
+            foreach ($brandWords as $w) {
+                if (mb_strpos($ql, $w) !== false) { $isBranded = true; break; }
+            }
+            $byQuery[$q] = ['total' => 0, 'mentioned' => 0, 'branded' => $isBranded, 'competitors' => []];
+        }
+        $byQuery[$q]['total']++;
+        if ($r['brand_mentioned']) $byQuery[$q]['mentioned']++;
+        $comps = json_decode($r['competitors_found'] ?? '[]', true) ?: [];
+        if ($comps) $byQuery[$q]['competitors'] = array_unique(array_merge($byQuery[$q]['competitors'], $comps));
+    }
+
+    $nonBrandedTotal = 0; $nonBrandedMentioned = 0;
+    $gaps = []; $wins = [];
+    foreach ($byQuery as $q => $d) {
+        $rate = $d['total'] > 0 ? round(100.0 * $d['mentioned'] / $d['total'], 0) : 0;
+        $byQuery[$q]['rate'] = $rate;
+        if (!$d['branded']) {
+            $nonBrandedTotal += $d['total'];
+            $nonBrandedMentioned += $d['mentioned'];
+            if ($d['mentioned'] === 0) $gaps[] = $q;
+            else $wins[] = $q;
+        }
+    }
+
+    $nonBrandedRate = $nonBrandedTotal > 0
+        ? round(100.0 * $nonBrandedMentioned / $nonBrandedTotal, 1)
+        : 0.0;
+
+    return [
+        'total_records'       => count($records),
+        'non_branded_total'   => $nonBrandedTotal,
+        'non_branded_cited'   => $nonBrandedMentioned,
+        'non_branded_rate'    => $nonBrandedRate,
+        'by_query'            => $byQuery,
+        'gap_keywords'        => $gaps,
+        'win_keywords'        => $wins,
+        'data_source'         => 'real_monitor',
+    ];
+}
+
+/**
+ * 当有真实监测数据时，用引用率替换估算分数中的 ugc_coverage 和 third_party_mention。
+ */
+function geo_diagnosis_apply_monitor_data(array $scores, array $monitorData): array {
+    if (empty($monitorData)) return $scores;
+
+    $rate    = (float) ($monitorData['non_branded_rate'] ?? 0);
+    $total   = (int)   ($monitorData['non_branded_total'] ?? 0);
+    $cited   = (int)   ($monitorData['non_branded_cited'] ?? 0);
+    $gaps    = $monitorData['gap_keywords'] ?? [];
+    $wins    = $monitorData['win_keywords'] ?? [];
+
+    // ugc_coverage = 非品牌词实际引用率（0-100）
+    $ugcScore = $rate;
+    // third_party_mention：有赢得引用的关键词则加分，全部为 0% 则压低
+    $mentionBonus = count($wins) > 0 ? min(30, count($wins) * 10) : 0;
+    $mentionScore = min(100, $rate * 0.6 + $mentionBonus);
+
+    foreach ($scores as &$s) {
+        if ($s['key'] === 'ugc_coverage') {
+            $s['score'] = round($ugcScore, 2);
+            $s['raw_metric']['data_source'] = 'real_monitor';
+            $s['raw_metric']['non_branded_total'] = $total;
+            $s['raw_metric']['non_branded_cited'] = $cited;
+            $s['details']['hint'] = "真实监测数据：{$total} 次非品牌词查询，{$cited} 次提及，引用率 {$rate}%";
+            $s['details']['gap_keywords'] = $gaps;
+            $s['details']['win_keywords'] = $wins;
+        }
+        if ($s['key'] === 'third_party_mention') {
+            $s['score'] = round($mentionScore, 2);
+            $s['raw_metric']['data_source'] = 'real_monitor';
+            $s['details']['hint'] = "基于真实 AI 平台查询结果估算第三方提及度";
+        }
+    }
+    unset($s);
+    return $scores;
 }
 
 function geo_diagnosis_overall_score(array $scores): float {
