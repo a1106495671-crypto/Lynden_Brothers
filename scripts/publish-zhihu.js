@@ -43,6 +43,16 @@ function cleanInlineMarkdown(value) {
     .trim();
 }
 
+function inlineMarkdownToHtml(value) {
+  return escapeHtml(String(value))
+    .replace(/\*\*(.*?)\*\*/gs, '<strong>$1</strong>')
+    .replace(/__(.*?)__/gs, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/gs, '<em>$1</em>')
+    .replace(/_(.*?)_/gs, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/~~(.*?)~~/gs, '<s>$1</s>');
+}
+
 function normalizeMarkdownForZhihu(markdown) {
   const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n');
   const blocks = [];
@@ -52,21 +62,21 @@ function normalizeMarkdownForZhihu(markdown) {
 
   function flushParagraph() {
     if (paragraph.length) {
-      blocks.push({ type: 'p', text: cleanInlineMarkdown(paragraph.join(' ')) });
+      blocks.push({ type: 'p', text: paragraph.join(' ') });
       paragraph = [];
     }
   }
 
   function flushList() {
     if (list.length) {
-      blocks.push({ type: 'ul', items: list.map(cleanInlineMarkdown).filter(Boolean) });
+      blocks.push({ type: 'ul', items: list.filter(Boolean) });
       list = [];
     }
   }
 
   function flushQuote() {
     if (quote.length) {
-      blocks.push({ type: 'quote', text: cleanInlineMarkdown(quote.join(' ')) });
+      blocks.push({ type: 'quote', text: quote.join(' ') });
       quote = [];
     }
   }
@@ -85,7 +95,7 @@ function normalizeMarkdownForZhihu(markdown) {
       flushParagraph();
       flushList();
       flushQuote();
-      blocks.push({ type: heading[1].length <= 2 ? 'h2' : 'h3', text: cleanInlineMarkdown(heading[2]) });
+      blocks.push({ type: heading[1].length <= 2 ? 'h2' : 'h3', text: heading[2] });
       continue;
     }
 
@@ -117,20 +127,20 @@ function normalizeMarkdownForZhihu(markdown) {
 
   const text = blocks.map((block) => {
     if (block.type === 'ul') {
-      return block.items.map((item) => `• ${item}`).join('\n');
+      return block.items.map((item) => `• ${cleanInlineMarkdown(item)}`).join('\n');
     }
-    return block.text;
+    return cleanInlineMarkdown(block.text || '');
   }).filter(Boolean).join('\n\n');
 
   const html = blocks.map((block) => {
     if (!block.text && block.type !== 'ul') return '';
-    if (block.type === 'h2') return `<h2>${escapeHtml(block.text)}</h2>`;
-    if (block.type === 'h3') return `<h3>${escapeHtml(block.text)}</h3>`;
-    if (block.type === 'quote') return `<blockquote>${escapeHtml(block.text)}</blockquote>`;
+    if (block.type === 'h2') return `<h2>${inlineMarkdownToHtml(block.text)}</h2>`;
+    if (block.type === 'h3') return `<h3>${inlineMarkdownToHtml(block.text)}</h3>`;
+    if (block.type === 'quote') return `<blockquote>${inlineMarkdownToHtml(block.text)}</blockquote>`;
     if (block.type === 'ul') {
-      return `<ul>${block.items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+      return `<ul>${block.items.map((item) => `<li>${inlineMarkdownToHtml(item)}</li>`).join('')}</ul>`;
     }
-    return `<p>${escapeHtml(block.text)}</p>`;
+    return `<p>${inlineMarkdownToHtml(block.text)}</p>`;
   }).filter(Boolean).join('');
 
   return { text, html };
@@ -418,16 +428,23 @@ async function notifyPublished(articleId, publishedUrl, status) {
         html: String(input.contentHtml || '').trim() || markdownFormatted.html,
         text: String(input.contentText || '').trim() || normalizeHtmlForPlainText(String(input.contentHtml || '')) || markdownFormatted.text,
       };
-      await page.evaluate(async ({ text, html }) => {
-        const item = new ClipboardItem({
-          'text/plain': new Blob([text], { type: 'text/plain' }),
-          'text/html': new Blob([html], { type: 'text/html' }),
-        });
-        await navigator.clipboard.write([item]);
-      }, formatted).catch(async () => {
-        await page.evaluate(async (text) => navigator.clipboard.writeText(text), formatted.text);
-      });
-      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+      const inserted = await page.evaluate((html) => {
+        try { return document.execCommand('insertHTML', false, html); } catch (e) { return false; }
+      }, formatted.html);
+      if (!inserted) {
+        await page.evaluate(async ({ text, html }) => {
+          try {
+            const item = new ClipboardItem({
+              'text/plain': new Blob([text], { type: 'text/plain' }),
+              'text/html': new Blob([html], { type: 'text/html' }),
+            });
+            await navigator.clipboard.write([item]);
+          } catch (e) {
+            await navigator.clipboard.writeText(text);
+          }
+        }, formatted);
+        await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+      }
     }
     await page.waitForTimeout(1000);
 
