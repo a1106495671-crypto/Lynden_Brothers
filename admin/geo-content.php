@@ -132,17 +132,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save'
 
     if (!$ok) { echo json_encode(['error' => '保存失败']); exit; }
     $newId = db_last_insert_id($db, 'articles');
+
+    // 保存成功后，把对应 P0 意图问题标记为已覆盖（断点闭环）
+    $customer_save = trim($_POST['customer'] ?? '');
+    if ($keyword && $customer_save) {
+        try {
+            $db->prepare("UPDATE geo_intent_questions SET covered = true WHERE customer_id = ? AND question = ? AND priority = 'P0' AND covered = false")
+               ->execute([$customer_save, $keyword]);
+        } catch (Throwable $e) {}
+    }
+
     echo json_encode(['ok' => true, 'id' => $newId, 'redirect' => "article-edit.php?id={$newId}"]);
     exit;
 }
 
 // ── GET: 渲染页面 ─────────────────────────────────────────────────────────────
-$customer = trim($_GET['customer'] ?? '');
-$keyword  = trim($_GET['keyword']  ?? '');
+$customer        = trim($_GET['customer'] ?? '');
+$keyword         = trim($_GET['keyword']  ?? '');
+$platformDefault = trim($_GET['platform'] ?? '通用');
 
 if (!$keyword) {
     header('Location: articles.php');
     exit;
+}
+
+// 查找匹配的 P0 意图问题（提供上下文建议）
+$intentQ = null;
+if ($keyword && $customer) {
+    try {
+        $sq = $db->prepare("SELECT id, question, suggested_action, dimension FROM geo_intent_questions WHERE customer_id = ? AND question = ? AND priority = 'P0' LIMIT 1");
+        $sq->execute([$customer, $keyword]);
+        $intentQ = $sq->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) {}
 }
 
 // 已有文章
@@ -285,7 +306,16 @@ require_once __DIR__ . '/includes/header.php';
           <div class="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-800 font-medium">
             <i data-lucide="target" class="w-4 h-4 shrink-0"></i>
             <?php echo $kwE; ?>
+            <?php if ($intentQ): ?>
+            <span class="ml-auto px-1.5 py-0.5 bg-red-500 text-white text-xs rounded font-bold">P0</span>
+            <?php endif; ?>
           </div>
+          <?php if ($intentQ && !empty($intentQ['suggested_action'])): ?>
+          <div class="mt-2 flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-800">
+            <i data-lucide="lightbulb" class="w-3.5 h-3.5 shrink-0 mt-0.5"></i>
+            <span><strong>策略建议：</strong><?= htmlspecialchars($intentQ['suggested_action'], ENT_QUOTES, 'UTF-8') ?></span>
+          </div>
+          <?php endif; ?>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -313,11 +343,9 @@ require_once __DIR__ . '/includes/header.php';
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">目标平台</label>
             <select id="platform" class="block w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-blue-500 focus:border-blue-500">
-              <option value="通用">通用</option>
-              <option value="知乎">知乎</option>
-              <option value="微信公众号">微信公众号</option>
-              <option value="小红书">小红书</option>
-              <option value="今日头条">今日头条</option>
+              <?php foreach (['通用','知乎','微信公众号','小红书','今日头条'] as $pt): ?>
+              <option value="<?= htmlspecialchars($pt,ENT_QUOTES,'UTF-8') ?>" <?= $platformDefault===$pt?'selected':'' ?>><?= htmlspecialchars($pt,ENT_QUOTES,'UTF-8') ?></option>
+              <?php endforeach; ?>
             </select>
           </div>
         </div>
@@ -542,8 +570,9 @@ function saveDraft() {
   saveStatus.textContent = '保存中…';
 
   const body = new URLSearchParams({
-    action:  'save',
-    keyword: KEYWORD,
+    action:   'save',
+    keyword:  KEYWORD,
+    customer: CUSTOMER,
     title,
     content,
   });
