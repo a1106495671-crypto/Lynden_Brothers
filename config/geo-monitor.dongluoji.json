@@ -88,7 +88,7 @@
             "enabled": true,
             "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
             "apiKeyEnv": "DOUBAO_API_KEY",
-            "model": "doubao-seed-1-6-250615"
+            "model": "ep-m-20260406200950-6jq5k"
         },
         {
             "id": "kimi",
