@@ -62,6 +62,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($injected > 0) {
                             $message .= "，已自动添加 {$injected} 个关键词到监测队列";
                         }
+                        // 标记对应 P0 意图问题为已覆盖
+                        try {
+                            $kwStmt = $db->prepare("SELECT original_keyword FROM articles WHERE id = ?");
+                            $kwStmt->execute([$jobArticleId]);
+                            $artKw = (string)($kwStmt->fetchColumn() ?: '');
+                            if ($artKw !== '') {
+                                $db->prepare("UPDATE geo_intent_questions SET covered = true WHERE customer_id = ? AND question = ? AND priority = 'P0' AND covered = false")
+                                   ->execute([$sessionCid, $artKw]);
+                            }
+                        } catch (Throwable $e) {}
+                        $message .= ' · <a href="geo-article-impact.php?article_id=' . $jobArticleId . '" class="underline font-medium">查看引用效果</a>';
                     }
                 } elseif (($result['status'] ?? '') === 'skipped') {
                     $message = trim((string) ($result['error_message'] ?? '任务已跳过'));
@@ -79,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 distribution_job_update($db, $jobId, $status);
                 $message = '发布任务状态已手动更新';
-                // 手动标记成功时同样注入关键词
+                // 手动标记成功时同样注入关键词 + 标记意图覆盖
                 if ($status === 'success') {
                     $jobInfoStmt = $db->prepare("SELECT article_id, remote_url FROM media_publish_jobs WHERE id = ?");
                     $jobInfoStmt->execute([$jobId]);
@@ -91,6 +102,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($injected > 0) {
                             $message .= "，已自动添加 {$injected} 个关键词到监测队列";
                         }
+                        // 标记对应 P0 意图问题为已覆盖
+                        try {
+                            $kwStmt = $db->prepare("SELECT original_keyword FROM articles WHERE id = ?");
+                            $kwStmt->execute([$jobArticleId]);
+                            $artKw = (string)($kwStmt->fetchColumn() ?: '');
+                            if ($artKw !== '') {
+                                $db->prepare("UPDATE geo_intent_questions SET covered = true WHERE customer_id = ? AND question = ? AND priority = 'P0' AND covered = false")
+                                   ->execute([$sessionCid, $artKw]);
+                            }
+                        } catch (Throwable $e) {}
+                        $message .= ' · <a href="geo-article-impact.php?article_id=' . $jobArticleId . '" class="underline font-medium">查看引用效果</a>';
                     }
                 }
             } elseif ($action === 'save_geo_material') {
@@ -125,16 +147,26 @@ if ($selectedArticleId > 0) {
     $selectedArticle = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
+$geoMaterialTypes = distribution_geo_material_types();
+$currentCustomerId = (string) ($_SESSION['current_customer']['id'] ?? '');
+
+// 找出当前客户的 P0 关键词，用于文章列表打标
+$_p0Keywords = [];
+if ($currentCustomerId !== '') {
+    try {
+        $p0Stmt = $db->prepare("SELECT question FROM geo_intent_questions WHERE customer_id = ? AND priority = 'P0' AND covered = false");
+        $p0Stmt->execute([$currentCustomerId]);
+        $_p0Keywords = array_flip($p0Stmt->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) {}
+}
+
 $recentArticles = $db->query("
-    SELECT id, title, status, review_status, created_at
+    SELECT id, title, status, review_status, created_at, original_keyword
     FROM articles
     WHERE deleted_at IS NULL
     ORDER BY created_at DESC
     LIMIT 30
 ")->fetchAll(PDO::FETCH_ASSOC);
-
-$geoMaterialTypes = distribution_geo_material_types();
-$currentCustomerId = (string) ($_SESSION['current_customer']['id'] ?? '');
 
 // 读取行业偏好配置（由 ai-citation-preferences.php 一键应用写入）
 $_industryPref = [];
@@ -200,7 +232,7 @@ function distribution_option_label(array $options, string $key): string {
 <?php endif; ?>
 
 <?php if ($message): ?>
-    <div class="mb-6 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800"><?php echo htmlspecialchars($message); ?></div>
+    <div class="mb-6 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800"><?php echo $message; ?></div>
 <?php endif; ?>
 <?php if ($error): ?>
     <div class="mb-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><?php echo htmlspecialchars($error); ?></div>
@@ -254,7 +286,8 @@ function distribution_option_label(array $options, string $key): string {
                     <?php endif; ?>
                     <?php foreach ($recentArticles as $article): ?>
                         <?php if ($selectedArticle && (int) $selectedArticle['id'] === (int) $article['id']) continue; ?>
-                        <option value="<?php echo $article['id']; ?>">#<?php echo $article['id']; ?> <?php echo htmlspecialchars($article['title']); ?></option>
+                        <?php $isP0Art = isset($_p0Keywords[$article['original_keyword'] ?? '']) && ($article['original_keyword'] ?? '') !== ''; ?>
+                        <option value="<?php echo $article['id']; ?>"><?php echo $isP0Art ? '[P0] ' : ''; ?>#<?php echo $article['id']; ?> <?php echo htmlspecialchars($article['title']); ?></option>
                     <?php endforeach; ?>
                 </select>
                 <?php if ($selectedArticle): ?>
