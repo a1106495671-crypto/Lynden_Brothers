@@ -25,6 +25,7 @@ services:
     volumes:
       - ./data/browser-profiles:/app/data/browser-profiles
       - ./data/logs:/app/data/logs
+      - ./uploads:/app/uploads
     networks:
       - geo-net
 
@@ -65,6 +66,33 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./data/logs:/app/data/logs
+    networks:
+      - geo-net
+
+  distribution-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geo-distribution-worker
+    restart: always
+    env_file:
+      - .env
+    command: ["php", "bin/distribution_worker.php"]
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-geo_system}
+      - DB_USER=${DB_USER:-geo_user}
+      - DB_PASSWORD=${DB_PASSWORD:-geo_password}
+      - TZ=Asia/Shanghai
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data/browser-profiles:/app/data/browser-profiles
+      - ./data/logs:/app/data/logs
     networks:
       - geo-net
 
