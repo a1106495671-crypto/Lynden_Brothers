@@ -11,6 +11,7 @@ services:
       - .env
     ports:
       - "${HOST_PORT:-18081}:18081"
+      - "${FRONT_PORT:-18082}:18082"
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432

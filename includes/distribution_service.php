@@ -934,3 +934,5 @@ function distribution_get_stats(PDO $db): array {
         'failed' => (int) $db->query("SELECT COUNT(*) FROM media_publish_jobs WHERE status = 'failed'")->fetchColumn(),
     ];
 }
+
+require_once __DIR__ . '/geoflow_distribution_service.php';

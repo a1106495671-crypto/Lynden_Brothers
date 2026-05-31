@@ -16,6 +16,7 @@ require_once __DIR__ . '/../includes/distribution_publisher_service.php';
 
 // 检查管理员登录
 require_admin_login();
+geoflow_distribution_ensure_schema($db);
 
 // 立即释放session锁，允许其他页面并发访问
 session_write_close();
@@ -248,12 +249,23 @@ $sql = "
            c.name as category_name,
            gs.geo_score,
            gs.red_line_violations,
-           gs.issues as geo_issues
+           gs.issues as geo_issues,
+           COALESCE(ds.distribution_total_count, 0) AS distribution_total_count,
+           COALESCE(ds.distribution_synced_count, 0) AS distribution_synced_count,
+           COALESCE(ds.distribution_failed_count, 0) AS distribution_failed_count
     FROM articles a
     LEFT JOIN tasks t ON a.task_id = t.id
     LEFT JOIN authors au ON a.author_id = au.id
     LEFT JOIN categories c ON a.category_id = c.id
     LEFT JOIN geo_article_scores gs ON gs.article_id = a.id
+    LEFT JOIN (
+        SELECT article_id,
+               COUNT(*) AS distribution_total_count,
+               SUM(CASE WHEN status = 'synced' THEN 1 ELSE 0 END) AS distribution_synced_count,
+               SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS distribution_failed_count
+        FROM article_distributions
+        GROUP BY article_id
+    ) ds ON ds.article_id = a.id
     WHERE {$where_clause}
     ORDER BY a.created_at DESC
     LIMIT {$per_page} OFFSET {$offset}
@@ -293,6 +305,23 @@ function article_review_meta(string $reviewStatus): array {
     };
 }
 
+function article_distribution_badge(array $article): ?array {
+    $total = (int)($article['distribution_total_count'] ?? 0);
+    if ($total <= 0) {
+        return null;
+    }
+    $synced = (int)($article['distribution_synced_count'] ?? 0);
+    $failed = (int)($article['distribution_failed_count'] ?? 0);
+    $pending = max(0, $total - $synced - $failed);
+    if ($failed > 0) {
+        return ['label' => '分发失败', 'detail' => "{$failed}/{$total}", 'class' => 'bg-red-50 text-red-700 ring-red-100'];
+    }
+    if ($synced >= $total) {
+        return ['label' => '已同步', 'detail' => "{$synced}/{$total}", 'class' => 'bg-emerald-50 text-emerald-700 ring-emerald-100'];
+    }
+    return ['label' => '分发队列', 'detail' => "{$pending}/{$total}", 'class' => 'bg-sky-50 text-sky-700 ring-sky-100'];
+}
+
 // 设置页面信息
 $page_title = '文章管理';
 $page_header = '
@@ -312,7 +341,7 @@ $page_header = '
         </a>
         <a href="distribution.php" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
             <i data-lucide="send" class="w-4 h-4 mr-2"></i>
-            媒体分发
+            分发管理
         </a>
         <a href="articles-review.php" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
             <i data-lucide="eye" class="w-4 h-4 mr-1"></i>
@@ -666,7 +695,7 @@ function deleteArticle(articleId, event) {
                         </a>
                         <a href="distribution.php" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
                             <i data-lucide="send" class="w-4 h-4 mr-1"></i>
-                            媒体分发
+                            分发管理
                         </a>
                         <button onclick="toggleBatchActions()" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
                             <i data-lucide="check-square" class="w-4 h-4 mr-1"></i>
@@ -770,6 +799,16 @@ function deleteArticle(articleId, event) {
                                                         <span class="text-xs text-blue-600">关键词: <?php echo htmlspecialchars($article['keywords']); ?></span>
                                                     </div>
                                                 <?php endif; ?>
+                                                <?php $distributionBadge = article_distribution_badge($article); ?>
+                                                <?php if ($distributionBadge): ?>
+                                                    <div class="mt-2">
+                                                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 <?php echo $distributionBadge['class']; ?>">
+                                                            <i data-lucide="send" class="mr-1 h-3 w-3"></i>
+                                                            <?php echo $distributionBadge['label']; ?>
+                                                            <span class="ml-1 font-mono text-[11px] opacity-80"><?php echo $distributionBadge['detail']; ?></span>
+                                                        </span>
+                                                    </div>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
                                     </td>
@@ -834,7 +873,7 @@ function deleteArticle(articleId, event) {
                                             <a href="article-edit.php?id=<?php echo $article['id']; ?>" class="text-green-600 hover:text-green-800" title="编辑">
                                                 <i data-lucide="edit" class="w-4 h-4"></i>
                                             </a>
-                                            <a href="distribution.php?article_id=<?php echo $article['id']; ?>" class="text-indigo-600 hover:text-indigo-800" title="媒体分发">
+                                            <a href="distribution.php" class="text-indigo-600 hover:text-indigo-800" title="分发管理">
                                                 <i data-lucide="send" class="w-4 h-4"></i>
                                             </a>
                                             <?php if ($article['review_status'] === 'pending'): ?>

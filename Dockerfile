@@ -21,6 +21,7 @@ COPY . .
 RUN chmod +x bin/*.php scripts/*.sh 2>/dev/null || true
 RUN mkdir -p data/browser-profiles data/logs
 
-EXPOSE 18081
+EXPOSE 18081 18082
 
-CMD ["php", "-S", "0.0.0.0:18081", "router.php"]
+RUN chmod +x start-servers.sh
+CMD ["bash", "start-servers.sh"]

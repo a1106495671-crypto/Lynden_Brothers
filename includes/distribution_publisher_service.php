@@ -437,18 +437,25 @@ function distribution_handle_article_published(PDO $db, int $articleId): array {
             return ['created' => 0, 'started' => 0, 'skipped' => 'article_not_published'];
         }
 
+        $geoflowCreated = function_exists('geoflow_distribution_enqueue_article')
+            ? geoflow_distribution_enqueue_article($db, $articleId)
+            : 0;
+
         $scope = distribution_auto_publish_scope_for_article($db, $articleId);
         if (!empty($scope['has_workflow_scope']) && empty($scope['account_ids'])) {
-            return ['created' => 0, 'started' => 0, 'skipped' => 'no_media_accounts_selected'];
+            return ['created' => $geoflowCreated, 'started' => 0, 'skipped' => $geoflowCreated > 0 ? '' : 'no_media_accounts_selected'];
         }
 
-        $jobIds = distribution_enqueue_article_jobs($db, $articleId, $scope['account_ids']);
+        $jobIds = [];
+        if (!empty($scope['account_ids'])) {
+            $jobIds = distribution_enqueue_article_jobs($db, $articleId, $scope['account_ids']);
+        }
         $started = 0;
         if (!empty($jobIds) && distribution_auto_start_enabled()) {
             $started = distribution_start_article_queued_jobs_async($db, $articleId, count($jobIds));
         }
 
-        return ['created' => count($jobIds), 'started' => $started, 'skipped' => ''];
+        return ['created' => count($jobIds) + $geoflowCreated, 'started' => $started, 'skipped' => ''];
     } catch (Throwable $e) {
         if (function_exists('write_log')) {
             write_log('媒体自动分发触发失败：文章ID ' . $articleId . '，' . $e->getMessage(), 'WARNING');
