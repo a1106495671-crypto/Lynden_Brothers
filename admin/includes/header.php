@@ -52,7 +52,6 @@ $menu_items = [
     'site-settings.php' => ['name' => '网站设置', 'icon' => 'settings'],
     'security-settings.php' => ['name' => '安全管理', 'icon' => 'shield'],
     'automation-workflow.php' => ['name' => '品牌入驻自动化', 'icon' => 'workflow'],
-    'onboard-chat.php'       => ['name' => '对话式入驻',     'icon' => 'message-square'],
     'dynamic-workflow.php'   => ['name' => '动态工作流',     'icon' => 'cpu'],
     'reference-finder.php'   => ['name' => '参考文章发现器', 'icon' => 'book-marked'],
     'ai-crawler-stats.php'   => ['name' => 'AI爬虫识别',    'icon' => 'bot'],
@@ -98,12 +97,11 @@ $primary_nav_items = [
         'name' => '交付',
         'icon' => 'send',
         'children' => [
-            ['page' => 'onboard-chat.php',      'name' => '品牌入驻',   'desc' => 'AI对话收集信息，自动触发12步入驻'],
+            ['page' => 'automation-workflow.php','name' => '品牌入驻自动化','desc' => '12步全链路自动化主入口'],
             ['page' => 'tasks.php',             'name' => '任务管理',   'desc' => '任务派发、内容生成与进度管理'],
             ['page' => 'materials.php',         'name' => '素材管理',   'desc' => '关键词、标题、图片和知识库'],
             ['page' => 'articles.php',          'name' => '文章管理',   'desc' => '内容生产与审核'],
             ['page' => 'distribution.php',      'name' => '媒体分发',   'desc' => '平台铺设与发布'],
-            ['page' => 'automation-workflow.php','name' => '高级：完整工作流','desc' => '12步全链路自动化（进阶）'],
         ],
     ],
     [
@@ -296,11 +294,11 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                         <button class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors" title="通知">
                             <i data-lucide="bell" class="w-5 h-5"></i>
                         </button>
-                        <!-- 对话式入驻快捷入口 -->
-                        <a href="<?php echo htmlspecialchars(admin_url('onboard-chat.php')); ?>"
+                        <!-- 自动化快捷入口 -->
+                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
                            class="relative rounded-md p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 transition-colors"
-                           title="对话式品牌入驻">
-                            <i data-lucide="message-square" class="w-5 h-5"></i>
+                           title="品牌入驻自动化">
+                            <i data-lucide="workflow" class="w-5 h-5"></i>
                         </a>
                     </div>
 
