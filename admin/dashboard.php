@@ -18,7 +18,7 @@ session_write_close();
 
 // 设置页面标题
 $page_title = '管理后台首页';
-$active_tab = ($_GET['tab'] ?? 'board') === 'journey' ? 'journey' : 'board';
+$additional_css = '<style>html,body{overflow-x:hidden}</style>';
 
 $journey_stages = [
     [
@@ -252,422 +252,354 @@ try {
     $geo_tool_stats['total_monitor_alerts'] = (int) $db->query("SELECT COUNT(*) FROM monitor_alerts WHERE resolved_at IS NULL")->fetchColumn();
 } catch (Exception $e) {}
 
+$quick_start_steps = [
+    [
+        'no' => '1',
+        'title' => '接入客户与品牌资料',
+        'desc' => '先建立客户上下文，把行业、竞品、目标关键词、知识库和素材库沉淀为可复用资产。',
+        'icon' => 'building-2',
+        'link' => 'customers.php',
+        'button' => '进入客户中心',
+        'tone' => 'blue',
+    ],
+    [
+        'no' => '2',
+        'title' => '跑诊断与策略路线',
+        'desc' => '用雷达诊断、引用模拟和 AI 偏好对照表确认短板、机会词和平台优先级。',
+        'icon' => 'radar',
+        'link' => 'geo-diagnosis.php',
+        'button' => '开始诊断',
+        'tone' => 'emerald',
+    ],
+    [
+        'no' => '3',
+        'title' => '一键启动自动交付',
+        'desc' => '从入驻自动化直接串起资料整理、策略生成、内容任务、分发与监测，不用每步手动切页面。',
+        'icon' => 'play',
+        'link' => 'automation-workflow.php',
+        'button' => '一键运行',
+        'tone' => 'slate',
+    ],
+];
+
+$automation_nodes = [
+    [
+        'title' => '客户上下文',
+        'desc' => '客户档案、行业边界、竞品与目标 AI 场景',
+        'icon' => 'users',
+        'link' => 'customers.php',
+        'status' => $active_customers > 0 ? 'ready' : 'attention',
+        'meta' => $active_customers . ' 个活跃客户',
+        'tone' => 'blue',
+    ],
+    [
+        'title' => '诊断 / 模拟',
+        'desc' => '雷达分、引用现状、机会词和短板报告',
+        'icon' => 'scan-search',
+        'link' => 'geo-diagnosis.php',
+        'status' => $geo_tool_stats['total_diagnoses'] > 0 ? 'ready' : 'attention',
+        'meta' => ($geo_tool_stats['total_diagnoses'] ?: '待跑') . ' 次诊断',
+        'tone' => 'violet',
+    ],
+    [
+        'title' => '策略 SOP',
+        'desc' => '90 天路线图、平台组合、主题矩阵和负责人',
+        'icon' => 'book-open-check',
+        'link' => 'sop-center.php',
+        'status' => $stage_counts['strategy'] > 0 ? 'running' : 'ready',
+        'meta' => $stage_counts['strategy'] . ' 个策略中',
+        'tone' => 'emerald',
+    ],
+    [
+        'title' => '一键执行',
+        'desc' => '品牌入驻自动化统一拉起任务、内容、分发和状态回写',
+        'icon' => 'workflow',
+        'link' => 'automation-workflow.php',
+        'status' => 'running',
+        'meta' => $doing_customers . ' 个交付中',
+        'tone' => 'blue',
+        'primary' => true,
+    ],
+    [
+        'title' => '内容生产',
+        'desc' => '事实密度内容、问答稿、作者与知识库引用',
+        'icon' => 'file-pen-line',
+        'link' => 'articles.php',
+        'status' => $stage_counts['execute'] > 0 ? 'running' : 'ready',
+        'meta' => $stage_counts['execute'] . ' 个执行中',
+        'tone' => 'emerald',
+    ],
+    [
+        'title' => '媒体分发',
+        'desc' => '站点包、渠道队列、远端同步与发布回调',
+        'icon' => 'radio-tower',
+        'link' => 'distribution.php',
+        'status' => 'ready',
+        'meta' => '可远程同步',
+        'tone' => 'orange',
+    ],
+    [
+        'title' => 'AI 监测',
+        'desc' => '关键词引用率、竞品变化、告警与月度复盘',
+        'icon' => 'activity',
+        'link' => 'geo-monitor.php',
+        'status' => $total_alerts > 0 ? 'attention' : 'ready',
+        'meta' => $total_alerts . ' 个告警',
+        'tone' => 'orange',
+    ],
+    [
+        'title' => '续费复盘',
+        'desc' => '前后雷达对比、引用提升曲线和下季度动作',
+        'icon' => 'repeat-2',
+        'link' => 'geo-roadmap.php',
+        'status' => $expiring_soon > 0 ? 'attention' : 'ready',
+        'meta' => $expiring_soon . ' 个临期',
+        'tone' => 'slate',
+    ],
+];
+
+$tone_classes = [
+    'blue' => 'bg-blue-50 text-blue-700 border-blue-100',
+    'emerald' => 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    'orange' => 'bg-orange-50 text-orange-700 border-orange-100',
+    'violet' => 'bg-violet-50 text-violet-700 border-violet-100',
+    'slate' => 'bg-slate-50 text-slate-700 border-slate-200',
+];
+
+$status_classes = [
+    'ready' => 'bg-emerald-100 text-emerald-700',
+    'running' => 'bg-blue-100 text-blue-700',
+    'attention' => 'bg-orange-100 text-orange-700',
+];
+
+$status_labels = [
+    'ready' => '可用',
+    'running' => '运行中',
+    'attention' => '需关注',
+];
+
 // 包含统一头部
 require_once __DIR__ . '/includes/header.php';
 ?>
-            <!-- 页面标题 -->
-            <div class="mb-8">
-                <div class="flex items-center justify-between">
+            <div class="px-4 sm:px-0">
+            <div class="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-900">GEO 服务工作台</h1>
+                    <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-600">
+                        从客户诊断、策略 SOP、内容执行、媒体分发到 AI 监测，一页看清交付链路；需要开跑时，直接进入品牌入驻自动化一键执行。
+                    </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button onclick="location.reload()" class="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                        <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
+                        刷新
+                    </button>
+                    <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>" class="inline-flex h-10 items-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                        <i data-lucide="play" class="mr-2 h-4 w-4"></i>
+                        一键运行
+                    </a>
+                </div>
+            </div>
+
+            <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+                <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                        <h1 class="text-3xl font-bold text-gray-900">仪表盘</h1>
-                        <p class="mt-1 text-sm text-gray-600"><?php echo htmlspecialchars($admin_site_name); ?> 数据概览</p>
+                        <p class="text-xs font-semibold uppercase text-blue-600">快速启动</p>
+                        <h2 class="mt-2 text-xl font-semibold text-gray-900">三步启动 GEO 客户自动交付</h2>
+                        <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
+                            借鉴 GEOFlow 的清晰入口，但这里突出我们的核心差异：不只是建任务，而是把客户入驻、诊断、策略、内容、分发和监测串成可点击执行的交付流。
+                        </p>
                     </div>
-                    <div class="flex items-center space-x-3">
-                        <span class="text-sm text-gray-500">最后更新: <?php echo date('Y-m-d H:i:s'); ?></span>
-                        <button onclick="location.reload()" class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
-                            <i data-lucide="refresh-cw" class="w-4 h-4 mr-1"></i>
-                            刷新
-                        </button>
-                    </div>
+                    <span class="inline-flex w-fit items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                        <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                        自动化能力可用
+                    </span>
                 </div>
-            </div>
-
-            <!-- 首页标签页 -->
-            <div class="mb-8 rounded-xl border border-gray-200 bg-white p-1 shadow-sm">
-                <div class="grid grid-cols-2 gap-1">
-                    <a href="<?php echo htmlspecialchars(admin_url('dashboard.php?tab=board')); ?>"
-                       class="inline-flex items-center justify-center rounded-lg px-4 py-3 text-sm font-semibold transition <?php echo $active_tab === 'board' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'; ?>">
-                        <i data-lucide="layout-dashboard" class="mr-2 h-4 w-4"></i>
-                        数据看板
-                    </a>
-                    <a href="<?php echo htmlspecialchars(admin_url('dashboard.php?tab=journey')); ?>"
-                       class="inline-flex items-center justify-center rounded-lg px-4 py-3 text-sm font-semibold transition <?php echo $active_tab === 'journey' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'; ?>">
-                        <i data-lucide="route" class="mr-2 h-4 w-4"></i>
-                        服务流程
-                    </a>
-                </div>
-            </div>
-
-            <?php if ($active_tab === 'board'): ?>
-
-            <!-- GEO 交付 KPI 卡片 -->
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                <!-- 活跃客户 -->
-                <div class="bg-white overflow-hidden shadow-lg rounded-lg">
-                    <div class="p-5">
-                        <div class="flex items-center">
-                            <div class="flex-shrink-0">
-                                <i data-lucide="users" class="h-8 w-8 text-blue-600"></i>
-                            </div>
-                            <div class="ml-5 w-0 flex-1">
-                                <dl>
-                                    <dt class="text-sm font-medium text-gray-500 truncate">活跃客户</dt>
-                                    <dd class="text-2xl font-bold text-gray-900"><?php echo $active_customers; ?></dd>
-                                    <dd class="text-xs text-gray-500">共 <?php echo $total_customers; ?> 个客户</dd>
-                                </dl>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-blue-50 px-5 py-2">
-                        <a href="customers.php" class="text-xs font-medium text-blue-600 hover:text-blue-800">进入客户中心 →</a>
-                    </div>
-                </div>
-
-                <!-- 执行阶段客户 -->
-                <div class="bg-white overflow-hidden shadow-lg rounded-lg">
-                    <div class="p-5">
-                        <div class="flex items-center">
-                            <div class="flex-shrink-0">
-                                <i data-lucide="zap" class="h-8 w-8 text-emerald-600"></i>
-                            </div>
-                            <div class="ml-5 w-0 flex-1">
-                                <dl>
-                                    <dt class="text-sm font-medium text-gray-500 truncate">策略/执行/监测中</dt>
-                                    <dd class="text-2xl font-bold text-gray-900"><?php echo $doing_customers; ?></dd>
-                                    <dd class="text-xs text-gray-500">正在交付 GEO 服务</dd>
-                                </dl>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-emerald-50 px-5 py-2">
-                        <a href="sop-center.php" class="text-xs font-medium text-emerald-600 hover:text-emerald-800">查看 SOP 进度 →</a>
-                    </div>
-                </div>
-
-                <!-- 累计诊断次数 -->
-                <div class="bg-white overflow-hidden shadow-lg rounded-lg">
-                    <div class="p-5">
-                        <div class="flex items-center">
-                            <div class="flex-shrink-0">
-                                <i data-lucide="radar" class="h-8 w-8 text-purple-600"></i>
-                            </div>
-                            <div class="ml-5 w-0 flex-1">
-                                <dl>
-                                    <dt class="text-sm font-medium text-gray-500 truncate">累计诊断次数</dt>
-                                    <dd class="text-2xl font-bold text-gray-900"><?php echo $geo_tool_stats['total_diagnoses'] ?: '—'; ?></dd>
-                                    <dd class="text-xs text-gray-500">引用模拟 <?php echo $geo_tool_stats['total_sim_queries'] ?: '—'; ?> 次</dd>
-                                </dl>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-purple-50 px-5 py-2">
-                        <a href="geo-diagnosis.php" class="text-xs font-medium text-purple-600 hover:text-purple-800">进入雷达诊断 →</a>
-                    </div>
-                </div>
-
-                <!-- 待处理告警 -->
-                <div class="bg-white overflow-hidden shadow-lg rounded-lg">
-                    <div class="p-5">
-                        <div class="flex items-center">
-                            <div class="flex-shrink-0">
-                                <i data-lucide="bell-ring" class="h-8 w-8 <?php echo $total_alerts > 0 ? 'text-orange-500' : 'text-gray-400'; ?>"></i>
-                            </div>
-                            <div class="ml-5 w-0 flex-1">
-                                <dl>
-                                    <dt class="text-sm font-medium text-gray-500 truncate">待处理告警</dt>
-                                    <dd class="text-2xl font-bold <?php echo $total_alerts > 0 ? 'text-orange-600' : 'text-gray-900'; ?>"><?php echo $total_alerts; ?></dd>
-                                    <dd class="text-xs text-gray-500"><?php echo $expiring_soon; ?> 个客户合同 60 天内到期</dd>
-                                </dl>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="<?php echo $total_alerts > 0 ? 'bg-orange-50' : 'bg-gray-50'; ?> px-5 py-2">
-                        <a href="geo-monitor.php" class="text-xs font-medium <?php echo $total_alerts > 0 ? 'text-orange-600 hover:text-orange-800' : 'text-gray-500 hover:text-gray-700'; ?>">查看监测告警 →</a>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 阶段分布 + 客户状态 -->
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-
-                <!-- 客户阶段漏斗 -->
-                <div class="bg-white shadow rounded-lg">
-                    <div class="px-6 py-4 border-b border-gray-200">
-                        <h3 class="text-lg font-medium text-gray-900">客户阶段分布</h3>
-                        <p class="text-xs text-gray-500 mt-0.5">当前所有客户所处交付阶段</p>
-                    </div>
-                    <div class="p-6 space-y-3">
-                        <?php foreach ($stage_labels as $key => $label):
-                            $cnt = $stage_counts[$key];
-                            $pct = $total_customers > 0 ? round(($cnt / $total_customers) * 100) : 0;
-                            $color = $stage_colors[$key] ?? 'bg-gray-400';
-                        ?>
-                        <div>
-                            <div class="flex items-center justify-between mb-1">
-                                <span class="text-sm font-medium text-gray-700"><?php echo $label; ?></span>
-                                <span class="text-sm font-semibold text-gray-900"><?php echo $cnt; ?> 个</span>
-                            </div>
-                            <div class="w-full bg-gray-100 rounded-full h-2.5">
-                                <div class="<?php echo $color; ?> h-2.5 rounded-full transition-all" style="width: <?php echo $pct; ?>%"></div>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-
-                <!-- 客户状态一览 -->
-                <div class="lg:col-span-2 bg-white shadow rounded-lg">
-                    <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                        <h3 class="text-lg font-medium text-gray-900">客户状态一览</h3>
-                        <a href="customers.php" class="text-sm text-blue-600 hover:text-blue-800">全部客户 →</a>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">客户</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">阶段</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">整体进度</th>
-                                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">告警</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">负责人</th>
-                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">合同到期</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                <?php foreach ($customers as $c):
-                                    $is_active = $c['service_status'] === 'active';
-                                    $alert_cnt = count($c['alerts']);
-                                    $days_left = (int) round((strtotime($c['contract_end_at']) - time()) / 86400);
-                                ?>
-                                <tr class="hover:bg-gray-50">
-                                    <td class="px-4 py-3">
-                                        <div class="text-sm font-semibold text-gray-900"><?php echo htmlspecialchars($c['name']); ?></div>
-                                        <div class="text-xs text-gray-500"><?php echo htmlspecialchars($c['industry']); ?></div>
-                                    </td>
-                                    <td class="px-4 py-3">
-                                        <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold
-                                            <?php echo $is_active ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'; ?>">
-                                            <?php echo htmlspecialchars($c['stage_label']); ?>
-                                        </span>
-                                    </td>
-                                    <td class="px-4 py-3" style="min-width:120px">
-                                        <div class="flex items-center gap-2">
-                                            <div class="flex-1 bg-gray-100 rounded-full h-2">
-                                                <div class="bg-blue-500 h-2 rounded-full" style="width:<?php echo (int)$c['overall_pct']; ?>%"></div>
-                                            </div>
-                                            <span class="text-xs text-gray-600 tabular-nums"><?php echo $c['overall_pct']; ?>%</span>
-                                        </div>
-                                    </td>
-                                    <td class="px-4 py-3 text-center">
-                                        <?php if ($alert_cnt > 0): ?>
-                                        <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-orange-100 text-orange-700 text-xs font-bold"><?php echo $alert_cnt; ?></span>
-                                        <?php else: ?>
-                                        <span class="text-gray-300">—</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="px-4 py-3 text-sm text-gray-700"><?php echo htmlspecialchars($c['owner']); ?></td>
-                                    <td class="px-4 py-3">
-                                        <span class="text-sm <?php echo $days_left <= 60 ? 'font-semibold text-orange-600' : 'text-gray-600'; ?>">
-                                            <?php echo htmlspecialchars($c['contract_end_at']); ?>
-                                        </span>
-                                        <?php if ($days_left <= 60): ?>
-                                        <div class="text-xs text-orange-500">剩 <?php echo $days_left; ?> 天</div>
-                                        <?php endif; ?>
-                                    </td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 待办汇总 -->
-            <div class="bg-white shadow rounded-lg">
-                <div class="px-6 py-4 border-b border-gray-200">
-                    <h3 class="text-lg font-medium text-gray-900">全客户待办汇总</h3>
-                    <p class="text-xs text-gray-500 mt-0.5">汇集所有客户当前阶段的关键行动项</p>
-                </div>
-                <div class="p-6">
-                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                        <?php foreach ($customers as $c):
-                            $alert_cnt = count($c['alerts']);
-                        ?>
-                        <div class="rounded-lg border <?php echo $c['service_status'] === 'active' ? 'border-gray-200' : 'border-dashed border-gray-200 opacity-60'; ?> p-4">
-                            <div class="flex items-start justify-between mb-3">
-                                <div>
-                                    <div class="text-sm font-semibold text-gray-900"><?php echo htmlspecialchars($c['name']); ?></div>
-                                    <div class="text-xs text-gray-500 mt-0.5"><?php echo htmlspecialchars($c['stage_label']); ?></div>
+                <div class="grid grid-cols-1 divide-y divide-gray-100 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+                    <?php foreach ($quick_start_steps as $step): ?>
+                        <?php $tone = $tone_classes[$step['tone']] ?? $tone_classes['slate']; ?>
+                        <div class="p-6">
+                            <div class="flex items-start gap-4">
+                                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full <?php echo $step['tone'] === 'slate' ? 'bg-slate-900' : 'bg-' . $step['tone'] . '-600'; ?> text-sm font-semibold text-white">
+                                    <?php echo htmlspecialchars($step['no']); ?>
                                 </div>
-                                <?php if ($alert_cnt > 0): ?>
-                                <span class="flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
-                                    <i data-lucide="alert-circle" class="h-3 w-3"></i><?php echo $alert_cnt; ?>
-                                </span>
-                                <?php endif; ?>
-                            </div>
-                            <?php if (!empty($c['pending'])): ?>
-                            <ul class="space-y-1.5">
-                                <?php foreach ($c['pending'] as $item): ?>
-                                <li class="flex items-start gap-2 text-xs text-gray-600">
-                                    <i data-lucide="circle-dot" class="mt-0.5 h-3 w-3 shrink-0 text-blue-400"></i>
-                                    <?php echo htmlspecialchars($item); ?>
-                                </li>
-                                <?php endforeach; ?>
-                            </ul>
-                            <?php else: ?>
-                            <p class="text-xs text-gray-400 italic">暂无待办</p>
-                            <?php endif; ?>
-                            <div class="mt-3 pt-3 border-t border-gray-100">
-                                <a href="customers.php?select=<?php echo rawurlencode($c['id']); ?>" class="text-xs font-medium text-blue-600 hover:text-blue-800">进入工作台 →</a>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </div>
-
-            <?php else: ?>
-            <!-- 服务流程总览 -->
-            <div class="space-y-6">
-                <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-500">服务交付路径</p>
-                                <p class="mt-2 text-3xl font-bold text-gray-900">6 阶段</p>
-                            </div>
-                            <div class="rounded-lg bg-blue-50 p-3 text-blue-600">
-                                <i data-lucide="route" class="h-7 w-7"></i>
-                            </div>
-                        </div>
-                        <p class="mt-4 text-sm leading-6 text-gray-600">以诊断、模拟、策略、执行、监测和复盘串联 GEO 服务全流程，让每一步目标与交付物清晰可见。</p>
-                    </div>
-                    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-500">核心工具</p>
-                                <p class="mt-2 text-3xl font-bold text-gray-900">3 个</p>
-                            </div>
-                            <div class="rounded-lg bg-emerald-50 p-3 text-emerald-600">
-                                <i data-lucide="wrench" class="h-7 w-7"></i>
-                            </div>
-                        </div>
-                        <p class="mt-4 text-sm leading-6 text-gray-600">雷达诊断、引用模拟器、AI偏好对照表共同完成现状评估、机会测算和平台策略选择。</p>
-                    </div>
-                    <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-500">交付目标</p>
-                                <p class="mt-2 text-3xl font-bold text-gray-900">闭环</p>
-                            </div>
-                            <div class="rounded-lg bg-orange-50 p-3 text-orange-600">
-                                <i data-lucide="repeat-2" class="h-7 w-7"></i>
-                            </div>
-                        </div>
-                        <p class="mt-4 text-sm leading-6 text-gray-600">通过持续监测与阶段复盘，形成可量化的优化闭环，帮助品牌稳定提升 AI 引用表现。</p>
-                    </div>
-                </div>
-
-                <div class="rounded-lg border border-gray-200 bg-white shadow-sm">
-                    <div class="border-b border-gray-200 px-6 py-5">
-                        <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                            <div>
-                                <h2 class="text-xl font-semibold text-gray-900">六阶段客户旅程</h2>
-                                <p class="mt-1 text-sm text-gray-500">点击每个阶段的工具入口，可以直接进入对应后台模块。</p>
-                            </div>
-                            <div class="flex flex-wrap items-center gap-2 text-xs font-medium">
-                                <span class="rounded-full bg-blue-100 px-3 py-1 text-blue-700">获客转化</span>
-                                <span class="rounded-full bg-emerald-100 px-3 py-1 text-emerald-700">策略成单</span>
-                                <span class="rounded-full bg-orange-100 px-3 py-1 text-orange-700">续费增长</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="p-6">
-                        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
-                            <?php foreach ($journey_stages as $stage): ?>
-                                <?php $colors = $journey_color_classes[$stage['color']]; ?>
-                                <a href="#stage-<?php echo htmlspecialchars($stage['no']); ?>"
-                                   class="group rounded-lg border <?php echo $colors['card']; ?> p-4 transition hover:-translate-y-0.5 hover:shadow-md">
-                                    <div class="flex items-center justify-between">
-                                        <span class="rounded-full px-2.5 py-1 text-xs font-semibold <?php echo $colors['badge']; ?>">
-                                            <?php echo htmlspecialchars($stage['no']); ?>
-                                        </span>
-                                        <span class="text-xs font-medium <?php echo $colors['text']; ?>">
-                                            <?php echo htmlspecialchars($stage['segment']); ?>
-                                        </span>
+                                <div class="min-w-0">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="<?php echo htmlspecialchars($step['icon']); ?>" class="h-5 w-5 <?php echo explode(' ', $tone)[1] ?? 'text-gray-700'; ?>"></i>
+                                        <h3 class="text-base font-semibold text-gray-900"><?php echo htmlspecialchars($step['title']); ?></h3>
                                     </div>
-                                    <h3 class="mt-4 text-lg font-bold text-gray-900"><?php echo htmlspecialchars($stage['name']); ?></h3>
-                                    <p class="mt-1 text-sm text-gray-600"><?php echo htmlspecialchars($stage['tagline']); ?></p>
-                                    <div class="mt-4 h-1.5 rounded-full bg-white/80">
-                                        <div class="h-1.5 rounded-full <?php echo $colors['line']; ?>" style="width: <?php echo ((int)$stage['no']) * 16; ?>%;"></div>
-                                    </div>
-                                </a>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                    <?php foreach ($journey_stages as $stage): ?>
-                        <?php $colors = $journey_color_classes[$stage['color']]; ?>
-                        <section id="stage-<?php echo htmlspecialchars($stage['no']); ?>" class="rounded-lg border border-gray-200 bg-white shadow-sm">
-                            <div class="border-b border-gray-200 p-6">
-                                <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                                    <div class="flex items-start gap-4">
-                                        <span class="mt-1 rounded-lg px-3 py-2 text-sm font-bold <?php echo $colors['badge']; ?>">
-                                            <?php echo htmlspecialchars($stage['no']); ?>
-                                        </span>
-                                        <div>
-                                            <div class="flex flex-wrap items-center gap-2">
-                                                <h3 class="text-xl font-bold text-gray-900"><?php echo htmlspecialchars($stage['name']); ?></h3>
-                                                <span class="rounded-full px-2.5 py-1 text-xs font-semibold <?php echo $colors['soft']; ?>">
-                                                    <?php echo htmlspecialchars($stage['tagline']); ?>
-                                                </span>
-                                            </div>
-                                            <div class="mt-2 flex flex-wrap gap-2 text-xs text-gray-600">
-                                                <span class="rounded-full bg-gray-100 px-2.5 py-1">周期：<?php echo htmlspecialchars($stage['duration']); ?></span>
-                                                <span class="rounded-full bg-gray-100 px-2.5 py-1">主导：<?php echo htmlspecialchars($stage['role']); ?></span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="flex flex-wrap gap-2">
-                                        <a href="<?php echo htmlspecialchars(admin_url($stage['link'])); ?>"
-                                           class="inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
-                                            <i data-lucide="external-link" class="mr-1.5 h-4 w-4"></i>
-                                            <?php echo htmlspecialchars($stage['tool']); ?>
-                                        </a>
-                                        <?php if (!empty($stage['secondary_link'])): ?>
-                                            <a href="<?php echo htmlspecialchars(admin_url($stage['secondary_link'])); ?>"
-                                               class="inline-flex items-center rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-gray-800">
-                                                媒体分发
-                                            </a>
-                                        <?php endif; ?>
-                                    </div>
+                                    <p class="mt-2 text-sm leading-6 text-gray-500"><?php echo htmlspecialchars($step['desc']); ?></p>
+                                    <a href="<?php echo htmlspecialchars(admin_url($step['link'])); ?>" class="mt-4 inline-flex h-9 items-center rounded-lg <?php echo $step['tone'] === 'slate' ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'; ?> px-3 text-sm font-semibold">
+                                        <?php echo htmlspecialchars($step['button']); ?>
+                                        <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4"></i>
+                                    </a>
                                 </div>
                             </div>
-                            <div class="grid grid-cols-1 gap-5 p-6 lg:grid-cols-2">
-                                <div>
-                                    <h4 class="text-sm font-semibold text-gray-900">关键动作</h4>
-                                    <ul class="mt-3 space-y-2">
-                                        <?php foreach ($stage['activities'] as $activity): ?>
-                                            <li class="flex gap-2 text-sm leading-6 text-gray-600">
-                                                <i data-lucide="check-circle-2" class="mt-1 h-4 w-4 flex-shrink-0 <?php echo $colors['text']; ?>"></i>
-                                                <span><?php echo htmlspecialchars($activity); ?></span>
-                                            </li>
-                                        <?php endforeach; ?>
-                                    </ul>
-                                </div>
-                                <div class="space-y-3">
-                                    <div class="rounded-lg bg-gray-50 p-4">
-                                        <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">交付成果</p>
-                                        <p class="mt-1 text-sm leading-6 text-gray-800"><?php echo htmlspecialchars($stage['output']); ?></p>
-                                    </div>
-                                    <div class="rounded-lg bg-gray-50 p-4">
-                                        <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">服务方式</p>
-                                        <p class="mt-1 text-sm leading-6 text-gray-800"><?php echo htmlspecialchars($stage['pricing']); ?></p>
-                                    </div>
-                                    <div class="rounded-lg bg-gray-50 p-4">
-                                        <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">阶段价值</p>
-                                        <p class="mt-1 text-sm leading-6 text-gray-800"><?php echo htmlspecialchars($stage['conversion']); ?></p>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
+                        </div>
                     <?php endforeach; ?>
                 </div>
+            </section>
+
+            <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+                <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                        <h2 class="text-xl font-semibold text-gray-900">GEO+AI 自动化交付流</h2>
+                        <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-500">
+                            系统按客户服务依赖关系串联后台能力：先做客户上下文和诊断，再落策略、内容、分发和监测。节点可点进对应模块，异常节点优先处理。
+                        </p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
+                            <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                            <?php echo $doing_customers; ?> 个流程运行中
+                        </span>
+                        <span class="inline-flex items-center rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
+                            <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                            <?php echo $total_alerts + $expiring_soon; ?> 项需要关注
+                        </span>
+                    </div>
+                </div>
+                <div class="p-5">
+                    <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-gray-900">自动化流水线</h3>
+                            <p class="mt-1 text-sm leading-6 text-gray-500">从左到右是标准交付路径；“一键执行”是我们的主入口。</p>
+                        </div>
+                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>" class="inline-flex h-9 w-fit items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                            <i data-lucide="settings-2" class="mr-2 h-4 w-4"></i>
+                            自动化设置
+                        </a>
+                    </div>
+                    <div class="relative grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                        <div class="pointer-events-none absolute left-[8%] right-[8%] top-[42px] hidden h-0.5 bg-gradient-to-r from-blue-200 via-emerald-200 to-orange-200 xl:block"></div>
+                        <?php foreach ($automation_nodes as $node): ?>
+                            <?php
+                            $tone = $tone_classes[$node['tone']] ?? $tone_classes['slate'];
+                            $status = $status_classes[$node['status']] ?? $status_classes['ready'];
+                            $is_primary = !empty($node['primary']);
+                            ?>
+                            <a href="<?php echo htmlspecialchars(admin_url($node['link'])); ?>" class="relative z-10 flex min-h-[178px] flex-col rounded-lg border <?php echo $is_primary ? 'border-blue-300 bg-blue-50/60 ring-1 ring-blue-200' : 'border-gray-200 bg-white'; ?> p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border <?php echo $tone; ?>">
+                                        <i data-lucide="<?php echo htmlspecialchars($node['icon']); ?>" class="h-5 w-5"></i>
+                                    </div>
+                                    <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold <?php echo $status; ?>">
+                                        <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-current"></span>
+                                        <?php echo htmlspecialchars($status_labels[$node['status']] ?? '可用'); ?>
+                                    </span>
+                                </div>
+                                <h3 class="mt-4 text-base font-semibold text-gray-900"><?php echo htmlspecialchars($node['title']); ?></h3>
+                                <p class="mt-2 text-sm leading-6 text-gray-500"><?php echo htmlspecialchars($node['desc']); ?></p>
+                                <div class="mt-auto flex items-center justify-between gap-3 pt-4">
+                                    <span class="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600"><?php echo htmlspecialchars($node['meta']); ?></span>
+                                    <i data-lucide="arrow-up-right" class="h-4 w-4 text-gray-400"></i>
+                                </div>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </section>
+
+            <section class="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="text-base font-semibold text-gray-900">活跃客户</h3>
+                        <i data-lucide="users" class="h-5 w-5 text-blue-600"></i>
+                    </div>
+                    <div class="mt-5 text-3xl font-bold text-gray-900"><?php echo $active_customers; ?></div>
+                    <div class="mt-2 text-sm font-medium text-gray-500">共 <?php echo $total_customers; ?> 个客户档案</div>
+                </div>
+                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="text-base font-semibold text-gray-900">交付中</h3>
+                        <i data-lucide="zap" class="h-5 w-5 text-emerald-600"></i>
+                    </div>
+                    <div class="mt-5 text-3xl font-bold text-gray-900"><?php echo $doing_customers; ?></div>
+                    <div class="mt-2 text-sm font-medium text-gray-500">策略 / 执行 / 监测阶段</div>
+                </div>
+                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="text-base font-semibold text-gray-900">诊断资产</h3>
+                        <i data-lucide="radar" class="h-5 w-5 text-violet-600"></i>
+                    </div>
+                    <div class="mt-5 text-3xl font-bold text-gray-900"><?php echo $geo_tool_stats['total_diagnoses'] ?: '—'; ?></div>
+                    <div class="mt-2 text-sm font-medium text-gray-500">引用模拟 <?php echo $geo_tool_stats['total_sim_queries'] ?: '—'; ?> 次</div>
+                </div>
+                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="text-base font-semibold text-gray-900">待处理告警</h3>
+                        <i data-lucide="bell-ring" class="h-5 w-5 text-orange-600"></i>
+                    </div>
+                    <div class="mt-5 text-3xl font-bold <?php echo $total_alerts > 0 ? 'text-orange-600' : 'text-gray-900'; ?>"><?php echo $total_alerts; ?></div>
+                    <div class="mt-2 text-sm font-medium text-gray-500"><?php echo $expiring_soon; ?> 个客户 60 天内到期</div>
+                </div>
+            </section>
+
+            <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
+                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                    <h2 class="text-xl font-semibold text-gray-900">六阶段服务路径</h2>
+                    <p class="mt-2 text-sm leading-6 text-gray-500">把客户从获客诊断带到执行、监测和续费复盘。</p>
+                    <div class="mt-5 space-y-3">
+                        <?php foreach ($journey_stages as $stage): ?>
+                            <?php $colors = $journey_color_classes[$stage['color']]; ?>
+                            <a href="<?php echo htmlspecialchars(admin_url($stage['link'])); ?>" class="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                                <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold <?php echo $colors['badge']; ?>"><?php echo htmlspecialchars($stage['no']); ?></span>
+                                <span class="min-w-0 flex-1">
+                                    <span class="block text-sm font-semibold text-gray-900"><?php echo htmlspecialchars($stage['name']); ?> · <?php echo htmlspecialchars($stage['tagline']); ?></span>
+                                    <span class="mt-1 block truncate text-xs text-gray-500"><?php echo htmlspecialchars($stage['output']); ?></span>
+                                </span>
+                                <i data-lucide="chevron-right" class="h-4 w-4 text-gray-400"></i>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <div class="xl:col-span-2 rounded-lg border border-gray-200 bg-white shadow-sm">
+                    <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+                        <div>
+                            <h2 class="text-xl font-semibold text-gray-900">客户下一步动作</h2>
+                            <p class="mt-1 text-sm text-gray-500">只保留首页需要看到的客户状态和关键行动项。</p>
+                        </div>
+                        <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="text-sm font-semibold text-blue-600 hover:text-blue-800">全部客户</a>
+                    </div>
+                    <div class="divide-y divide-gray-100">
+                        <?php foreach ($customers as $c): ?>
+                            <?php
+                            $alert_cnt = count($c['alerts']);
+                            $days_left = (int) round((strtotime($c['contract_end_at']) - time()) / 86400);
+                            ?>
+                            <a href="<?php echo htmlspecialchars(admin_url('customers.php?select=' . rawurlencode($c['id']))); ?>" class="grid gap-4 px-5 py-4 transition hover:bg-gray-50 lg:grid-cols-[minmax(0,1.2fr)_160px_minmax(0,1.4fr)_90px] lg:items-center">
+                                <span class="min-w-0">
+                                    <span class="block text-sm font-semibold text-gray-900"><?php echo htmlspecialchars($c['name']); ?></span>
+                                    <span class="mt-1 block text-xs text-gray-500"><?php echo htmlspecialchars($c['industry']); ?> · <?php echo htmlspecialchars($c['owner']); ?></span>
+                                </span>
+                                <span>
+                                    <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700"><?php echo htmlspecialchars($c['stage_label']); ?></span>
+                                    <span class="mt-2 flex items-center gap-2">
+                                        <span class="h-2 flex-1 rounded-full bg-gray-100">
+                                            <span class="block h-2 rounded-full bg-blue-500" style="width:<?php echo (int)$c['overall_pct']; ?>%"></span>
+                                        </span>
+                                        <span class="text-xs tabular-nums text-gray-500"><?php echo (int)$c['overall_pct']; ?>%</span>
+                                    </span>
+                                </span>
+                                <span class="text-sm leading-6 text-gray-600">
+                                    <?php echo htmlspecialchars($c['pending'][0] ?? ($c['alerts'][0] ?? '暂无待办')); ?>
+                                </span>
+                                <span class="flex items-center justify-start gap-2 lg:justify-end">
+                                    <?php if ($alert_cnt > 0): ?>
+                                        <span class="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-orange-100 px-2 text-xs font-bold text-orange-700"><?php echo $alert_cnt; ?></span>
+                                    <?php endif; ?>
+                                    <?php if ($days_left <= 60): ?>
+                                        <span class="text-xs font-semibold text-orange-600">剩 <?php echo $days_left; ?> 天</span>
+                                    <?php endif; ?>
+                                    <i data-lucide="arrow-up-right" class="h-4 w-4 text-gray-400"></i>
+                                </span>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </section>
             </div>
-            <?php endif; ?>
 
 <?php
 // 包含统一底部

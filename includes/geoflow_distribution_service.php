@@ -89,6 +89,36 @@ function geoflow_distribution_ensure_schema(PDO $db): void {
     $db->exec("CREATE INDEX IF NOT EXISTS idx_article_distributions_channel ON article_distributions(distribution_channel_id)");
     $db->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_article_distribution_unique ON article_distributions(article_id, distribution_channel_id, action)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_distribution_logs_channel ON distribution_logs(distribution_channel_id)");
+
+    $columns = [
+        'distribution_channels' => [
+            'channel_type' => "ALTER TABLE distribution_channels ADD COLUMN channel_type VARCHAR(60) DEFAULT 'geoflow_agent'",
+            'front_mode' => "ALTER TABLE distribution_channels ADD COLUMN front_mode VARCHAR(30) DEFAULT 'static'",
+            'template_key' => "ALTER TABLE distribution_channels ADD COLUMN template_key VARCHAR(120) DEFAULT NULL",
+            'site_settings' => "ALTER TABLE distribution_channels ADD COLUMN site_settings TEXT DEFAULT NULL",
+            'channel_config' => "ALTER TABLE distribution_channels ADD COLUMN channel_config TEXT DEFAULT NULL",
+            'last_health_status' => "ALTER TABLE distribution_channels ADD COLUMN last_health_status VARCHAR(30) DEFAULT NULL",
+            'last_health_checked_at' => "ALTER TABLE distribution_channels ADD COLUMN last_health_checked_at TIMESTAMP DEFAULT NULL",
+            'last_error_message' => "ALTER TABLE distribution_channels ADD COLUMN last_error_message TEXT DEFAULT NULL",
+        ],
+        'article_distributions' => [
+            'remote_meta' => "ALTER TABLE article_distributions ADD COLUMN remote_meta TEXT DEFAULT NULL",
+            'idempotency_key' => "ALTER TABLE article_distributions ADD COLUMN idempotency_key VARCHAR(120)",
+            'payload_hash' => "ALTER TABLE article_distributions ADD COLUMN payload_hash VARCHAR(64) DEFAULT NULL",
+            'next_retry_at' => "ALTER TABLE article_distributions ADD COLUMN next_retry_at TIMESTAMP DEFAULT NULL",
+            'last_attempt_at' => "ALTER TABLE article_distributions ADD COLUMN last_attempt_at TIMESTAMP DEFAULT NULL",
+        ],
+        'distribution_logs' => [
+            'event' => "ALTER TABLE distribution_logs ADD COLUMN event VARCHAR(120) DEFAULT NULL",
+        ],
+    ];
+    foreach ($columns as $table => $tableColumns) {
+        foreach ($tableColumns as $column => $sql) {
+            if (function_exists('db_column_exists') && !db_column_exists($db, $table, $column)) {
+                $db->exec($sql);
+            }
+        }
+    }
 }
 
 function geoflow_distribution_status_label(string $status): string {
@@ -363,17 +393,505 @@ function geoflow_distribution_health(PDO $db, int $channelId): array {
     if (!$channel) {
         throw new InvalidArgumentException('渠道不存在');
     }
-    $endpoint = rtrim((string)$channel['endpoint_url'], '/');
-    $healthUrl = $endpoint . '/health';
-    $context = stream_context_create(['http' => ['timeout' => 8, 'ignore_errors' => true]]);
-    $body = @file_get_contents($healthUrl, false, $context);
-    $ok = $body !== false;
-    $error = $ok ? null : '无法访问 ' . $healthUrl;
-    $db->prepare("UPDATE distribution_channels SET last_health_status = ?, last_health_checked_at = CURRENT_TIMESTAMP, last_error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        ->execute([$ok ? 'ok' : 'failed', $error, $channelId]);
-    geoflow_distribution_log($db, $ok ? 'info' : 'error', $ok ? '目标站点健康检查通过' : '目标站点健康检查失败', $channelId, null, null, ['event' => 'channel.health_checked', 'url' => $healthUrl]);
-    if (!$ok) {
-        throw new RuntimeException($error);
+
+    try {
+        if ((string)($channel['channel_type'] ?? 'geoflow_agent') === 'wordpress_rest') {
+            $result = geoflow_distribution_wordpress_request($db, $channel, 'GET', geoflow_distribution_wordpress_base_url($channel) . '/wp/v2/users/me', null, 10);
+        } else {
+            $result = geoflow_distribution_agent_health($db, $channel);
+            if (isset($result['agent_base_url']) && is_string($result['agent_base_url']) && trim($result['agent_base_url']) !== '') {
+                $db->prepare("UPDATE distribution_channels SET endpoint_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+                    ->execute([rtrim($result['agent_base_url'], '/'), $channelId]);
+            }
+        }
+        $db->prepare("UPDATE distribution_channels SET last_health_status = 'ok', last_health_checked_at = CURRENT_TIMESTAMP, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            ->execute([$channelId]);
+        geoflow_distribution_log($db, 'info', '目标站点健康检查通过', $channelId, null, null, ['event' => 'channel.health_checked', 'result' => $result]);
+        return ['status' => 'ok'] + $result;
+    } catch (Throwable $e) {
+        $db->prepare("UPDATE distribution_channels SET last_health_status = 'failed', last_health_checked_at = CURRENT_TIMESTAMP, last_error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            ->execute([$e->getMessage(), $channelId]);
+        geoflow_distribution_log($db, 'error', '目标站点健康检查失败', $channelId, null, null, ['event' => 'channel.health_checked', 'error' => $e->getMessage()]);
+        throw $e;
     }
-    return ['status' => 'ok', 'url' => $healthUrl, 'body' => mb_substr((string)$body, 0, 500)];
+}
+
+function geoflow_distribution_active_secret(PDO $db, int $channelId): ?array {
+    $stmt = $db->prepare("SELECT * FROM distribution_channel_secrets WHERE distribution_channel_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$channelId]);
+    $secret = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $secret ?: null;
+}
+
+function geoflow_distribution_plain_secret(?array $secret): string {
+    if (!$secret) {
+        return '';
+    }
+    $decoded = base64_decode((string)($secret['secret_ciphertext'] ?? ''), true);
+    return is_string($decoded) ? $decoded : '';
+}
+
+function geoflow_distribution_uuid(): string {
+    $hex = bin2hex(random_bytes(16));
+    return substr($hex, 0, 8) . '-' . substr($hex, 8, 4) . '-' . substr($hex, 12, 4) . '-' . substr($hex, 16, 4) . '-' . substr($hex, 20);
+}
+
+function geoflow_distribution_signed_headers(array $secret, string $method, string $path, string $body, string $event, string $idempotencyKey): array {
+    $plainSecret = geoflow_distribution_plain_secret($secret);
+    if ($plainSecret === '') {
+        throw new RuntimeException('分发渠道密钥无法解密');
+    }
+    $timestamp = gmdate('c');
+    $nonce = geoflow_distribution_uuid();
+    $bodyHash = hash('sha256', $body);
+    $signature = hash_hmac('sha256', strtoupper($method) . "\n" . $path . "\n" . $timestamp . "\n" . $nonce . "\n" . $bodyHash, $plainSecret);
+    return [
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'X-GEOFlow-Key-Id: ' . (string)$secret['key_id'],
+        'X-GEOFlow-Timestamp: ' . $timestamp,
+        'X-GEOFlow-Nonce: ' . $nonce,
+        'X-GEOFlow-Idempotency-Key: ' . $idempotencyKey,
+        'X-GEOFlow-Body-SHA256: ' . $bodyHash,
+        'X-GEOFlow-Signature: ' . $signature,
+        'X-GEOFlow-Event: ' . $event,
+    ];
+}
+
+function geoflow_distribution_http_request(string $method, string $url, array $headers = [], ?string $body = null, int $timeout = 30): array {
+    $status = 0;
+    $responseHeaders = [];
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER => false,
+            CURLOPT_CUSTOMREQUEST => strtoupper($method),
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_HEADERFUNCTION => static function ($curl, string $header) use (&$responseHeaders): int {
+                $responseHeaders[] = trim($header);
+                return strlen($header);
+            },
+        ]);
+        if ($body !== null) {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        }
+        $raw = curl_exec($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        if ($raw === false) {
+            throw new RuntimeException($error !== '' ? $error : 'HTTP 请求失败');
+        }
+    } else {
+        $context = stream_context_create([
+            'http' => [
+                'method' => strtoupper($method),
+                'header' => implode("\r\n", $headers),
+                'content' => $body ?? '',
+                'timeout' => $timeout,
+                'ignore_errors' => true,
+            ],
+        ]);
+        $raw = @file_get_contents($url, false, $context);
+        $responseHeaders = function_exists('http_get_last_response_headers')
+            ? (http_get_last_response_headers() ?: [])
+            : [];
+        if (!empty($responseHeaders[0]) && preg_match('/\s(\d{3})\s/', (string)$responseHeaders[0], $m)) {
+            $status = (int)$m[1];
+        }
+        if ($raw === false) {
+            throw new RuntimeException('HTTP 请求失败：' . $url);
+        }
+    }
+
+    $decoded = json_decode((string)$raw, true);
+    return [
+        'status' => $status,
+        'body' => (string)$raw,
+        'json' => is_array($decoded) ? $decoded : null,
+        'headers' => $responseHeaders,
+    ];
+}
+
+function geoflow_distribution_failure_message(string $operation, array $response, string $endpoint): string {
+    $status = (int)($response['status'] ?? 0);
+    if ($status === 404) {
+        return '目标站 Agent 接口未找到（请求地址：' . $endpoint . '）。请先下载并部署目标站点包，确认入口指向 public/index.php；如部署在二级目录，请把 Agent 基础地址填写为包含该目录的入口地址。';
+    }
+    if (in_array($status, [401, 403], true)) {
+        return $operation . '失败：HTTP ' . $status . '，目标站 Agent 鉴权未通过。请确认密钥 ID 和密钥明文一致。';
+    }
+    $plain = html_entity_decode(strip_tags((string)($response['body'] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $plain = preg_replace('/\s+/', ' ', trim($plain)) ?? '';
+    if (mb_strlen($plain) > 300) {
+        $plain = mb_substr($plain, 0, 300) . '...';
+    }
+    return $operation . '失败：HTTP ' . $status . ($plain !== '' ? ' ' . $plain : '');
+}
+
+function geoflow_distribution_send_agent_json(PDO $db, array $channel, string $path, string $event, string $idempotencyKey, array $payload, string $operation, string $method = 'POST'): array {
+    $secret = geoflow_distribution_active_secret($db, (int)$channel['id']);
+    if (!$secret) {
+        throw new RuntimeException('分发渠道有效密钥不存在');
+    }
+    $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (!is_string($body)) {
+        throw new RuntimeException($operation . '载荷 JSON 编码失败');
+    }
+    $headers = geoflow_distribution_signed_headers($secret, $method, $path, $body, $event, $idempotencyKey);
+    $endpoint = rtrim((string)$channel['endpoint_url'], '/') . $path;
+    $response = geoflow_distribution_http_request($method, $endpoint, $headers, $body, 30);
+    $failedEndpoint = $endpoint;
+    $failedResponse = $response;
+
+    if ((int)$response['status'] === 404 && !str_ends_with(rtrim((string)$channel['endpoint_url'], '/'), '/index.php')) {
+        $fallbackBase = rtrim((string)$channel['endpoint_url'], '/') . '/index.php';
+        $fallbackEndpoint = $fallbackBase . $path;
+        $fallbackResponse = geoflow_distribution_http_request($method, $fallbackEndpoint, $headers, $body, 30);
+        $failedEndpoint = $fallbackEndpoint;
+        $failedResponse = $fallbackResponse;
+        if ((int)$fallbackResponse['status'] < 400) {
+            $db->prepare("UPDATE distribution_channels SET endpoint_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([$fallbackBase, (int)$channel['id']]);
+            $db->prepare("UPDATE distribution_channel_secrets SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([(int)$secret['id']]);
+            return $fallbackResponse['json'] ?? ['ok' => true];
+        }
+    }
+
+    $db->prepare("UPDATE distribution_channel_secrets SET last_used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?")->execute([(int)$secret['id']]);
+    if ((int)$failedResponse['status'] >= 400 || (int)$failedResponse['status'] === 0) {
+        throw new RuntimeException(geoflow_distribution_failure_message($operation, $failedResponse, $failedEndpoint));
+    }
+    return $response['json'] ?? ['ok' => true];
+}
+
+function geoflow_distribution_agent_health(PDO $db, array $channel): array {
+    $secret = geoflow_distribution_active_secret($db, (int)$channel['id']);
+    $path = '/geoflow-agent/v1/health';
+    $body = '{}';
+    $headers = ['Accept: application/json'];
+    if ($secret) {
+        $headers = geoflow_distribution_signed_headers($secret, 'GET', $path, $body, 'health.check', 'health-channel-' . (int)$channel['id'] . '-' . time());
+    }
+    $endpoint = rtrim((string)$channel['endpoint_url'], '/') . $path;
+    $response = geoflow_distribution_http_request('GET', $endpoint, $headers, null, 10);
+    if ((int)$response['status'] === 404 && !str_ends_with(rtrim((string)$channel['endpoint_url'], '/'), '/index.php')) {
+        $fallbackBase = rtrim((string)$channel['endpoint_url'], '/') . '/index.php';
+        $fallback = geoflow_distribution_http_request('GET', $fallbackBase . $path, $headers, null, 10);
+        if ((int)$fallback['status'] < 400) {
+            $result = $fallback['json'] ?? ['ok' => true];
+            $result['agent_base_url'] = $fallbackBase;
+            return $result;
+        }
+        $response = $fallback;
+        $endpoint = $fallbackBase . $path;
+    }
+    if ((int)$response['status'] >= 400 || (int)$response['status'] === 0) {
+        throw new RuntimeException(geoflow_distribution_failure_message('目标站健康检查', $response, $endpoint));
+    }
+    return $response['json'] ?? ['ok' => true];
+}
+
+function geoflow_distribution_article_payload(PDO $db, int $articleId): array {
+    $stmt = $db->prepare("
+        SELECT a.*, c.name AS category_name, c.slug AS category_slug, au.name AS author_name, t.name AS task_name
+        FROM articles a
+        LEFT JOIN categories c ON c.id = a.category_id
+        LEFT JOIN authors au ON au.id = a.author_id
+        LEFT JOIN tasks t ON t.id = a.task_id
+        WHERE a.id = ? AND a.deleted_at IS NULL
+        LIMIT 1
+    ");
+    $stmt->execute([$articleId]);
+    $article = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$article) {
+        throw new RuntimeException('文章不存在或已删除');
+    }
+    $title = (string)($article['title'] ?? '');
+    $content = (string)($article['content'] ?? '');
+    $body = $content;
+    if ($title !== '') {
+        $quoted = preg_quote($title, '/');
+        $body = preg_replace('/^\s*#\s*' . $quoted . '\s*(?:\n+|$)/u', '', $body, 1) ?? $body;
+    }
+    $contentHtml = function_exists('markdown_to_html')
+        ? markdown_to_html($body)
+        : '<p>' . htmlspecialchars($body, ENT_QUOTES | ENT_HTML5, 'UTF-8') . '</p>';
+
+    return [
+        'version' => '1.0',
+        'source' => 'geoflow',
+        'event' => 'article.publish',
+        'article' => [
+            'id' => (int)$article['id'],
+            'title' => $title,
+            'slug' => (string)($article['slug'] ?? ''),
+            'excerpt' => (string)($article['excerpt'] ?? ''),
+            'content' => $content,
+            'content_format' => 'markdown',
+            'content_html' => $contentHtml,
+            'hero_image_url' => '',
+            'keywords' => (string)($article['keywords'] ?? ''),
+            'meta_description' => (string)($article['meta_description'] ?? ''),
+            'status' => (string)($article['status'] ?? ''),
+            'published_at' => (string)($article['published_at'] ?? ''),
+            'updated_at' => (string)($article['updated_at'] ?? ''),
+            'category' => !empty($article['category_id']) ? [
+                'id' => (int)$article['category_id'],
+                'name' => (string)($article['category_name'] ?? ''),
+                'slug' => (string)($article['category_slug'] ?? ''),
+            ] : null,
+            'author' => !empty($article['author_id']) ? [
+                'id' => (int)$article['author_id'],
+                'name' => (string)($article['author_name'] ?? ''),
+            ] : null,
+            'task' => !empty($article['task_id']) ? [
+                'id' => (int)$article['task_id'],
+                'name' => (string)($article['task_name'] ?? ''),
+            ] : null,
+        ],
+        'assets' => ['images' => []],
+    ];
+}
+
+function geoflow_distribution_process_job(PDO $db, int $distributionId): array {
+    geoflow_distribution_ensure_schema($db);
+    $stmt = $db->prepare("SELECT ad.*, c.channel_type, c.endpoint_url, c.channel_config, c.site_settings, c.name AS channel_name, c.id AS channel_id
+        FROM article_distributions ad
+        LEFT JOIN distribution_channels c ON c.id = ad.distribution_channel_id
+        WHERE ad.id = ? LIMIT 1");
+    $stmt->execute([$distributionId]);
+    $job = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$job) {
+        return ['status' => 'skipped', 'error_message' => '分发任务不存在'];
+    }
+    if (!in_array((string)$job['status'], ['queued', 'failed'], true)) {
+        return ['status' => 'skipped', 'error_message' => '任务状态不是待处理'];
+    }
+    $channel = geoflow_distribution_get_channel($db, (int)$job['distribution_channel_id']);
+    if (!$channel || (string)($channel['status'] ?? '') !== 'active') {
+        return ['status' => 'skipped', 'error_message' => '渠道未启用'];
+    }
+
+    $db->prepare("UPDATE article_distributions SET status = 'sending', attempt_count = attempt_count + 1, last_attempt_at = CURRENT_TIMESTAMP, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        ->execute([$distributionId]);
+
+    try {
+        $action = (string)($job['action'] ?? 'publish');
+        $payload = geoflow_distribution_article_payload($db, (int)$job['article_id']);
+        if ($action === 'update') {
+            $payload['event'] = 'article.update';
+        }
+
+        if ((string)($channel['channel_type'] ?? 'geoflow_agent') === 'wordpress_rest') {
+            $result = geoflow_distribution_wordpress_publish_or_update($db, $channel, $job, $payload, $action);
+        } else {
+            $path = '/geoflow-agent/v1/articles';
+            $event = 'article.publish';
+            if ($action === 'update') {
+                $path = '/geoflow-agent/v1/articles/' . rawurlencode((string)($payload['article']['slug'] ?? '')) . '/update';
+                $event = 'article.update';
+            } elseif ($action === 'delete') {
+                $path = '/geoflow-agent/v1/articles/' . rawurlencode((string)($payload['article']['slug'] ?? '')) . '/delete';
+                $event = 'article.delete';
+                $payload = [
+                    'version' => '1.0',
+                    'source' => 'geoflow',
+                    'event' => 'article.delete',
+                    'article' => [
+                        'id' => (int)$job['article_id'],
+                        'slug' => (string)($payload['article']['slug'] ?? ''),
+                        'title' => (string)($payload['article']['title'] ?? ''),
+                    ],
+                ];
+            }
+            if (str_contains($path, '//update') || str_contains($path, '//delete')) {
+                throw new RuntimeException('分发文章缺少 slug，无法同步目标站。');
+            }
+            $result = geoflow_distribution_send_agent_json($db, $channel, $path, $event, (string)$job['idempotency_key'], $payload, '目标站分发');
+        }
+
+        $remoteId = is_scalar($result['remote_id'] ?? null) ? (string)$result['remote_id'] : (string)($job['remote_id'] ?? '');
+        $remoteUrl = $action === 'delete' ? null : (is_scalar($result['remote_url'] ?? null) ? (string)$result['remote_url'] : (string)($job['remote_url'] ?? ''));
+        $remoteMeta = is_array($result['remote_meta'] ?? null) ? geoflow_distribution_json($result['remote_meta']) : ($job['remote_meta'] ?? null);
+        $db->prepare("UPDATE article_distributions SET status = 'synced', remote_id = ?, remote_url = ?, remote_meta = ?, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            ->execute([$remoteId, $remoteUrl, $remoteMeta, $distributionId]);
+        geoflow_distribution_log($db, 'info', '文章分发成功', (int)$channel['id'], $distributionId, (int)$job['article_id'], ['event' => 'distribution.synced', 'remote_result' => $result]);
+        return ['status' => 'success', 'remote_url' => $remoteUrl, 'remote_id' => $remoteId];
+    } catch (Throwable $e) {
+        $attemptCount = (int)$db->query("SELECT attempt_count FROM article_distributions WHERE id = " . (int)$distributionId)->fetchColumn();
+        $shouldRetry = geoflow_distribution_should_retry($e, $attemptCount, 3);
+        $nextRetrySql = $shouldRetry ? db_now_plus_seconds_sql(min(3600, 60 * (2 ** max(0, $attemptCount - 1)))) : 'NULL';
+        $status = $shouldRetry ? 'queued' : 'failed';
+        $db->prepare("UPDATE article_distributions SET status = ?, last_error_message = ?, last_attempt_at = CURRENT_TIMESTAMP, next_retry_at = {$nextRetrySql}, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            ->execute([$status, mb_substr($e->getMessage(), 0, 1000), $distributionId]);
+        geoflow_distribution_log($db, $shouldRetry ? 'warning' : 'error', '文章分发失败：' . $e->getMessage(), (int)$job['distribution_channel_id'], $distributionId, (int)$job['article_id'], ['event' => $shouldRetry ? 'distribution.retry_scheduled' : 'distribution.failed']);
+        return ['status' => 'failed', 'error_message' => $e->getMessage(), 'retry_scheduled' => $shouldRetry];
+    }
+}
+
+function geoflow_distribution_execute_queued_jobs(PDO $db, int $limit = 5): array {
+    geoflow_distribution_ensure_schema($db);
+    $limit = max(1, min(50, $limit));
+    $stmt = $db->prepare("SELECT id FROM article_distributions WHERE status = 'queued' AND (next_retry_at IS NULL OR next_retry_at <= CURRENT_TIMESTAMP) ORDER BY id ASC LIMIT ?");
+    $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+    $stmt->execute();
+    $summary = ['success' => 0, 'failed' => 0, 'skipped' => 0, 'total' => 0];
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $jobId) {
+        $summary['total']++;
+        $result = geoflow_distribution_process_job($db, (int)$jobId);
+        if (($result['status'] ?? '') === 'success') {
+            $summary['success']++;
+        } elseif (($result['status'] ?? '') === 'skipped') {
+            $summary['skipped']++;
+        } else {
+            $summary['failed']++;
+        }
+    }
+    return $summary;
+}
+
+function geoflow_distribution_should_retry(Throwable $exception, int $attemptCount, int $maxAttempts): bool {
+    if ($attemptCount >= $maxAttempts) {
+        return false;
+    }
+    $message = mb_strtolower($exception->getMessage(), 'UTF-8');
+    if (str_contains($message, '401') || str_contains($message, '403') || str_contains($message, 'signature') || str_contains($message, '签名') || str_contains($message, '422')) {
+        return false;
+    }
+    return str_contains($message, 'timeout')
+        || str_contains($message, 'connection')
+        || str_contains($message, '429')
+        || str_contains($message, '500')
+        || str_contains($message, '502')
+        || str_contains($message, '503')
+        || str_contains($message, '504');
+}
+
+function geoflow_distribution_sync_site_settings(PDO $db, int $channelId): array {
+    $channel = geoflow_distribution_get_channel($db, $channelId);
+    if (!$channel) {
+        throw new InvalidArgumentException('渠道不存在');
+    }
+    $settings = geoflow_distribution_decode($channel['site_settings'] ?? null) + [
+        'active_theme' => (string)($channel['template_key'] ?? ''),
+        'front_mode' => (string)($channel['front_mode'] ?? 'static'),
+    ];
+    if ((string)($channel['channel_type'] ?? 'geoflow_agent') === 'wordpress_rest') {
+        $payload = [
+            'title' => (string)($settings['site_name'] ?? $channel['name']),
+            'description' => (string)($settings['site_description'] ?? ''),
+            'posts_per_page' => (int)($settings['per_page'] ?? 12),
+        ];
+        $result = geoflow_distribution_wordpress_request($db, $channel, 'POST', geoflow_distribution_wordpress_base_url($channel) . '/wp/v2/settings', $payload);
+    } else {
+        $result = geoflow_distribution_send_agent_json($db, $channel, '/geoflow-agent/v1/site-settings', 'site.settings.update', 'site-settings-channel-' . $channelId . '-' . time(), ['settings' => $settings], '目标站点设置同步');
+    }
+    geoflow_distribution_log($db, 'info', '目标站点设置已同步', $channelId, null, null, ['event' => 'site.settings.synced', 'remote_result' => $result]);
+    return $result;
+}
+
+function geoflow_distribution_wordpress_base_url(array $channel): string {
+    $base = rtrim((string)$channel['endpoint_url'], '/');
+    return str_ends_with($base, '/wp-json') ? $base : $base . '/wp-json';
+}
+
+function geoflow_distribution_wordpress_request(PDO $db, array $channel, string $method, string $url, ?array $payload = null, int $timeout = 30): array {
+    $config = geoflow_distribution_decode($channel['channel_config'] ?? null);
+    $secret = geoflow_distribution_active_secret($db, (int)$channel['id']);
+    $username = trim((string)($config['wordpress_username'] ?? ''));
+    $password = geoflow_distribution_plain_secret($secret);
+    if ($username === '' || $password === '') {
+        throw new RuntimeException('WordPress REST 渠道缺少用户名或 Application Password');
+    }
+    $body = $payload === null ? null : json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $headers = [
+        'Accept: application/json',
+        'Authorization: Basic ' . base64_encode($username . ':' . $password),
+    ];
+    if ($body !== null) {
+        $headers[] = 'Content-Type: application/json';
+    }
+    $response = geoflow_distribution_http_request($method, $url, $headers, $body, $timeout);
+    if ((int)$response['status'] >= 400 || (int)$response['status'] === 0) {
+        throw new RuntimeException(geoflow_distribution_failure_message('WordPress REST 请求', $response, $url));
+    }
+    return $response['json'] ?? ['ok' => true];
+}
+
+function geoflow_distribution_wordpress_publish_or_update(PDO $db, array $channel, array $job, array $payload, string $action): array {
+    if ($action === 'delete') {
+        $postId = geoflow_distribution_wordpress_post_id($job);
+        if ($postId <= 0) {
+            return ['deleted' => true, 'remote_id' => null, 'remote_url' => null, 'message' => 'missing_remote_post_id'];
+        }
+        geoflow_distribution_wordpress_request($db, $channel, 'DELETE', geoflow_distribution_wordpress_base_url($channel) . '/wp/v2/posts/' . $postId, ['force' => false]);
+        return ['deleted' => true, 'remote_id' => (string)$postId, 'remote_url' => null];
+    }
+    $article = is_array($payload['article'] ?? null) ? $payload['article'] : [];
+    $config = geoflow_distribution_channel_config(geoflow_distribution_decode($channel['channel_config'] ?? null));
+    $postPayload = [
+        'title' => (string)($article['title'] ?? ''),
+        'slug' => (string)($article['slug'] ?? ''),
+        'status' => (string)$config['wordpress_post_status'],
+        'content' => (string)($article['content_html'] ?? ''),
+        'excerpt' => (string)($article['excerpt'] ?? ''),
+    ];
+    $postId = $action === 'update' ? geoflow_distribution_wordpress_post_id($job) : 0;
+    $url = geoflow_distribution_wordpress_base_url($channel) . '/wp/v2/posts' . ($postId > 0 ? '/' . $postId : '');
+    $result = geoflow_distribution_wordpress_request($db, $channel, 'POST', $url, $postPayload);
+    $remoteId = (int)($result['id'] ?? 0);
+    return [
+        'remote_id' => $remoteId > 0 ? (string)$remoteId : '',
+        'remote_url' => (string)($result['link'] ?? ''),
+        'remote_meta' => ['wordpress_post_id' => $remoteId],
+    ];
+}
+
+function geoflow_distribution_wordpress_post_id(array $job): int {
+    if (isset($job['remote_id']) && ctype_digit((string)$job['remote_id'])) {
+        return (int)$job['remote_id'];
+    }
+    $meta = geoflow_distribution_decode($job['remote_meta'] ?? null);
+    return is_numeric($meta['wordpress_post_id'] ?? null) ? (int)$meta['wordpress_post_id'] : 0;
+}
+
+function geoflow_distribution_update_remote_article(PDO $db, int $distributionId, array $articleInput): void {
+    $stmt = $db->prepare("SELECT article_id FROM article_distributions WHERE id = ?");
+    $stmt->execute([$distributionId]);
+    $articleId = (int)$stmt->fetchColumn();
+    if ($articleId <= 0) {
+        throw new InvalidArgumentException('分发任务不存在');
+    }
+    $db->prepare("UPDATE articles SET title = ?, excerpt = ?, content = ?, keywords = ?, meta_description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        ->execute([
+            (string)($articleInput['title'] ?? ''),
+            (string)($articleInput['excerpt'] ?? ''),
+            (string)($articleInput['content'] ?? ''),
+            (string)($articleInput['keywords'] ?? ''),
+            (string)($articleInput['meta_description'] ?? ''),
+            $articleId,
+        ]);
+    $db->prepare("UPDATE article_distributions SET action = 'update', status = 'queued', idempotency_key = ?, payload_hash = NULL, next_retry_at = CURRENT_TIMESTAMP, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        ->execute(['article-' . $articleId . '-distribution-' . $distributionId . '-update-v1', $distributionId]);
+    $result = geoflow_distribution_process_job($db, $distributionId);
+    if (($result['status'] ?? '') !== 'success') {
+        throw new RuntimeException((string)($result['error_message'] ?? '远程文章更新失败'));
+    }
+}
+
+function geoflow_distribution_delete_remote_article(PDO $db, int $distributionId): void {
+    $stmt = $db->prepare("SELECT article_id FROM article_distributions WHERE id = ?");
+    $stmt->execute([$distributionId]);
+    $articleId = (int)$stmt->fetchColumn();
+    if ($articleId <= 0) {
+        throw new InvalidArgumentException('分发任务不存在');
+    }
+    $db->prepare("UPDATE article_distributions SET action = 'delete', status = 'queued', idempotency_key = ?, next_retry_at = CURRENT_TIMESTAMP, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        ->execute(['article-' . $articleId . '-distribution-' . $distributionId . '-delete-v1', $distributionId]);
+    $result = geoflow_distribution_process_job($db, $distributionId);
+    if (($result['status'] ?? '') !== 'success') {
+        throw new RuntimeException((string)($result['error_message'] ?? '远程文章删除失败'));
+    }
 }

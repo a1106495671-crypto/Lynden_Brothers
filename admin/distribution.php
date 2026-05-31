@@ -10,6 +10,7 @@ require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
 require_once __DIR__ . '/../includes/distribution_service.php';
+require_once __DIR__ . '/../includes/geoflow_distribution_service.php';
 
 require_admin_login();
 geoflow_distribution_ensure_schema($db);
@@ -53,10 +54,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = '密钥已轮换，请立即保存新密钥';
             } elseif ($action === 'health_check') {
                 $result = geoflow_distribution_health($db, (int)$_POST['channel_id']);
-                $message = '健康检查通过：' . gd_h($result['url']);
+                $message = '健康检查通过';
+            } elseif ($action === 'sync_settings') {
+                geoflow_distribution_sync_site_settings($db, (int)$_POST['channel_id']);
+                $message = '目标站点设置已同步';
             } elseif ($action === 'retry_job') {
                 geoflow_distribution_retry($db, (int)$_POST['distribution_id']);
                 $message = '分发任务已重新入队';
+            } elseif ($action === 'run_job') {
+                $result = geoflow_distribution_process_job($db, (int)$_POST['distribution_id']);
+                if (($result['status'] ?? '') === 'success') {
+                    $message = '分发任务执行成功' . (trim((string)($result['remote_url'] ?? '')) !== '' ? '：' . gd_h((string)$result['remote_url']) : '');
+                } elseif (($result['status'] ?? '') === 'skipped') {
+                    $message = (string)($result['error_message'] ?? '任务已跳过');
+                } else {
+                    $error = (string)($result['error_message'] ?? '分发任务执行失败');
+                }
+            } elseif ($action === 'run_queued') {
+                $summary = geoflow_distribution_execute_queued_jobs($db, 10);
+                $message = "已执行 {$summary['total']} 条分发任务，成功 {$summary['success']}，失败 {$summary['failed']}，跳过 {$summary['skipped']}";
             } elseif ($action === 'enqueue_article') {
                 $created = geoflow_distribution_enqueue_article($db, (int)$_POST['article_id'], array_map('intval', $_POST['channel_ids'] ?? []));
                 $message = "已加入分发队列 {$created} 条";
@@ -96,6 +112,12 @@ $page_header = '
         <a href="distribution.php?view=jobs" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
             <i data-lucide="list-checks" class="mr-2 h-4 w-4"></i>查看队列
         </a>
+        <form method="POST" class="inline-flex">
+            ' . gd_csrf_input() . '
+            <button name="action" value="run_queued" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                <i data-lucide="play" class="mr-2 h-4 w-4"></i>执行队列
+            </button>
+        </form>
         <a href="distribution.php?view=create" class="inline-flex items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
             <i data-lucide="plus" class="mr-2 h-4 w-4"></i>新建渠道
         </a>
@@ -198,7 +220,7 @@ require_once __DIR__ . '/includes/header.php';
     <?php else: ?>
     <div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">文章</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">渠道</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">状态</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">远程链接</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">操作</th></tr></thead><tbody class="divide-y divide-gray-200 bg-white">
     <?php foreach ($jobs as $job): ?>
-        <tr><td class="px-6 py-4 text-sm"><div class="font-medium text-gray-900"><?= gd_h($job['article_title'] ?? '') ?></div><div class="text-xs text-gray-500">#<?= (int)$job['article_id'] ?></div></td><td class="px-6 py-4 text-sm text-gray-600"><?= gd_h($job['channel_name'] ?? '') ?></td><td class="px-6 py-4 text-sm"><span class="rounded-full px-2 py-1 text-xs font-medium <?= $job['status'] === 'failed' ? 'bg-red-100 text-red-800' : ($job['status'] === 'synced' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800') ?>"><?= geoflow_distribution_status_label((string)$job['status']) ?></span></td><td class="px-6 py-4 text-sm"><?php if ($job['remote_url']): ?><a href="<?= gd_h($job['remote_url']) ?>" target="_blank" class="text-blue-600 hover:underline">打开</a><?php else: ?><span class="text-gray-400">-</span><?php endif; ?></td><td class="px-6 py-4 text-sm"><?php if ($job['status'] === 'failed'): ?><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="retry_job"><input type="hidden" name="distribution_id" value="<?= (int)$job['id'] ?>"><button class="text-blue-600 hover:text-blue-800">重试</button></form><?php endif; ?></td></tr>
+        <tr><td class="px-6 py-4 text-sm"><div class="font-medium text-gray-900"><?= gd_h($job['article_title'] ?? '') ?></div><div class="text-xs text-gray-500">#<?= (int)$job['article_id'] ?></div></td><td class="px-6 py-4 text-sm text-gray-600"><?= gd_h($job['channel_name'] ?? '') ?></td><td class="px-6 py-4 text-sm"><span class="rounded-full px-2 py-1 text-xs font-medium <?= $job['status'] === 'failed' ? 'bg-red-100 text-red-800' : ($job['status'] === 'synced' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800') ?>"><?= geoflow_distribution_status_label((string)$job['status']) ?></span><?php if (!empty($job['last_error_message'])): ?><div class="mt-1 max-w-xs text-xs text-red-600"><?= gd_h($job['last_error_message']) ?></div><?php endif; ?></td><td class="px-6 py-4 text-sm"><?php if ($job['remote_url']): ?><a href="<?= gd_h($job['remote_url']) ?>" target="_blank" class="text-blue-600 hover:underline">打开</a><?php else: ?><span class="text-gray-400">-</span><?php endif; ?></td><td class="px-6 py-4 text-sm"><div class="flex flex-wrap gap-3"><?php if (in_array($job['status'], ['queued','failed'], true)): ?><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="run_job"><input type="hidden" name="distribution_id" value="<?= (int)$job['id'] ?>"><button class="text-green-600 hover:text-green-800">执行</button></form><?php endif; ?><?php if ($job['status'] === 'failed'): ?><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="retry_job"><input type="hidden" name="distribution_id" value="<?= (int)$job['id'] ?>"><button class="text-blue-600 hover:text-blue-800">重试</button></form><?php endif; ?></div></td></tr>
     <?php endforeach; ?>
     </tbody></table></div>
     <?php endif; ?>
@@ -217,7 +239,7 @@ require_once __DIR__ . '/includes/header.php';
     <?php else: ?>
     <div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">名称</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">域名</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">状态</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">队列</th><th class="px-6 py-3 text-left text-xs font-medium uppercase text-gray-500">操作</th></tr></thead><tbody class="divide-y divide-gray-200 bg-white">
     <?php foreach ($channels as $channel): ?>
-    <tr><td class="px-6 py-4 text-sm"><div class="font-medium text-gray-900"><?= gd_h($channel['name']) ?></div><div class="mt-1 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"><?= geoflow_distribution_channel_type_label((string)$channel['channel_type']) ?></div></td><td class="px-6 py-4 text-sm text-gray-600"><?= gd_h($channel['domain']) ?></td><td class="px-6 py-4 text-sm"><span class="rounded-full px-2 py-1 text-xs font-medium <?= $channel['status'] === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700' ?>"><?= geoflow_distribution_status_label((string)$channel['status']) ?></span></td><td class="px-6 py-4 text-sm text-gray-600">待处理 <?= (int)$channel['pending_count'] ?> / 失败 <?= (int)$channel['failed_count'] ?></td><td class="px-6 py-4 text-sm"><div class="flex flex-wrap items-center gap-3"><a href="distribution.php?edit=<?= (int)$channel['id'] ?>" class="text-gray-600 hover:text-gray-800">编辑</a><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="channel_id" value="<?= (int)$channel['id'] ?>"><button name="action" value="<?= $channel['status'] === 'active' ? 'pause_channel' : 'activate_channel' ?>" class="text-blue-600 hover:text-blue-800"><?= $channel['status'] === 'active' ? '暂停' : '启用' ?></button></form><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="health_check"><input type="hidden" name="channel_id" value="<?= (int)$channel['id'] ?>"><button class="text-green-600 hover:text-green-800">健康检查</button></form><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="rotate_secret"><input type="hidden" name="channel_id" value="<?= (int)$channel['id'] ?>"><button class="text-amber-600 hover:text-amber-800">轮换密钥</button></form></div></td></tr>
+    <tr><td class="px-6 py-4 text-sm"><div class="font-medium text-gray-900"><?= gd_h($channel['name']) ?></div><div class="mt-1 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"><?= geoflow_distribution_channel_type_label((string)$channel['channel_type']) ?></div></td><td class="px-6 py-4 text-sm text-gray-600"><?= gd_h($channel['domain']) ?></td><td class="px-6 py-4 text-sm"><span class="rounded-full px-2 py-1 text-xs font-medium <?= $channel['status'] === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700' ?>"><?= geoflow_distribution_status_label((string)$channel['status']) ?></span><?php if (!empty($channel['last_health_status'])): ?><div class="mt-1 text-xs text-gray-500">健康：<?= gd_h($channel['last_health_status']) ?></div><?php endif; ?></td><td class="px-6 py-4 text-sm text-gray-600">待处理 <?= (int)$channel['pending_count'] ?> / 失败 <?= (int)$channel['failed_count'] ?></td><td class="px-6 py-4 text-sm"><div class="flex flex-wrap items-center gap-3"><a href="distribution.php?edit=<?= (int)$channel['id'] ?>" class="text-gray-600 hover:text-gray-800">编辑</a><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="channel_id" value="<?= (int)$channel['id'] ?>"><button name="action" value="<?= $channel['status'] === 'active' ? 'pause_channel' : 'activate_channel' ?>" class="text-blue-600 hover:text-blue-800"><?= $channel['status'] === 'active' ? '暂停' : '启用' ?></button></form><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="health_check"><input type="hidden" name="channel_id" value="<?= (int)$channel['id'] ?>"><button class="text-green-600 hover:text-green-800">健康检查</button></form><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="sync_settings"><input type="hidden" name="channel_id" value="<?= (int)$channel['id'] ?>"><button class="text-indigo-600 hover:text-indigo-800">同步设置</button></form><form method="POST"><?= gd_csrf_input() ?><input type="hidden" name="action" value="rotate_secret"><input type="hidden" name="channel_id" value="<?= (int)$channel['id'] ?>"><button class="text-amber-600 hover:text-amber-800">轮换密钥</button></form></div></td></tr>
     <?php endforeach; ?>
     </tbody></table></div>
     <?php endif; ?>

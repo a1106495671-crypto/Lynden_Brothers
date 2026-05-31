@@ -18,5 +18,8 @@ if ($jobId <= 0) {
     exit(1);
 }
 
-$result = distribution_execute_publish_job($db, $jobId);
+$queue = (string)($argv[2] ?? 'media');
+$result = $queue === 'geoflow' && function_exists('geoflow_distribution_process_job')
+    ? geoflow_distribution_process_job($db, $jobId)
+    : distribution_execute_publish_job($db, $jobId);
 echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
