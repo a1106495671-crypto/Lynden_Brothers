@@ -874,8 +874,16 @@ require_once __DIR__ . '/includes/header.php';
                     if (typeof lucide !== 'undefined') lucide.createIcons();
                 }
 
-                document.getElementById('sop-presale-only').addEventListener('change', () => renderAll());
-                renderAll();
+                function initSopCenter() {
+                    var el = document.getElementById('sop-presale-only');
+                    if (!el) return;
+                    el.addEventListener('change', () => renderAll());
+                    renderAll();
+                }
+                initSopCenter();
+                document.addEventListener('htmx:afterSettle', function() {
+                    if (document.getElementById('sop-presale-only')) initSopCenter();
+                });
             </script>
 <?php
 require_once __DIR__ . '/includes/footer.php';
