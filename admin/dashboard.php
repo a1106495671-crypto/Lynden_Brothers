@@ -252,6 +252,16 @@ try {
     $geo_tool_stats['total_monitor_alerts'] = (int) $db->query("SELECT COUNT(*) FROM monitor_alerts WHERE resolved_at IS NULL")->fetchColumn();
 } catch (Exception $e) {}
 
+$automationMediaAccounts = [];
+try {
+    $automationMediaAccounts = $db->query("
+        SELECT id, platform, account_name, publish_mode, status
+        FROM media_accounts
+        WHERE status = 'active'
+        ORDER BY platform, id
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $_mediaAccountError) {}
+
 $quick_start_steps = [
     [
         'no' => '1',
@@ -276,9 +286,10 @@ $quick_start_steps = [
         'title' => '一键启动自动交付',
         'desc' => '从入驻自动化直接串起资料整理、策略生成、内容任务、分发与监测，不用每步手动切页面。',
         'icon' => 'play',
-        'link' => 'automation-workflow.php',
+        'link' => 'dashboard.php#automation-flow',
         'button' => '一键运行',
         'tone' => 'slate',
+        'action' => 'start_automation',
     ],
 ];
 
@@ -314,11 +325,12 @@ $automation_nodes = [
         'title' => '一键执行',
         'desc' => '品牌入驻自动化统一拉起任务、内容、分发和状态回写',
         'icon' => 'workflow',
-        'link' => 'automation-workflow.php',
+        'link' => 'dashboard.php#automation-flow',
         'status' => 'running',
         'meta' => $doing_customers . ' 个交付中',
         'tone' => 'blue',
         'primary' => true,
+        'action' => 'start_automation',
     ],
     [
         'title' => '内容生产',
@@ -394,10 +406,10 @@ require_once __DIR__ . '/includes/header.php';
                         <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
                         刷新
                     </button>
-                    <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>" class="inline-flex h-10 items-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                    <button type="button" onclick="openStartModal()" class="inline-flex h-10 items-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                         <i data-lucide="play" class="mr-2 h-4 w-4"></i>
                         一键运行
-                    </a>
+                    </button>
                 </div>
             </div>
 
@@ -429,7 +441,7 @@ require_once __DIR__ . '/includes/header.php';
                                         <h3 class="text-base font-semibold text-gray-900"><?php echo htmlspecialchars($step['title']); ?></h3>
                                     </div>
                                     <p class="mt-2 text-sm leading-6 text-gray-500"><?php echo htmlspecialchars($step['desc']); ?></p>
-                                    <a href="<?php echo htmlspecialchars(admin_url($step['link'])); ?>" class="mt-4 inline-flex h-9 items-center rounded-lg <?php echo $step['tone'] === 'slate' ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'; ?> px-3 text-sm font-semibold">
+                                    <a href="<?php echo htmlspecialchars(admin_url($step['link'])); ?>" <?php echo ($step['action'] ?? '') === 'start_automation' ? 'onclick="openStartModal(); return false;"' : ''; ?> class="mt-4 inline-flex h-9 items-center rounded-lg <?php echo $step['tone'] === 'slate' ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'; ?> px-3 text-sm font-semibold">
                                         <?php echo htmlspecialchars($step['button']); ?>
                                         <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4"></i>
                                     </a>
@@ -440,7 +452,7 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </section>
 
-            <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+            <section id="automation-flow" class="mb-8 scroll-mt-24 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
                 <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <h2 class="text-xl font-semibold text-gray-900">GEO+AI 自动化交付流</h2>
@@ -465,10 +477,10 @@ require_once __DIR__ . '/includes/header.php';
                             <h3 class="text-base font-semibold text-gray-900">自动化流水线</h3>
                             <p class="mt-1 text-sm leading-6 text-gray-500">从左到右是标准交付路径；“一键执行”是我们的主入口。</p>
                         </div>
-                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>" class="inline-flex h-9 w-fit items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                        <button type="button" onclick="openStartModal()" class="inline-flex h-9 w-fit items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">
                             <i data-lucide="settings-2" class="mr-2 h-4 w-4"></i>
                             自动化设置
-                        </a>
+                        </button>
                     </div>
                     <div class="relative grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <div class="pointer-events-none absolute left-[8%] right-[8%] top-[42px] hidden h-0.5 bg-gradient-to-r from-blue-200 via-emerald-200 to-orange-200 xl:block"></div>
@@ -478,7 +490,7 @@ require_once __DIR__ . '/includes/header.php';
                             $status = $status_classes[$node['status']] ?? $status_classes['ready'];
                             $is_primary = !empty($node['primary']);
                             ?>
-                            <a href="<?php echo htmlspecialchars(admin_url($node['link'])); ?>" class="relative z-10 flex min-h-[178px] flex-col rounded-lg border <?php echo $is_primary ? 'border-blue-300 bg-blue-50/60 ring-1 ring-blue-200' : 'border-gray-200 bg-white'; ?> p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                            <a href="<?php echo htmlspecialchars(admin_url($node['link'])); ?>" <?php echo ($node['action'] ?? '') === 'start_automation' ? 'onclick="openStartModal(); return false;"' : ''; ?> class="relative z-10 flex min-h-[178px] flex-col rounded-lg border <?php echo $is_primary ? 'border-blue-300 bg-blue-50/60 ring-1 ring-blue-200' : 'border-gray-200 bg-white'; ?> p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border <?php echo $tone; ?>">
                                         <i data-lucide="<?php echo htmlspecialchars($node['icon']); ?>" class="h-5 w-5"></i>
@@ -600,6 +612,177 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </section>
             </div>
+
+<!-- 首页内置自动化启动弹窗 -->
+<div id="start-modal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" onclick="closeStartModal()"></div>
+    <div class="absolute left-1/2 top-1/2 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 px-4">
+        <div class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-2xl">
+            <div class="bg-blue-600 px-6 py-5">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/15">
+                        <i data-lucide="rocket" class="h-5 w-5 text-white"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-bold text-white">启动品牌自动化交付</h2>
+                        <p class="text-sm text-blue-100">在首页直接拉起资料整理、诊断、内容、分发和监测</p>
+                    </div>
+                </div>
+            </div>
+            <div class="max-h-[64vh] space-y-4 overflow-y-auto p-6">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-gray-700">品牌名称 <span class="text-red-500">*</span></label>
+                    <input type="text" id="input-brand" placeholder="如：文韵爱阅读" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                </div>
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-gray-700">行业 <span class="text-red-500">*</span></label>
+                        <input type="text" id="input-industry" placeholder="如：教培 / 知识付费" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-gray-700">官网</label>
+                        <input type="text" id="input-website" placeholder="如：example.com" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                    </div>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-gray-700">核心服务</label>
+                    <input type="text" id="input-services" placeholder="用逗号分隔，如：AI阅读, 知识付费, 在线课程" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-gray-700">竞品</label>
+                    <input type="text" id="input-competitors" placeholder="用逗号分隔，如：竞品A, 竞品B" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-gray-700">品牌定位</label>
+                    <textarea id="input-positioning" rows="2" placeholder="一句话描述品牌定位" class="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"></textarea>
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-gray-700">生成文章数量</label>
+                    <select id="input-article-count" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                        <option value="5">5 篇（快速预览）</option>
+                        <option value="10" selected>10 篇（标准）</option>
+                        <option value="20">20 篇（完整）</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700">发布平台 / 账号</label>
+                    <?php if (empty($automationMediaAccounts)): ?>
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">暂无启用媒体账号，后续不会创建媒体分发任务。</div>
+                    <?php else: ?>
+                        <div class="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <?php foreach ($automationMediaAccounts as $account): ?>
+                                <?php $mode = (string) ($account['publish_mode'] ?? 'manual'); ?>
+                                <label class="flex items-start gap-3 rounded-md bg-white px-3 py-2 text-sm">
+                                    <input type="checkbox" class="automation-media-account mt-1 rounded border-gray-300 text-blue-600 focus:ring-blue-500" value="<?php echo (int) $account['id']; ?>" <?php echo $mode === 'browser' ? 'checked' : ''; ?>>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block font-medium text-gray-800"><?php echo htmlspecialchars($account['account_name']); ?></span>
+                                        <span class="text-xs text-gray-500"><?php echo htmlspecialchars($account['platform']); ?> · <?php echo $mode === 'browser' ? '浏览器自动发布' : '人工辅助待办'; ?></span>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+                <div id="automation-start-result" class="hidden rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700"></div>
+            </div>
+            <div class="flex items-center justify-between border-t border-gray-200 bg-gray-50 px-6 py-4">
+                <button type="button" onclick="closeStartModal()" class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100">取消</button>
+                <button type="button" onclick="startAutomationFromDashboard()" id="btn-confirm-start" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                    <i data-lucide="play" class="h-4 w-4"></i>
+                    开始执行
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function openStartModal() {
+    const modal = document.getElementById('start-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    setTimeout(() => document.getElementById('input-brand')?.focus(), 50);
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function closeStartModal() {
+    document.getElementById('start-modal')?.classList.add('hidden');
+}
+
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') closeStartModal();
+});
+
+function dashboardToast(message, type) {
+    if (window.AdminUtils && typeof window.AdminUtils.showToast === 'function') {
+        window.AdminUtils.showToast(message, type === 'warn' ? 'warning' : type);
+    } else {
+        alert(message);
+    }
+}
+
+async function startAutomationFromDashboard() {
+    const brand = document.getElementById('input-brand').value.trim();
+    const industry = document.getElementById('input-industry').value.trim();
+    const result = document.getElementById('automation-start-result');
+
+    if (!brand || !industry) {
+        dashboardToast('请填写品牌名称和行业', 'error');
+        return;
+    }
+
+    const button = document.getElementById('btn-confirm-start');
+    button.disabled = true;
+    button.innerHTML = '<i data-lucide="loader-2" class="h-4 w-4 animate-spin"></i> 正在启动...';
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    const payload = {
+        brand_name: brand,
+        industry: industry,
+        website: document.getElementById('input-website').value.trim(),
+        services: document.getElementById('input-services').value.trim(),
+        competitors: document.getElementById('input-competitors').value.trim(),
+        positioning: document.getElementById('input-positioning').value.trim(),
+        article_count: parseInt(document.getElementById('input-article-count').value, 10) || 10,
+        media_account_ids: Array.from(document.querySelectorAll('.automation-media-account:checked')).map(el => parseInt(el.value, 10)).filter(Boolean),
+    };
+
+    try {
+        const resp = await fetch(window.adminUrl('api/automation-start.php'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+
+        if (!data.success) {
+            dashboardToast(data.error || '启动失败', 'error');
+            return;
+        }
+
+        result.classList.remove('hidden');
+        result.textContent = '自动化已启动：' + data.workflow_id + '。系统会在后台继续执行，首页刷新后可看到流程状态变化。';
+        dashboardToast('自动化流程已启动', 'success');
+        setTimeout(() => {
+            closeStartModal();
+            window.location.hash = 'automation-flow';
+            window.location.reload();
+        }, 900);
+    } catch (err) {
+        dashboardToast('请求失败：' + err.message, 'error');
+    } finally {
+        button.disabled = false;
+        button.innerHTML = '<i data-lucide="play" class="h-4 w-4"></i> 开始执行';
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+}
+
+if (window.location.hash === '#automation-flow') {
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('automation-flow')?.scrollIntoView({ block: 'start' });
+    });
+}
+</script>
 
 <?php
 // 包含统一底部

@@ -92,19 +92,10 @@ $primary_nav_items = [
         ],
     ],
     ['type' => 'link', 'page' => 'sop-center.php', 'name' => '策略', 'icon' => 'book-open-check'],
-    [
-        'type' => 'dropdown',
-        'name' => '交付',
-        'icon' => 'send',
-        'children' => [
-            ['page' => 'automation-workflow.php','name' => '品牌入驻自动化','desc' => '12步全链路自动化主入口'],
-            ['page' => 'tasks.php',             'name' => '任务管理',   'desc' => '任务派发、内容生成与进度管理'],
-            ['page' => 'materials.php',         'name' => '素材管理',   'desc' => '关键词、标题、图片和知识库'],
-            ['page' => 'articles.php',          'name' => '文章管理',   'desc' => '内容生产与审核'],
-            ['page' => 'distribution.php',      'name' => '分发管理',   'desc' => '目标站 Agent、文章分发队列与同步日志'],
-        ],
-    ],
+    ['type' => 'link', 'page' => 'tasks.php', 'name' => '任务管理', 'icon' => 'zap'],
     ['type' => 'link', 'page' => 'distribution.php', 'name' => '分发管理', 'icon' => 'radio-tower'],
+    ['type' => 'link', 'page' => 'articles.php', 'name' => '文章管理', 'icon' => 'file-text'],
+    ['type' => 'link', 'page' => 'materials.php', 'name' => '素材管理', 'icon' => 'folder'],
     [
         'type' => 'dropdown',
         'name' => '监测',
@@ -295,12 +286,6 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
                         <button class="rounded-md p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors" title="通知">
                             <i data-lucide="bell" class="w-5 h-5"></i>
                         </button>
-                        <!-- 自动化快捷入口 -->
-                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
-                           class="relative rounded-md p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 transition-colors"
-                           title="品牌入驻自动化">
-                            <i data-lucide="workflow" class="w-5 h-5"></i>
-                        </a>
                     </div>
 
                     <!-- 分隔线 -->
@@ -360,13 +345,6 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
         <!-- 移动端菜单 -->
         <div id="mobile-menu" class="hidden md:hidden">
             <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3 bg-gray-50 border-t">
-                <!-- 自动化入口 (移动端) -->
-                <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php')); ?>"
-                   class="flex items-center gap-2 rounded-md bg-gradient-to-r from-violet-600 to-indigo-600 px-3 py-2.5 text-sm font-semibold text-white transition">
-                    <i data-lucide="workflow" class="w-4 h-4"></i>
-                    品牌入驻自动化
-                </a>
-                <div class="border-t border-gray-200 my-1"></div>
                 <?php foreach ($primary_nav_items as $item): ?>
                     <?php if (($item['type'] ?? 'link') === 'dropdown'): ?>
                         <div class="px-3 pt-3 pb-1 text-xs font-semibold text-gray-400"><?php echo htmlspecialchars($item['name']); ?></div>
