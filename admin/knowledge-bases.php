@@ -37,39 +37,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $description = trim($_POST['description'] ?? '');
                 $content = trim($_POST['content'] ?? '');
                 $file_type = $_POST['file_type'] ?? 'markdown';
-                
-                if (empty($name)) {
-                    $error = '知识库名称不能为空';
-                } elseif (empty($content)) {
-                    $error = '知识库内容不能为空';
-                } else {
-                    try {
-                        $word_count = mb_strlen(strip_tags($content));
-                        $db->beginTransaction();
+                $stored_paths = [];
+                $created = false;
 
-                        $stmt = $db->prepare("
-                            INSERT INTO knowledge_bases (name, description, content, file_type, word_count, created_at, updated_at) 
-                            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        ");
-                        
-                        if ($stmt->execute([$name, $description, $content, $file_type, $word_count])) {
-                            $knowledge_id = db_last_insert_id($db, 'knowledge_bases');
-                            $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content);
-                            $db->commit();
-                            $message = '知识库创建成功，已生成 ' . $chunk_count . ' 个知识片段';
-                        } else {
-                            $db->rollBack();
-                            $error = '知识库创建失败';
-                        }
-                    } catch (Exception $e) {
-                        if ($db->inTransaction()) {
-                            $db->rollBack();
-                        }
-                        $error = '创建失败: ' . $e->getMessage();
+                try {
+                    $uploaded_files = knowledge_base_uploaded_files_from_request('knowledge_files');
+                    if (count($uploaded_files) > 10) {
+                        throw new RuntimeException('最多只能一次上传 10 个文件');
                     }
+                    $parsed_files = knowledge_base_parse_uploaded_files($uploaded_files, $stored_paths);
+                    $content = knowledge_base_merge_sources($content, $parsed_files);
+
+                    if ($content === '') {
+                        throw new RuntimeException('请粘贴文本或上传至少一个知识文档');
+                    }
+                    if ($name === '') {
+                        $name = knowledge_base_infer_name($uploaded_files, $content);
+                    }
+                    if ($name === '') {
+                        throw new RuntimeException('知识库名称不能为空');
+                    }
+
+                    $file_type = knowledge_base_file_type_from_sources($file_type, trim($_POST['content'] ?? ''), $parsed_files);
+                    $file_path = knowledge_base_encode_file_paths($stored_paths);
+                    $word_count = mb_strlen(strip_tags($content));
+                    $columns = ['name', 'description', 'content', 'file_type', 'file_path', 'word_count'];
+                    $values = [$name, $description, $content, $file_type, $file_path, $word_count];
+                    if (db_column_exists($db, 'knowledge_bases', 'character_count')) {
+                        $columns[] = 'character_count';
+                        $values[] = mb_strlen($content, 'UTF-8');
+                    }
+                    $stmt = $db->prepare("
+                        INSERT INTO knowledge_bases (" . implode(', ', $columns) . ", created_at, updated_at)
+                        VALUES (" . implode(', ', array_fill(0, count($columns), '?')) . ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ");
+
+                    if ($stmt->execute($values)) {
+                        $created = true;
+                        $knowledge_id = db_last_insert_id($db, 'knowledge_bases');
+                        if (($_POST['import_action'] ?? 'save_and_chunk') === 'save') {
+                            $message = '知识库已保存，尚未生成知识片段';
+                        } else {
+                            try {
+                                $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content);
+                                $message = '知识库创建成功，已生成 ' . $chunk_count . ' 个知识片段';
+                            } catch (Throwable $syncError) {
+                                $error = '知识库已保存，但切片/向量化失败: ' . $syncError->getMessage();
+                            }
+                        }
+                    } else {
+                        foreach ($stored_paths as $path) {
+                            cleanup_knowledge_file($path);
+                        }
+                        $error = '知识库创建失败';
+                    }
+                } catch (Throwable $e) {
+                    if (!$created) {
+                        foreach ($stored_paths as $path) {
+                            cleanup_knowledge_file($path);
+                        }
+                    }
+                    $error = '创建失败: ' . $e->getMessage();
                 }
                 break;
-                
+
             case 'delete_knowledge':
                 $knowledge_id = intval($_POST['knowledge_id'] ?? 0);
                 
@@ -116,76 +147,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
                 
             case 'upload_file':
-                if (!isset($_FILES['knowledge_file']) || $_FILES['knowledge_file']['error'] !== UPLOAD_ERR_OK) {
-                    $error = '请选择要上传的文件';
-                } else {
-                    $file = $_FILES['knowledge_file'];
+                $_POST['action'] = 'create_knowledge';
+                $stored_paths = [];
+                $created = false;
+                try {
                     $name = trim($_POST['name'] ?? '');
                     $description = trim($_POST['description'] ?? '');
-                    $filepath = '';
-                    
-                    if (empty($name)) {
-                        $name = pathinfo($file['name'], PATHINFO_FILENAME);
+                    $uploaded_files = knowledge_base_uploaded_files_from_request('knowledge_files');
+                    if (empty($uploaded_files)) {
+                        $uploaded_files = knowledge_base_uploaded_files_from_request('knowledge_file');
                     }
-                    
-                    try {
-                        $upload_dir = dirname(__DIR__) . '/uploads/knowledge/';
-                        if (!is_dir($upload_dir)) {
-                            mkdir($upload_dir, 0755, true);
-                        }
-                        
-                        // 检查文件大小（限制为10MB）
-                        $max_size = 10 * 1024 * 1024; // 10MB
-                        if ($file['size'] > $max_size) {
-                            $error = '文件大小超过限制，请上传小于10MB的文件';
-                        } else {
-                            $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-                            $allowed_extensions = ['txt', 'md', 'docx'];
+                    if (empty($uploaded_files)) {
+                        throw new RuntimeException('请选择要上传的文件');
+                    }
+                    if (count($uploaded_files) > 10) {
+                        throw new RuntimeException('最多只能一次上传 10 个文件');
+                    }
+                    $parsed_files = knowledge_base_parse_uploaded_files($uploaded_files, $stored_paths);
+                    $content = knowledge_base_merge_sources('', $parsed_files);
+                    if ($name === '') {
+                        $name = knowledge_base_infer_name($uploaded_files, $content);
+                    }
+                    if ($name === '') {
+                        throw new RuntimeException('知识库名称不能为空');
+                    }
+                    $file_type = knowledge_base_file_type_from_sources('markdown', '', $parsed_files);
+                    $file_path = knowledge_base_encode_file_paths($stored_paths);
+                    $word_count = mb_strlen(strip_tags($content));
+                    $columns = ['name', 'description', 'content', 'file_type', 'file_path', 'word_count'];
+                    $values = [$name, $description, $content, $file_type, $file_path, $word_count];
+                    if (db_column_exists($db, 'knowledge_bases', 'character_count')) {
+                        $columns[] = 'character_count';
+                        $values[] = mb_strlen($content, 'UTF-8');
+                    }
 
-                            if (!in_array($extension, $allowed_extensions)) {
-                                $error = '不支持的文件格式，请上传 TXT、MD 或 DOCX 文件';
-                            } else {
-                            $filename = uniqid() . '.' . $extension;
-                            $filepath = $upload_dir . $filename;
-                            $relative_path = 'uploads/knowledge/' . $filename;
-                            
-                            if (move_uploaded_file($file['tmp_name'], $filepath)) {
-                                $parsed = parse_uploaded_knowledge_file($filepath, $file['name'], $extension);
-                                $content = $parsed['content'];
-                                $file_type = $parsed['file_type'];
-                                
-                                $word_count = mb_strlen(strip_tags($content));
-                                $db->beginTransaction();
-                                
-                                $stmt = $db->prepare("
-                                    INSERT INTO knowledge_bases (name, description, content, file_type, file_path, word_count, created_at, updated_at) 
-                                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                                ");
-                                
-                                if ($stmt->execute([$name, $description, $content, $file_type, $relative_path, $word_count])) {
-                                    $knowledge_id = db_last_insert_id($db, 'knowledge_bases');
-                                    $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content);
-                                    $db->commit();
-                                    $message = '知识库文件上传成功，已生成 ' . $chunk_count . ' 个知识片段';
-                                } else {
-                                    $db->rollBack();
-                                    $error = '保存到数据库失败';
-                                    cleanup_knowledge_file($relative_path);
-                                }
-                            } else {
-                                $error = '文件上传失败';
-                            }
+                    $stmt = $db->prepare("
+                        INSERT INTO knowledge_bases (" . implode(', ', $columns) . ", created_at, updated_at)
+                        VALUES (" . implode(', ', array_fill(0, count($columns), '?')) . ", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ");
+
+                    if ($stmt->execute($values)) {
+                        $created = true;
+                        $knowledge_id = db_last_insert_id($db, 'knowledge_bases');
+                        try {
+                            $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content);
+                            $message = '知识库文件上传成功，已生成 ' . $chunk_count . ' 个知识片段';
+                        } catch (Throwable $syncError) {
+                            $error = '知识库文件已保存，但切片/向量化失败: ' . $syncError->getMessage();
+                        }
+                    } else {
+                        foreach ($stored_paths as $path) {
+                            cleanup_knowledge_file($path);
+                        }
+                        $error = '保存到数据库失败';
+                    }
+                } catch (Throwable $e) {
+                    if (!$created) {
+                        foreach ($stored_paths as $path) {
+                            cleanup_knowledge_file($path);
                         }
                     }
-                    } catch (Exception $e) {
-                        if ($db->inTransaction()) {
-                            $db->rollBack();
-                        }
-                        if ($filepath !== '' && is_file($filepath)) {
-                            @unlink($filepath);
-                        }
-                        $error = '上传失败: ' . $e->getMessage();
-                    }
+                    $error = '上传失败: ' . $e->getMessage();
                 }
                 break;
         }
@@ -392,7 +414,7 @@ require_once __DIR__ . '/includes/header.php';
         <div class="relative top-10 mx-auto p-5 border w-2/3 max-w-4xl shadow-lg rounded-md bg-white">
             <div class="mt-3">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">新建知识库</h3>
-                <form method="POST">
+                <form method="POST" enctype="multipart/form-data" id="create-knowledge-form">
                     <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
                     <input type="hidden" name="action" value="create_knowledge">
                     
@@ -422,10 +444,28 @@ require_once __DIR__ . '/includes/header.php';
                         </div>
                         
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">知识内容 *</label>
-                            <textarea name="content" rows="15" required
+                            <label class="block text-sm font-medium text-gray-700">上传文档</label>
+                            <div id="knowledge-dropzone" class="mt-1 flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-orange-200 bg-orange-50/30 px-6 py-8 text-center transition hover:border-orange-300 hover:bg-orange-50">
+                                <input type="file" id="knowledge-files-input" name="knowledge_files[]" accept=".txt,.md,.docx" multiple class="sr-only">
+                                <label for="knowledge-files-input" class="cursor-pointer">
+                                    <span class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white text-orange-600 shadow-sm ring-1 ring-orange-100">
+                                        <i data-lucide="upload-cloud" class="h-6 w-6"></i>
+                                    </span>
+                                    <span class="mt-4 block text-sm font-semibold text-gray-900">点击选择或拖拽文件到这里</span>
+                                    <span class="mt-1 block text-sm text-gray-500">支持 TXT、MD、DOCX；最多 10 个文件，单文件 50MB</span>
+                                </label>
+                            </div>
+                            <div id="knowledge-file-list" class="mt-3 hidden rounded-lg border border-gray-200 divide-y divide-gray-100"></div>
+                        </div>
+
+                        <div>
+                            <div class="flex items-center justify-between">
+                                <label class="block text-sm font-medium text-gray-700">粘贴文本</label>
+                                <span id="knowledge-content-count" class="text-xs text-orange-700 bg-orange-50 px-2 py-1 rounded-full">0 字</span>
+                            </div>
+                            <textarea name="content" rows="12"
                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm font-mono"
-                                      placeholder="请输入知识库内容，支持Markdown格式..."></textarea>
+                                      placeholder="可粘贴 Markdown、网页正文、业务资料或 FAQ；也可以只上传文件。若同时上传文件，文本会放在最前面合并入库。"></textarea>
                         </div>
                     </div>
                     
@@ -433,8 +473,11 @@ require_once __DIR__ . '/includes/header.php';
                         <button type="button" onclick="hideCreateModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
                             取消
                         </button>
-                        <button type="submit" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
-                            创建知识库
+                        <button type="submit" name="import_action" value="save" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
+                            只保存
+                        </button>
+                        <button type="submit" name="import_action" value="save_and_chunk" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
+                            保存并切片向量化
                         </button>
                     </div>
                 </form>
@@ -468,7 +511,7 @@ require_once __DIR__ . '/includes/header.php';
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700">选择文件 *</label>
-                            <input type="file" name="knowledge_file" required accept=".txt,.md,.docx"
+                            <input type="file" name="knowledge_files[]" required accept=".txt,.md,.docx" multiple
                                    class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100">
                         </div>
                         
@@ -502,6 +545,70 @@ require_once __DIR__ . '/includes/header.php';
         document.addEventListener('DOMContentLoaded', function() {
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
+            }
+
+            const fileInput = document.getElementById('knowledge-files-input');
+            const dropzone = document.getElementById('knowledge-dropzone');
+            const fileList = document.getElementById('knowledge-file-list');
+            const contentInput = document.querySelector('#create-knowledge-form textarea[name="content"]');
+            const contentCount = document.getElementById('knowledge-content-count');
+            const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            }[char]));
+
+            function renderFileList() {
+                if (!fileInput || !fileList) return;
+                const files = Array.from(fileInput.files || []);
+                if (files.length === 0) {
+                    fileList.classList.add('hidden');
+                    fileList.innerHTML = '';
+                    return;
+                }
+                fileList.classList.remove('hidden');
+                fileList.innerHTML = files.map((file) => {
+                    const sizeMb = (file.size / 1024 / 1024).toFixed(2);
+                    return `<div class="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                        <span class="truncate text-gray-700">${escapeHtml(file.name)}</span>
+                        <span class="shrink-0 text-xs text-gray-400">${sizeMb} MB</span>
+                    </div>`;
+                }).join('');
+            }
+
+            if (fileInput) {
+                fileInput.addEventListener('change', renderFileList);
+            }
+
+            if (dropzone && fileInput) {
+                ['dragenter', 'dragover'].forEach((eventName) => {
+                    dropzone.addEventListener(eventName, (event) => {
+                        event.preventDefault();
+                        dropzone.classList.add('border-orange-400', 'bg-orange-50');
+                    });
+                });
+                ['dragleave', 'drop'].forEach((eventName) => {
+                    dropzone.addEventListener(eventName, (event) => {
+                        event.preventDefault();
+                        dropzone.classList.remove('border-orange-400', 'bg-orange-50');
+                    });
+                });
+                dropzone.addEventListener('drop', (event) => {
+                    if (event.dataTransfer && event.dataTransfer.files) {
+                        fileInput.files = event.dataTransfer.files;
+                        renderFileList();
+                    }
+                });
+            }
+
+            if (contentInput && contentCount) {
+                const updateCount = () => {
+                    contentCount.textContent = `${contentInput.value.length.toLocaleString()} 字`;
+                };
+                contentInput.addEventListener('input', updateCount);
+                updateCount();
+            }
+
+            if (new URLSearchParams(window.location.search).get('create') === '1') {
+                showCreateModal();
             }
         });
 

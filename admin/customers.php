@@ -511,7 +511,7 @@ if ($selected_customer) {
     }
 }
 
-$page_title = '客户中心';
+$page_title = '客户运营中心';
 
 include __DIR__ . '/includes/header.php';
 
@@ -519,6 +519,36 @@ $active_count = count(array_filter($customers, fn($customer) => $customer['servi
 $doing_count = count(array_filter($customers, fn($customer) => in_array($customer['stage_key'], ['strategy', 'execute', 'monitor'], true)));
 $renew_count = count(array_filter($customers, fn($customer) => strtotime($customer['contract_end_at']) <= strtotime('+60 days')));
 $alert_count = array_sum(array_map(fn($customer) => count($customer['alerts']), $customers));
+$ops_snapshot = [
+    'avg_score' => null,
+    'alerts_7d' => null,
+    'articles_7d' => null,
+    'queue_pending' => null,
+];
+
+try {
+    $ops_snapshot['avg_score'] = (int) $db->query("
+        SELECT COALESCE(ROUND(AVG(d.overall_score)), 0)
+        FROM geo_diagnoses d
+        JOIN (
+            SELECT customer_id, MAX(created_at) AS latest_at
+            FROM geo_diagnoses
+            GROUP BY customer_id
+        ) latest ON latest.customer_id = d.customer_id AND latest.latest_at = d.created_at
+    ")->fetchColumn();
+} catch (Throwable $_e) {}
+
+try {
+    $ops_snapshot['alerts_7d'] = (int) $db->query("SELECT COUNT(*) FROM geo_monitor_alerts WHERE alerted_at >= NOW() - INTERVAL '7 days'")->fetchColumn();
+} catch (Throwable $_e) {}
+
+try {
+    $ops_snapshot['articles_7d'] = (int) $db->query("SELECT COUNT(*) FROM articles WHERE created_at >= NOW() - INTERVAL '7 days'")->fetchColumn();
+} catch (Throwable $_e) {}
+
+try {
+    $ops_snapshot['queue_pending'] = (int) $db->query("SELECT COUNT(*) FROM geo_content_queue WHERE status = 'pending'")->fetchColumn();
+} catch (Throwable $_e) {}
 
 $status_classes = [
     'done' => 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -547,13 +577,13 @@ $stage_badge_classes = [
 <div class="space-y-8">
     <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-            <h1 class="text-3xl font-bold text-gray-900">客户中心</h1>
-            <p class="mt-2 text-gray-600">统一管理客户，并让诊断、策略、交付、监测围绕当前客户运转。</p>
+            <h1 class="text-3xl font-bold text-gray-900">客户运营中心</h1>
+            <p class="mt-2 text-gray-600">把客户档案、交付进度、告警处理和运营复盘收进同一个工作台。</p>
         </div>
         <div class="flex flex-wrap gap-3">
-            <a href="<?php echo customer_h(admin_url('dashboard.php')); ?>" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+            <a href="<?php echo customer_h(admin_url('ops-dashboard.php')); ?>" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                 <i data-lucide="layout-dashboard" class="mr-2 h-4 w-4"></i>
-                全局概览
+                运营总览
             </a>
             <button type="button" data-open-customer-modal class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                 <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
@@ -588,6 +618,38 @@ $stage_badge_classes = [
             </div>
         </a>
     </div>
+
+    <section class="rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div class="flex flex-col gap-3 border-b border-gray-200 p-5 md:flex-row md:items-center md:justify-between">
+            <div>
+                <h2 class="text-xl font-bold text-gray-900">运营快照</h2>
+                <p class="mt-1 text-sm text-gray-500">保留原来的运营大盘数据，但在客户入口先给出跨客户健康信号。</p>
+            </div>
+            <a href="<?php echo customer_h(admin_url('ops-dashboard.php')); ?>" class="text-sm font-semibold text-blue-600 hover:text-blue-800">查看完整运营大盘 →</a>
+        </div>
+        <div class="grid grid-cols-1 gap-0 divide-y divide-gray-100 md:grid-cols-4 md:divide-x md:divide-y-0">
+            <a href="<?php echo customer_h(admin_url('ops-dashboard.php')); ?>" class="p-5 transition hover:bg-gray-50">
+                <div class="text-sm font-semibold text-gray-500">平均 GEO 分</div>
+                <div class="mt-3 text-3xl font-bold <?php echo ($ops_snapshot['avg_score'] ?? 0) >= 65 ? 'text-emerald-600' : 'text-gray-900'; ?>"><?php echo $ops_snapshot['avg_score'] === null ? '—' : (int) $ops_snapshot['avg_score']; ?></div>
+                <div class="mt-2 text-sm text-gray-500">最新诊断均值</div>
+            </a>
+            <a href="<?php echo customer_h(admin_url('geo-monitor.php#alerts')); ?>" class="p-5 transition hover:bg-gray-50">
+                <div class="text-sm font-semibold text-gray-500">7 日告警</div>
+                <div class="mt-3 text-3xl font-bold <?php echo ($ops_snapshot['alerts_7d'] ?? 0) > 0 ? 'text-orange-600' : 'text-gray-900'; ?>"><?php echo $ops_snapshot['alerts_7d'] === null ? '—' : (int) $ops_snapshot['alerts_7d']; ?></div>
+                <div class="mt-2 text-sm text-gray-500">需要运营跟进</div>
+            </a>
+            <a href="<?php echo customer_h(admin_url('articles.php')); ?>" class="p-5 transition hover:bg-gray-50">
+                <div class="text-sm font-semibold text-gray-500">本周发文</div>
+                <div class="mt-3 text-3xl font-bold text-blue-600"><?php echo $ops_snapshot['articles_7d'] === null ? '—' : (int) $ops_snapshot['articles_7d']; ?></div>
+                <div class="mt-2 text-sm text-gray-500">内容产能</div>
+            </a>
+            <a href="<?php echo customer_h(admin_url('geo-content-queue.php')); ?>" class="p-5 transition hover:bg-gray-50">
+                <div class="text-sm font-semibold text-gray-500">待生成</div>
+                <div class="mt-3 text-3xl font-bold <?php echo ($ops_snapshot['queue_pending'] ?? 0) > 0 ? 'text-orange-600' : 'text-gray-900'; ?>"><?php echo $ops_snapshot['queue_pending'] === null ? '—' : (int) $ops_snapshot['queue_pending']; ?></div>
+                <div class="mt-2 text-sm text-gray-500">进入内容队列</div>
+            </a>
+        </div>
+    </section>
 
     <?php if ($alert_count > 0):
         // 为每条告警推断跳转模块
@@ -654,7 +716,7 @@ $stage_badge_classes = [
         <section class="rounded-lg border border-gray-200 bg-white shadow-sm">
             <div class="flex flex-col gap-4 border-b border-gray-200 p-6 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                    <div class="text-sm font-semibold text-blue-600">当前客户工作台</div>
+                    <div class="text-sm font-semibold text-blue-600">当前客户运营工作台</div>
                     <h2 class="mt-2 text-3xl font-bold text-gray-900"><?php echo customer_h($selected_customer['name']); ?></h2>
                     <div class="mt-3 flex flex-wrap gap-2 text-sm text-gray-600">
                         <span class="rounded-full bg-gray-100 px-3 py-1"><?php echo customer_h($selected_customer['industry']); ?></span>
@@ -702,8 +764,8 @@ $stage_badge_classes = [
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <section class="rounded-lg border border-gray-200 bg-white shadow-sm lg:col-span-2">
                 <div class="border-b border-gray-200 p-5">
-                    <h3 class="text-xl font-bold text-gray-900">客户交付看板</h3>
-                    <p class="mt-1 text-sm text-gray-500">这些信息后续由 SOP、监测和任务模块自动聚合。</p>
+                    <h3 class="text-xl font-bold text-gray-900">客户运营看板</h3>
+                    <p class="mt-1 text-sm text-gray-500">这些信息后续由 SOP、监测、任务和复盘模块自动聚合。</p>
                 </div>
                 <div class="grid grid-cols-1 gap-4 p-5 md:grid-cols-3">
                     <div class="rounded-lg bg-blue-50 p-4">

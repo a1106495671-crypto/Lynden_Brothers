@@ -99,14 +99,14 @@ usort($customerMetrics, function($a, $b) {
     return ($order[$a['status']] ?? 3) - ($order[$b['status']] ?? 3);
 });
 
-$pageTitle = '运营大盘';
+$page_title = '客户运营总览';
 require_once __DIR__ . '/includes/header.php';
 ?>
 <div class="max-w-7xl mx-auto px-4 py-6">
   <div class="mb-6 flex items-center justify-between">
     <div>
-      <h1 class="text-2xl font-bold text-gray-900">运营大盘</h1>
-      <p class="text-sm text-gray-500 mt-1">所有客户GEO健康状态总览 · 数据更新：<?= date('Y-m-d H:i') ?></p>
+      <h1 class="text-2xl font-bold text-gray-900">客户运营总览</h1>
+      <p class="text-sm text-gray-500 mt-1">所有客户 GEO 健康状态、告警和内容产能总览 · 数据更新：<?= date('Y-m-d H:i') ?></p>
     </div>
     <button onclick="location.reload()" class="text-sm text-indigo-600 hover:text-indigo-800">刷新数据</button>
   </div>

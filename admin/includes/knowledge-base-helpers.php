@@ -19,6 +19,14 @@ function cleanup_knowledge_file(?string $relativePath): void {
         return;
     }
 
+    $paths = json_decode($relativePath, true);
+    if (is_array($paths)) {
+        foreach ($paths as $path) {
+            cleanup_knowledge_file(is_string($path) ? $path : '');
+        }
+        return;
+    }
+
     $absolutePath = knowledge_base_abs_path($relativePath);
     if (is_file($absolutePath)) {
         @unlink($absolutePath);
@@ -294,4 +302,139 @@ function parse_uploaded_knowledge_file(string $filepath, string $originalName, s
     }
 
     throw new RuntimeException('不支持的文件格式');
+}
+
+function knowledge_base_parse_uploaded_files(array $files, array &$storedPaths): array {
+    $parsedFiles = [];
+
+    foreach ($files as $file) {
+        if (!is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            continue;
+        }
+
+        $originalName = (string) ($file['name'] ?? '');
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!in_array($extension, ['txt', 'md', 'docx'], true)) {
+            throw new RuntimeException('不支持的文件格式，请上传 TXT、MD 或 DOCX 文件');
+        }
+
+        if ((int) ($file['size'] ?? 0) > 50 * 1024 * 1024) {
+            throw new RuntimeException('单个文件不能超过 50MB');
+        }
+
+        $uploadDir = dirname(__DIR__, 2) . '/uploads/knowledge/';
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
+        }
+
+        $filename = uniqid('', true) . '.' . $extension;
+        $absolutePath = $uploadDir . $filename;
+        $relativePath = 'uploads/knowledge/' . $filename;
+        if (!move_uploaded_file((string) ($file['tmp_name'] ?? ''), $absolutePath)) {
+            throw new RuntimeException('文件上传失败');
+        }
+
+        $storedPaths[] = $relativePath;
+        $parsed = parse_uploaded_knowledge_file($absolutePath, $originalName, $extension);
+        $parsedFiles[] = [
+            'content' => (string) ($parsed['content'] ?? ''),
+            'file_type' => (string) ($parsed['file_type'] ?? 'markdown'),
+            'original_name' => $originalName,
+        ];
+    }
+
+    return $parsedFiles;
+}
+
+function knowledge_base_uploaded_files_from_request(string $fieldName = 'knowledge_files'): array {
+    $files = $_FILES[$fieldName] ?? null;
+    if (!is_array($files) || !isset($files['name'])) {
+        $legacy = $_FILES['knowledge_file'] ?? null;
+        return is_array($legacy) && (int) ($legacy['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK ? [$legacy] : [];
+    }
+
+    if (!is_array($files['name'])) {
+        return (int) ($files['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK ? [$files] : [];
+    }
+
+    $normalized = [];
+    foreach ($files['name'] as $index => $name) {
+        $normalized[] = [
+            'name' => $name,
+            'type' => $files['type'][$index] ?? '',
+            'tmp_name' => $files['tmp_name'][$index] ?? '',
+            'error' => $files['error'][$index] ?? UPLOAD_ERR_NO_FILE,
+            'size' => $files['size'][$index] ?? 0,
+        ];
+    }
+
+    return array_values(array_filter($normalized, static fn (array $file): bool => (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE));
+}
+
+function knowledge_base_merge_sources(string $manualContent, array $parsedFiles): string {
+    $manualContent = normalize_knowledge_text($manualContent);
+    if ($manualContent !== '' && empty($parsedFiles)) {
+        return $manualContent;
+    }
+
+    $blocks = [];
+    if ($manualContent !== '') {
+        $blocks[] = "# 手动输入内容\n\n" . $manualContent;
+    }
+
+    foreach ($parsedFiles as $parsedFile) {
+        $fileName = trim((string) ($parsedFile['original_name'] ?? ''));
+        $blocks[] = '# 文件：' . $fileName . "\n\n" . trim((string) ($parsedFile['content'] ?? ''));
+    }
+
+    return normalize_knowledge_text(implode("\n\n---\n\n", $blocks));
+}
+
+function knowledge_base_infer_name(array $uploadedFiles, string $manualContent): string {
+    if (!empty($uploadedFiles)) {
+        $firstName = pathinfo((string) ($uploadedFiles[0]['name'] ?? ''), PATHINFO_FILENAME);
+        $firstName = trim($firstName);
+        if (count($uploadedFiles) === 1) {
+            return $firstName;
+        }
+        return $firstName !== '' ? $firstName . ' 等 ' . count($uploadedFiles) . ' 个文件' : '导入的 ' . count($uploadedFiles) . ' 个文件';
+    }
+
+    $lines = preg_split('/\R/u', $manualContent) ?: [];
+    foreach ($lines as $line) {
+        $candidate = trim((string) $line);
+        if ($candidate === '') {
+            continue;
+        }
+        $candidate = preg_replace('/^#{1,6}\s*/u', '', $candidate) ?? $candidate;
+        $candidate = preg_replace('/^[-*+]\s+/u', '', $candidate) ?? $candidate;
+        $candidate = trim(strip_tags($candidate));
+        $candidate = trim($candidate, " \t\n\r\0\x0B#*_`>");
+        if ($candidate !== '') {
+            return mb_substr($candidate, 0, 60, 'UTF-8');
+        }
+    }
+
+    return '';
+}
+
+function knowledge_base_file_type_from_sources(string $requestedType, string $manualContent, array $parsedFiles): string {
+    if (empty($parsedFiles)) {
+        return in_array($requestedType, ['markdown', 'word', 'text'], true) ? $requestedType : 'markdown';
+    }
+    if (trim($manualContent) !== '' || count($parsedFiles) > 1) {
+        return 'markdown';
+    }
+    $fileType = (string) ($parsedFiles[0]['file_type'] ?? 'markdown');
+    return in_array($fileType, ['markdown', 'word', 'text'], true) ? $fileType : 'markdown';
+}
+
+function knowledge_base_encode_file_paths(array $storedPaths): string {
+    if (empty($storedPaths)) {
+        return '';
+    }
+    if (count($storedPaths) === 1) {
+        return (string) $storedPaths[0];
+    }
+    return (string) json_encode(array_values($storedPaths), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 }

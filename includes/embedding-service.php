@@ -8,7 +8,41 @@ if (!defined('FEISHU_TREASURE')) {
 }
 
 function embedding_service_storage_dimensions(): int {
-    return 1536;
+    return 3072;
+}
+
+function embedding_service_is_gemini_provider(string $apiUrl): bool {
+    $host = strtolower((string) (parse_url(trim($apiUrl), PHP_URL_HOST) ?: ''));
+    return $host === 'generativelanguage.googleapis.com';
+}
+
+function embedding_service_resolve_base_url(string $apiUrl): string {
+    $normalized = rtrim(trim($apiUrl), '/');
+    if ($normalized === '') {
+        return '';
+    }
+
+    if (embedding_service_is_gemini_provider($normalized)) {
+        $parts = parse_url($normalized);
+        $scheme = (string) ($parts['scheme'] ?? 'https');
+        $host = (string) ($parts['host'] ?? '');
+        $port = isset($parts['port']) ? ':' . (string) $parts['port'] : '';
+        return $host !== '' ? strtolower($scheme) . '://' . $host . $port . '/v1beta' : '';
+    }
+
+    if (preg_match('#/v1/embeddings$#', $normalized) === 1) {
+        return substr($normalized, 0, -strlen('/embeddings'));
+    }
+    if (preg_match('#/embeddings$#', $normalized) === 1) {
+        return substr($normalized, 0, -strlen('/embeddings'));
+    }
+
+    $path = (string) (parse_url($normalized, PHP_URL_PATH) ?: '');
+    if ($path === '' || $path === '/') {
+        return $normalized . '/v1';
+    }
+
+    return $normalized;
 }
 
 function embedding_service_vector_literal(array $vector): string {
@@ -88,12 +122,16 @@ function embedding_service_get_default_model(PDO $db): ?array {
         }
     }
 
+    $orderColumn = function_exists('db_column_exists') && db_column_exists($db, 'ai_models', 'failover_priority')
+        ? 'failover_priority'
+        : 'priority';
+
     $stmt = $db->query("
         SELECT *
         FROM ai_models
         WHERE status = 'active'
           AND COALESCE(NULLIF(model_type, ''), 'chat') = 'embedding'
-        ORDER BY updated_at DESC, id DESC
+        ORDER BY {$orderColumn} ASC NULLS LAST, id DESC
         LIMIT 1
     ");
     $model = $stmt ? ($stmt->fetch(PDO::FETCH_ASSOC) ?: null) : null;
@@ -105,8 +143,8 @@ function embedding_service_get_default_model(PDO $db): ?array {
     return $cache[$cacheKey] = $model;
 }
 
-function embedding_service_call_api(array $model, array $inputs): array {
-    $apiUrl = rtrim((string) ($model['api_url'] ?? ''), '/');
+function embedding_service_call_api(array $model, array $inputs, string $inputMode = 'document', ?string $documentTitle = null): array {
+    $apiUrl = embedding_service_resolve_base_url((string) ($model['api_url'] ?? ''));
     $modelId = trim((string) ($model['model_id'] ?? ''));
     $apiKey = trim((string) ($model['api_key'] ?? ''));
 
@@ -114,15 +152,19 @@ function embedding_service_call_api(array $model, array $inputs): array {
         throw new RuntimeException('Embedding 模型配置不完整');
     }
 
+    if (embedding_service_is_gemini_provider($apiUrl)) {
+        return embedding_service_call_gemini_api($apiUrl, $apiKey, $modelId, $inputs, $inputMode, $documentTitle);
+    }
+
     $payload = [
         'model' => $modelId,
-        'input' => array_values($inputs),
+        'input' => embedding_service_format_inputs($inputs, $model, $inputMode, $documentTitle),
     ];
 
     $ch = curl_init();
     apply_curl_network_defaults($ch);
     curl_setopt_array($ch, [
-        CURLOPT_URL => $apiUrl . '/v1/embeddings',
+        CURLOPT_URL => $apiUrl . '/embeddings',
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
@@ -167,6 +209,87 @@ function embedding_service_call_api(array $model, array $inputs): array {
     return $vectors;
 }
 
+function embedding_service_call_gemini_api(
+    string $apiUrl,
+    string $apiKey,
+    string $modelId,
+    array $inputs,
+    string $inputMode = 'document',
+    ?string $documentTitle = null
+): array {
+    $requests = [];
+    foreach (embedding_service_format_inputs($inputs, ['api_url' => $apiUrl], $inputMode, $documentTitle) as $input) {
+        $requests[] = [
+            'model' => 'models/' . preg_replace('#^models/#', '', $modelId),
+            'content' => [
+                'parts' => [
+                    ['text' => $input],
+                ],
+            ],
+        ];
+    }
+
+    $ch = curl_init();
+    apply_curl_network_defaults($ch);
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $apiUrl . '/models/' . rawurlencode(preg_replace('#^models/#', '', $modelId)) . ':batchEmbedContents?key=' . rawurlencode($apiKey),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['requests' => $requests], JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 60,
+        CURLOPT_SSL_VERIFYPEER => false,
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlError !== '') {
+        throw new RuntimeException('Gemini Embedding API CURL错误: ' . $curlError);
+    }
+    if ($httpCode !== 200) {
+        throw new RuntimeException('Gemini Embedding API调用失败，HTTP状态码: ' . $httpCode . ', 响应: ' . (string) $response);
+    }
+
+    $result = json_decode((string) $response, true);
+    if (!is_array($result) || !isset($result['embeddings']) || !is_array($result['embeddings'])) {
+        throw new RuntimeException('Gemini Embedding API响应格式错误: ' . (string) $response);
+    }
+
+    $vectors = [];
+    foreach ($result['embeddings'] as $item) {
+        $values = $item['values'] ?? null;
+        if (!is_array($values)) {
+            throw new RuntimeException('Gemini Embedding API返回缺少 values 字段');
+        }
+        $vectors[] = $values;
+    }
+
+    if (count($vectors) !== count($inputs)) {
+        throw new RuntimeException('Gemini Embedding API返回数量与输入不一致');
+    }
+
+    return $vectors;
+}
+
+function embedding_service_format_inputs(array $inputs, array $model, string $inputMode = 'document', ?string $documentTitle = null): array {
+    $formatted = array_values(array_map('strval', $inputs));
+    if (!embedding_service_is_gemini_provider((string) ($model['api_url'] ?? ''))) {
+        return $formatted;
+    }
+
+    $normalize = static fn (string $value): string => trim(preg_replace('/\s+/u', ' ', $value) ?: $value);
+    if ($inputMode === 'query') {
+        return array_map(static fn (string $input): string => 'task: search result | query: ' . $normalize($input), $formatted);
+    }
+
+    $title = trim((string) $documentTitle);
+    $title = $title !== '' ? $normalize($title) : 'none';
+    return array_map(static fn (string $input): string => 'title: ' . $title . ' | text: ' . $normalize($input), $formatted);
+}
+
 function embedding_service_update_model_usage(PDO $db, int $modelId): void {
     if ($modelId <= 0) {
         return;
@@ -186,7 +309,7 @@ function embedding_service_update_model_usage(PDO $db, int $modelId): void {
     $stmt->execute([$modelId]);
 }
 
-function embedding_service_generate_embeddings(PDO $db, array $inputs, ?array $model = null): array {
+function embedding_service_generate_embeddings(PDO $db, array $inputs, ?array $model = null, string $inputMode = 'document', ?string $documentTitle = null): array {
     $cleanInputs = [];
     foreach ($inputs as $input) {
         $input = trim((string) $input);
@@ -204,7 +327,7 @@ function embedding_service_generate_embeddings(PDO $db, array $inputs, ?array $m
         throw new RuntimeException('未配置可用的 embedding 模型');
     }
 
-    $vectors = embedding_service_call_api($model, $cleanInputs);
+    $vectors = embedding_service_call_api($model, $cleanInputs, $inputMode, $documentTitle);
     embedding_service_update_model_usage($db, (int) ($model['id'] ?? 0));
 
     $storageDimensions = embedding_service_storage_dimensions();

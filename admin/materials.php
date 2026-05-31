@@ -11,6 +11,7 @@ session_start();
 
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/database_admin.php';
+require_once __DIR__ . '/../includes/knowledge-retrieval.php';
 require_once __DIR__ . '/../includes/functions.php';
 
 // 检查管理员登录
@@ -18,6 +19,10 @@ require_admin_login();
 
 // 立即释放session锁，允许其他页面并发访问
 session_write_close();
+
+try {
+    knowledge_retrieval_ensure_chunk_schema($db);
+} catch (Throwable $e) {}
 
 // 获取统计数据
 $stats = [
@@ -28,8 +33,29 @@ $stats = [
     'image_libraries' => $db->query("SELECT COUNT(*) as count FROM image_libraries")->fetch()['count'] ?? 0,
     'total_images' => $db->query("SELECT COUNT(*) as total FROM images")->fetch()['total'] ?? 0,
     'knowledge_bases' => $db->query("SELECT COUNT(*) as count FROM knowledge_bases")->fetch()['count'] ?? 0,
+    'knowledge_chunks' => $db->query("SELECT COUNT(*) as count FROM knowledge_chunks")->fetch()['count'] ?? 0,
+    'vectorized_chunks' => $db->query("SELECT COUNT(*) as count FROM knowledge_chunks WHERE embedding_model_id IS NOT NULL AND embedding_model_id > 0 AND embedding_dimensions > 0")->fetch()['count'] ?? 0,
+    'knowledge_usage_count' => $db->query("SELECT COUNT(*) as count FROM tasks WHERE knowledge_base_id IS NOT NULL")->fetch()['count'] ?? 0,
+    'latest_knowledge_updated_at' => $db->query("SELECT MAX(updated_at) as latest FROM knowledge_bases")->fetch()['latest'] ?? '',
     'authors' => $db->query("SELECT COUNT(*) as count FROM authors")->fetch()['count'] ?? 0
 ];
+$stats['unvectorized_chunks'] = max(0, (int) $stats['knowledge_chunks'] - (int) $stats['vectorized_chunks']);
+$stats['chunk_strategy'] = get_setting('knowledge_chunk_strategy', 'rule');
+$stats['active_embedding_models'] = $db->query("SELECT COUNT(*) as count FROM ai_models WHERE status='active' AND COALESCE(NULLIF(model_type, ''), 'chat')='embedding'")->fetch()['count'] ?? 0;
+$defaultEmbeddingModelId = (int) get_setting('default_embedding_model_id', 0);
+$defaultEmbeddingName = '';
+if ($defaultEmbeddingModelId > 0) {
+    $stmt = $db->prepare("SELECT name FROM ai_models WHERE id = ?");
+    $stmt->execute([$defaultEmbeddingModelId]);
+    $defaultEmbeddingName = (string) ($stmt->fetchColumn() ?: '');
+}
+if ($defaultEmbeddingName === '') {
+    $stmt = $db->query("SELECT name FROM ai_models WHERE status='active' AND COALESCE(NULLIF(model_type, ''), 'chat')='embedding' ORDER BY priority ASC NULLS LAST, id DESC LIMIT 1");
+    $defaultEmbeddingName = (string) ($stmt ? ($stmt->fetchColumn() ?: '') : '');
+}
+$stats['default_embedding_model'] = $defaultEmbeddingName;
+$knowledgeProgress = (int) $stats['knowledge_chunks'] > 0 ? min(100, (int) round(((int) $stats['vectorized_chunks'] / max(1, (int) $stats['knowledge_chunks'])) * 100)) : 0;
+$knowledgeHealth = (int) $stats['knowledge_bases'] <= 0 ? 'empty' : ((int) $stats['active_embedding_models'] <= 0 ? 'no_embedding' : ((int) $stats['unvectorized_chunks'] > 0 ? 'needs_vectorization' : 'ready'));
 
 // 设置页面信息
 $page_title = '素材管理';
@@ -51,6 +77,144 @@ $page_header = '
 // 包含头部模块
 require_once __DIR__ . '/includes/header.php';
 ?>
+
+        <section class="mb-8 overflow-hidden rounded-lg border border-orange-100 bg-white shadow">
+            <div class="border-b border-orange-100 bg-orange-50/50 px-6 py-5 lg:px-8">
+                <div class="space-y-5">
+                    <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                        <span class="inline-flex items-center rounded-full bg-white px-3 py-1 text-sm font-semibold text-orange-700 ring-1 ring-orange-200">
+                            <i data-lucide="brain" class="mr-2 h-4 w-4"></i>
+                            AI知识库中枢
+                        </span>
+                        <div class="grid w-full grid-cols-1 gap-3 sm:w-auto sm:grid-cols-3 lg:min-w-[560px]">
+                            <a href="knowledge-bases.php?create=1" class="inline-flex items-center justify-center whitespace-nowrap rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-orange-700">
+                                <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
+                                新建知识库
+                            </a>
+                            <a href="knowledge-bases.php" class="inline-flex items-center justify-center whitespace-nowrap rounded-md border border-orange-200 bg-white px-4 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-50">
+                                <i data-lucide="database" class="mr-2 h-4 w-4"></i>
+                                管理知识库
+                            </a>
+                            <a href="ai-models.php" class="inline-flex items-center justify-center whitespace-nowrap rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                                <i data-lucide="settings" class="mr-2 h-4 w-4"></i>
+                                向量化配置
+                            </a>
+                        </div>
+                    </div>
+                    <div>
+                        <h2 class="text-2xl font-bold tracking-tight text-gray-900">让资料先变成可召回的语义知识</h2>
+                        <p class="mt-2 text-sm leading-6 text-gray-600">高质量知识库是科学 GEO 的基础，决定内容准确度与复用水平。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 divide-y divide-gray-200 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)] lg:divide-x lg:divide-y-0">
+                <div class="px-6 py-6 lg:px-8">
+                    <div class="grid grid-cols-2 gap-x-8 gap-y-6 lg:grid-cols-4">
+                        <div>
+                            <div class="text-sm font-medium text-gray-500">知识库数量</div>
+                            <div class="mt-2 text-3xl font-bold text-gray-900"><?php echo (int) $stats['knowledge_bases']; ?></div>
+                        </div>
+                        <div>
+                            <div class="text-sm font-medium text-gray-500">知识切片</div>
+                            <div class="mt-2 text-3xl font-bold text-gray-900"><?php echo (int) $stats['knowledge_chunks']; ?></div>
+                        </div>
+                        <div>
+                            <div class="text-sm font-medium text-gray-500">已向量化</div>
+                            <div class="mt-2 text-3xl font-bold text-emerald-700"><?php echo (int) $stats['vectorized_chunks']; ?></div>
+                        </div>
+                        <div>
+                            <div class="text-sm font-medium text-gray-500">任务引用</div>
+                            <div class="mt-2 text-3xl font-bold text-gray-900"><?php echo (int) $stats['knowledge_usage_count']; ?></div>
+                        </div>
+                    </div>
+
+                    <div class="mt-7">
+                        <div class="flex items-center justify-between text-sm">
+                            <span class="font-medium text-gray-700">向量化进度</span>
+                            <span class="font-semibold text-gray-900"><?php echo (int) $stats['vectorized_chunks']; ?> / <?php echo (int) $stats['knowledge_chunks']; ?></span>
+                        </div>
+                        <div class="mt-2 h-2 overflow-hidden rounded-full bg-gray-100">
+                            <div class="h-2 rounded-full bg-orange-500" style="width: <?php echo $knowledgeProgress; ?>%"></div>
+                        </div>
+                    </div>
+
+                    <div class="mt-7 grid grid-cols-1 gap-4 border-t border-gray-100 pt-6 md:grid-cols-5">
+                        <?php foreach ([
+                            ['icon' => 'file-input', 'title' => '资料入库', 'desc' => '上传文档或从网页采集。'],
+                            ['icon' => 'scissors', 'title' => '结构切片', 'desc' => '按章节和语义拆分。'],
+                            ['icon' => 'scan-search', 'title' => '向量写入', 'desc' => '调用 Embedding 模型。'],
+                            ['icon' => 'search-check', 'title' => '任务召回', 'desc' => '按标题与关键词检索。'],
+                            ['icon' => 'wand-sparkles', 'title' => '内容生成', 'desc' => '注入提示词上下文。'],
+                        ] as $step): ?>
+                            <div class="min-w-0">
+                                <div class="flex h-10 w-10 items-center justify-center rounded-md bg-orange-50 text-orange-600">
+                                    <i data-lucide="<?php echo $step['icon']; ?>" class="h-5 w-5"></i>
+                                </div>
+                                <div class="mt-3 text-sm font-semibold text-gray-900"><?php echo htmlspecialchars($step['title']); ?></div>
+                                <p class="mt-1 text-xs leading-5 text-gray-500"><?php echo htmlspecialchars($step['desc']); ?></p>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <div class="px-6 py-6 lg:px-8">
+                    <?php
+                    $healthClass = [
+                        'ready' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+                        'needs_vectorization' => 'bg-amber-50 text-amber-700 ring-amber-200',
+                        'no_embedding' => 'bg-red-50 text-red-700 ring-red-200',
+                        'empty' => 'bg-slate-100 text-slate-700 ring-slate-200',
+                    ][$knowledgeHealth] ?? 'bg-slate-100 text-slate-700 ring-slate-200';
+                    $healthText = [
+                        'ready' => '语义知识可用',
+                        'needs_vectorization' => '存在待向量化切片',
+                        'no_embedding' => '未配置 Embedding 模型',
+                        'empty' => '暂无知识库',
+                    ][$knowledgeHealth] ?? '暂无知识库';
+                    $strategyText = [
+                        'rule' => '结构化规则切片',
+                        'auto' => '自动语义切片',
+                        'semantic_llm' => '语义 LLM 切片',
+                    ][(string) $stats['chunk_strategy']] ?? '结构化规则切片';
+                    ?>
+                    <div class="inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold ring-1 <?php echo $healthClass; ?>">
+                        <i data-lucide="activity" class="mr-2 h-4 w-4"></i>
+                        <?php echo htmlspecialchars($healthText); ?>
+                    </div>
+
+                    <dl class="mt-6 space-y-4 text-sm">
+                        <div class="flex items-start justify-between gap-4">
+                            <dt class="text-gray-500">默认 Embedding 模型</dt>
+                            <dd class="max-w-[220px] text-right font-semibold text-gray-900"><?php echo htmlspecialchars($stats['default_embedding_model'] ?: '未配置'); ?></dd>
+                        </div>
+                        <div class="flex items-start justify-between gap-4">
+                            <dt class="text-gray-500">切片策略</dt>
+                            <dd class="text-right font-semibold text-gray-900"><?php echo htmlspecialchars($strategyText); ?></dd>
+                        </div>
+                        <div class="flex items-start justify-between gap-4">
+                            <dt class="text-gray-500">待向量化切片</dt>
+                            <dd class="text-right font-semibold <?php echo (int) $stats['unvectorized_chunks'] > 0 ? 'text-amber-700' : 'text-gray-900'; ?>"><?php echo (int) $stats['unvectorized_chunks']; ?></dd>
+                        </div>
+                        <div class="flex items-start justify-between gap-4">
+                            <dt class="text-gray-500">最近更新</dt>
+                            <dd class="text-right font-semibold text-gray-900"><?php echo htmlspecialchars($stats['latest_knowledge_updated_at'] ?: '未更新'); ?></dd>
+                        </div>
+                    </dl>
+
+                    <div class="mt-6 grid grid-cols-1 gap-3">
+                        <a href="knowledge-bases.php" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                            <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
+                            更新切片
+                        </a>
+                        <a href="url-import.php" class="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
+                            <i data-lucide="globe" class="mr-2 h-4 w-4"></i>
+                            从 URL 生成知识
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </section>
 
         <!-- 统计卡片 -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">

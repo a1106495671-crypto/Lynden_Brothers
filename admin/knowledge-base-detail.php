@@ -45,6 +45,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $error = 'CSRF验证失败';
     } else {
         switch ($_POST['action']) {
+            case 'refresh_chunks':
+                try {
+                    $content = trim((string) ($knowledge['content'] ?? ''));
+                    if ($content === '') {
+                        throw new RuntimeException('知识库内容不能为空');
+                    }
+                    $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content, true);
+                    $message = '知识切片已刷新，真实向量写入完成：' . $chunk_count . ' 个片段';
+                } catch (Throwable $e) {
+                    $error = '刷新失败: ' . $e->getMessage();
+                }
+                break;
+
             case 'update_knowledge':
                 $name = trim($_POST['name'] ?? '');
                 $description = trim($_POST['description'] ?? '');
@@ -57,8 +70,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 } else {
                     try {
                         $word_count = mb_strlen(strip_tags($content));
-                        $db->beginTransaction();
-                        
                         $stmt = $db->prepare("
                             UPDATE knowledge_bases 
                             SET name = ?, description = ?, content = ?, word_count = ?, updated_at = CURRENT_TIMESTAMP 
@@ -67,20 +78,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         
                         if ($stmt->execute([$name, $description, $content, $word_count, $knowledge_id])) {
                             $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content);
-                            $db->commit();
                             $message = '知识库更新成功，已刷新 ' . $chunk_count . ' 个知识片段';
                             // 重新获取更新后的数据
                             $stmt = $db->prepare("SELECT * FROM knowledge_bases WHERE id = ?");
                             $stmt->execute([$knowledge_id]);
                             $knowledge = $stmt->fetch();
                         } else {
-                            $db->rollBack();
                             $error = '知识库更新失败';
                         }
                     } catch (Exception $e) {
-                        if ($db->inTransaction()) {
-                            $db->rollBack();
-                        }
                         $error = '更新失败: ' . $e->getMessage();
                     }
                 }
@@ -95,6 +101,8 @@ $knowledge_chunk_count = 0;
 $knowledge_chunks_preview = [];
 $knowledge_vector_count = 0;
 try {
+    knowledge_retrieval_ensure_chunk_schema($db);
+
     $stmt = $db->prepare("
         SELECT id, name, status, created_at
         FROM tasks
@@ -112,7 +120,7 @@ try {
     $vecStmt->execute([$knowledge_id]);
     $knowledge_vector_count = (int) $vecStmt->fetchColumn();
 
-    $previewStmt = $db->prepare("SELECT chunk_index, content, token_count, embedding_model_id FROM knowledge_chunks WHERE knowledge_base_id = ? ORDER BY chunk_index ASC LIMIT 50");
+    $previewStmt = $db->prepare("SELECT chunk_index, content, chunk_title, section_path, chunk_strategy, token_count, embedding_model_id, embedding_dimensions, embedding_provider FROM knowledge_chunks WHERE knowledge_base_id = ? ORDER BY chunk_index ASC LIMIT 50");
     $previewStmt->execute([$knowledge_id]);
     $knowledge_chunks_preview = $previewStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
@@ -322,9 +330,18 @@ require_once __DIR__ . '/includes/header.php';
             知识切片预览
             <span class="ml-2 text-sm font-normal text-gray-400"><?php echo $knowledge_chunk_count; ?> 个切片，<?php echo $knowledge_vector_count; ?> 个已向量化</span>
         </h3>
-        <a href="rag-test.php" class="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1">
-            <i data-lucide="flask-conical" class="w-4 h-4"></i> 去检索测试
-        </a>
+        <div class="flex items-center gap-3">
+            <form method="POST" onsubmit="return confirm('将重新切片并强制写入真实向量，确定继续吗？');">
+                <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
+                <input type="hidden" name="action" value="refresh_chunks">
+                <button type="submit" class="text-sm text-orange-600 hover:text-orange-700 flex items-center gap-1">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> 更新切片
+                </button>
+            </form>
+            <a href="rag-test.php" class="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                <i data-lucide="flask-conical" class="w-4 h-4"></i> 去检索测试
+            </a>
+        </div>
     </div>
     <div class="p-4">
         <!-- vector coverage bar -->
@@ -351,12 +368,18 @@ require_once __DIR__ . '/includes/header.php';
                     <div class="flex items-center gap-2 mb-1.5">
                         <span class="text-xs font-mono text-gray-400">#<?php echo (int) $chunk['chunk_index']; ?></span>
                         <?php if ($has_vec): ?>
-                            <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">向量</span>
+                            <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded"><?php echo (int) ($chunk['embedding_dimensions'] ?? 0); ?> 维</span>
                         <?php else: ?>
                             <span class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">词法</span>
                         <?php endif; ?>
+                        <span class="text-xs bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded"><?php echo htmlspecialchars((string) ($chunk['chunk_strategy'] ?? 'structured_rule')); ?></span>
                         <span class="text-xs text-gray-300"><?php echo (int) $chunk['token_count']; ?> tokens</span>
                     </div>
+                    <?php if (!empty($chunk['chunk_title']) || !empty($chunk['section_path'])): ?>
+                        <div class="mb-1 text-xs font-medium text-gray-500">
+                            <?php echo htmlspecialchars((string) ($chunk['chunk_title'] ?: $chunk['section_path'])); ?>
+                        </div>
+                    <?php endif; ?>
                     <p class="text-sm text-gray-700 leading-relaxed line-clamp-3"><?php echo htmlspecialchars((string) ($chunk['content'] ?? '')); ?></p>
                 </div>
             <?php endforeach; ?>

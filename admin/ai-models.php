@@ -64,6 +64,11 @@ try {
 }
 
 $default_embedding_model_id = (int) get_setting('default_embedding_model_id', 0);
+$knowledge_chunk_strategy = (string) get_setting('knowledge_chunk_strategy', 'rule');
+if (!in_array($knowledge_chunk_strategy, ['rule', 'auto', 'semantic_llm'], true)) {
+    $knowledge_chunk_strategy = 'rule';
+}
+$knowledge_chunking_model_id = (int) get_setting('knowledge_chunking_model_id', 0);
 $pgvector_enabled = embedding_service_pgvector_available($db);
 
 // 处理POST请求
@@ -222,6 +227,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error = '默认 embedding 模型更新失败';
                 }
                 break;
+
+            case 'update_chunking_config':
+                $strategy = trim((string) ($_POST['knowledge_chunk_strategy'] ?? 'rule'));
+                $chunking_model_id = (int) ($_POST['knowledge_chunking_model_id'] ?? 0);
+                if (!in_array($strategy, ['rule', 'auto', 'semantic_llm'], true)) {
+                    $error = '切片策略无效';
+                    break;
+                }
+                if ($strategy === 'semantic_llm' && $chunking_model_id <= 0) {
+                    $error = '语义切片需要选择一个可用聊天模型';
+                    break;
+                }
+                if ($chunking_model_id > 0) {
+                    $stmt = $db->prepare("
+                        SELECT COUNT(*)
+                        FROM ai_models
+                        WHERE id = ?
+                          AND status = 'active'
+                          AND (model_type IS NULL OR model_type = '' OR model_type = 'chat')
+                    ");
+                    $stmt->execute([$chunking_model_id]);
+                    if ((int) $stmt->fetchColumn() === 0) {
+                        $error = '所选语义切片模型不可用';
+                        break;
+                    }
+                }
+                if (set_setting('knowledge_chunk_strategy', $strategy) && set_setting('knowledge_chunking_model_id', (string) $chunking_model_id)) {
+                    $knowledge_chunk_strategy = $strategy;
+                    $knowledge_chunking_model_id = $chunking_model_id;
+                    $message = '知识库切片策略已更新';
+                } else {
+                    $error = '知识库切片策略更新失败';
+                }
+                break;
         }
     }
 }
@@ -286,6 +325,18 @@ try {
     }
 }
 
+try {
+    $chat_models_for_chunking = $db->query("
+        SELECT id, name, model_id
+        FROM ai_models
+        WHERE status = 'active'
+          AND (model_type IS NULL OR model_type = '' OR model_type = 'chat')
+        ORDER BY priority ASC NULLS LAST, id ASC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $chat_models_for_chunking = [];
+}
+
 // 设置页面信息
 $page_title = 'AI模型配置';
 $page_header = '
@@ -335,7 +386,7 @@ require_once __DIR__ . '/includes/header.php';
             </div>
         <?php endif; ?>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             <div class="bg-white shadow rounded-lg">
                 <div class="px-6 py-4 border-b border-gray-200">
                     <h3 class="text-lg font-medium text-gray-900">向量检索状态</h3>
@@ -369,6 +420,47 @@ require_once __DIR__ . '/includes/header.php';
                             <button type="submit"
                                     class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-slate-800 hover:bg-slate-900">
                                 保存默认模型
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="bg-white shadow rounded-lg">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-gray-900">知识库切片策略</h3>
+                    <p class="mt-1 text-sm text-gray-600">对齐语义切割：模型只规划边界，正文仍用原文重组</p>
+                </div>
+                <div class="px-6 py-5">
+                    <form method="POST" class="space-y-4">
+                        <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
+                        <input type="hidden" name="action" value="update_chunking_config">
+                        <div>
+                            <label for="knowledge_chunk_strategy" class="block text-sm font-medium text-gray-700">切片策略</label>
+                            <select name="knowledge_chunk_strategy" id="knowledge_chunk_strategy"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                <option value="rule" <?php echo $knowledge_chunk_strategy === 'rule' ? 'selected' : ''; ?>>结构化规则切片</option>
+                                <option value="auto" <?php echo $knowledge_chunk_strategy === 'auto' ? 'selected' : ''; ?>>自动：语义失败回退规则</option>
+                                <option value="semantic_llm" <?php echo $knowledge_chunk_strategy === 'semantic_llm' ? 'selected' : ''; ?>>语义 LLM 切片</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="knowledge_chunking_model_id" class="block text-sm font-medium text-gray-700">语义切片模型</label>
+                            <select name="knowledge_chunking_model_id" id="knowledge_chunking_model_id"
+                                    class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                <option value="0">不使用语义模型</option>
+                                <?php foreach ($chat_models_for_chunking as $model): ?>
+                                    <option value="<?php echo (int) $model['id']; ?>" <?php echo $knowledge_chunking_model_id === (int) $model['id'] ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($model['name'] . ' (' . $model['model_id'] . ')'); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="mt-1 text-xs text-gray-500">超过 120 个结构块或提示词过长时会按源系统逻辑跳过语义规划。</p>
+                        </div>
+                        <div class="flex justify-end">
+                            <button type="submit"
+                                    class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-slate-800 hover:bg-slate-900">
+                                保存切片策略
                             </button>
                         </div>
                     </form>

@@ -444,6 +444,11 @@ class DatabaseAdmin {
             content_hash VARCHAR(64) DEFAULT '',
             token_count INTEGER DEFAULT 0,
             embedding_json TEXT DEFAULT '',
+            chunk_title VARCHAR(255) DEFAULT '',
+            section_path VARCHAR(500) DEFAULT '',
+            chunk_strategy VARCHAR(50) DEFAULT 'structured_rule',
+            metadata_json TEXT DEFAULT '',
+            source_hash VARCHAR(64) DEFAULT '',
             embedding_model_id INTEGER DEFAULT NULL,
             embedding_dimensions INTEGER DEFAULT 0,
             embedding_provider VARCHAR(255) DEFAULT '',
@@ -741,9 +746,14 @@ class DatabaseAdmin {
                 'priority' => "ALTER TABLE ai_models ADD COLUMN priority INTEGER DEFAULT 10",
             ],
             'knowledge_chunks' => [
-                'embedding_model_id' => "ALTER TABLE knowledge_chunks ADD COLUMN embedding_model_id INTEGER DEFAULT NULL",
-                'embedding_dimensions' => "ALTER TABLE knowledge_chunks ADD COLUMN embedding_dimensions INTEGER DEFAULT 0",
-                'embedding_provider' => "ALTER TABLE knowledge_chunks ADD COLUMN embedding_provider VARCHAR(255) DEFAULT ''",
+                'chunk_title' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS chunk_title VARCHAR(255) DEFAULT ''",
+                'section_path' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS section_path VARCHAR(500) DEFAULT ''",
+                'chunk_strategy' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS chunk_strategy VARCHAR(50) DEFAULT 'structured_rule'",
+                'metadata_json' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS metadata_json TEXT DEFAULT ''",
+                'source_hash' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS source_hash VARCHAR(64) DEFAULT ''",
+                'embedding_model_id' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_model_id INTEGER DEFAULT NULL",
+                'embedding_dimensions' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_dimensions INTEGER DEFAULT 0",
+                'embedding_provider' => "ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_provider VARCHAR(255) DEFAULT ''",
             ],
         ];
 
@@ -765,6 +775,11 @@ class DatabaseAdmin {
                 content_hash VARCHAR(64) DEFAULT '',
                 token_count INTEGER DEFAULT 0,
                 embedding_json TEXT DEFAULT '',
+                chunk_title VARCHAR(255) DEFAULT '',
+                section_path VARCHAR(500) DEFAULT '',
+                chunk_strategy VARCHAR(50) DEFAULT 'structured_rule',
+                metadata_json TEXT DEFAULT '',
+                source_hash VARCHAR(64) DEFAULT '',
                 embedding_model_id INTEGER DEFAULT NULL,
                 embedding_dimensions INTEGER DEFAULT 0,
                 embedding_provider VARCHAR(255) DEFAULT '',
@@ -1282,15 +1297,21 @@ class DatabaseAdmin {
 
         try {
             if (!db_column_exists($this->pdo, 'knowledge_chunks', 'embedding_vector')) {
-                $this->pdo->exec("ALTER TABLE knowledge_chunks ADD COLUMN embedding_vector vector(1536)");
+                $this->pdo->exec("ALTER TABLE knowledge_chunks ADD COLUMN embedding_vector vector(3072)");
+            } else {
+                $stmt = $this->pdo->query("
+                    SELECT COALESCE(format_type(a.atttypid, a.atttypmod), '') AS column_type
+                    FROM pg_attribute a
+                    INNER JOIN pg_class c ON c.oid = a.attrelid
+                    WHERE c.relname = 'knowledge_chunks'
+                      AND a.attname = 'embedding_vector'
+                      AND a.attnum > 0
+                    LIMIT 1
+                ");
+                if ((string) ($stmt ? $stmt->fetchColumn() : '') !== 'vector(3072)') {
+                    $this->pdo->exec("ALTER TABLE knowledge_chunks ALTER COLUMN embedding_vector TYPE vector(3072)");
+                }
             }
-
-            $this->pdo->exec("
-                CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding_hnsw
-                ON knowledge_chunks
-                USING hnsw (embedding_vector vector_cosine_ops)
-                WHERE embedding_vector IS NOT NULL
-            ");
         } catch (Throwable $e) {
             error_log('pgvector 向量列或索引初始化失败: ' . $e->getMessage());
         }

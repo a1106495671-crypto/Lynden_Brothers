@@ -1,4 +1,12 @@
 <?php
+// 访问根目录时自动跳转到管理后台
+$scriptName = basename($_SERVER['SCRIPT_FILENAME'] ?? '');
+$requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+if ($scriptName === 'index.php' && $requestUri === '/' && empty($_SERVER['QUERY_STRING'])) {
+    header('Location: /dl-console/');
+    exit;
+}
+
 define('FEISHU_TREASURE', true);
 session_start();
 

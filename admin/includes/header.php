@@ -68,7 +68,18 @@ if ($is_super_admin) {
 
 $primary_nav_items = [
     ['type' => 'link', 'page' => 'dashboard.php', 'name' => '首页', 'icon' => 'home'],
-    ['type' => 'link', 'page' => 'customers.php', 'name' => '客户', 'icon' => 'building-2'],
+    [
+        'type' => 'dropdown',
+        'name' => '客户运营',
+        'icon' => 'building-2',
+        'children' => [
+            ['page' => 'customers.php',       'name' => '客户工作台', 'desc' => '客户档案、阶段进度与当前客户上下文'],
+            ['page' => 'ops-dashboard.php',   'name' => '运营总览',   'desc' => '跨客户健康度、告警与内容产能'],
+            ['page' => 'geo-roadmap.php',     'name' => '执行路线图', 'desc' => '把诊断和监测结果转为下一步动作'],
+            ['page' => 'monthly-report.php',  'name' => '月度复盘',   'desc' => '沉淀客户阶段成果与续费材料'],
+            ['page' => 'client-manage.php',   'name' => '客户门户',   'desc' => '开通客户自助数据看板账号'],
+        ],
+    ],
     [
         'type' => 'dropdown',
         'name' => '诊断',
@@ -107,7 +118,6 @@ $primary_nav_items = [
             ['page' => 'geo-article-impact.php',   'name' => '效果归因',   'desc' => '文章发布前后AI提及率对比'],
         ],
     ],
-    ['type' => 'link', 'page' => 'ops-dashboard.php', 'name' => '运营', 'icon' => 'layout-dashboard'],
     ['type' => 'link', 'page' => 'ai-configurator.php', 'name' => 'AI配置', 'icon' => 'cpu'],
 ];
 
