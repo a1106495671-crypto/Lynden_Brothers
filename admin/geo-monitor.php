@@ -40,9 +40,6 @@ $page_header = '
         <h1 class="text-3xl font-bold text-gray-900">GEO监测</h1>
     </div>
     <div class="flex flex-wrap gap-3">
-        <a href="' . admin_url('monthly-report.php') . '" target="_blank" class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-            <i data-lucide="file-text" class="mr-2 h-4 w-4"></i>导出月报
-        </a>
         <button type="button" data-open-monitor-tab="renewal" class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
             <i data-lucide="file-down" class="mr-2 h-4 w-4"></i>续费证据包
         </button>

@@ -25,16 +25,13 @@ $menu_items = [
     'customers.php' => ['name' => '客户中心', 'icon' => 'building-2'],
     'dashboard.php' => ['name' => '首页', 'icon' => 'home'],
     'geo-diagnosis.php' => ['name' => '雷达诊断', 'icon' => 'radar'],
-    'ops-dashboard.php'   => ['name' => '运营大盘',   'icon' => 'chart-bar'],
     'data-analytics.php'  => ['name' => '数据分析',   'icon' => 'bar-chart-2'],
     'geo-panorama.php' => ['name' => '全景诊断', 'icon' => 'scan-search'],
     'geo-intent.php' => ['name' => '意图挖掘', 'icon' => 'search'],
     'geo-knowledge-graph.php' => ['name' => '知识图谱', 'icon' => 'git-branch'],
     'rag-test.php'            => ['name' => 'RAG 检索测试', 'icon' => 'flask-conical'],
-    'geo-roadmap.php' => ['name' => '执行路线图', 'icon' => 'map'],
     'geo-monitor-dashboard.php' => ['name' => '监测大盘', 'icon' => 'activity'],
     'geo-content-queue.php' => ['name' => '生成队列', 'icon' => 'list-checks'],
-    'client-manage.php' => ['name' => '客户门户', 'icon' => 'users'],
     'citation-simulator.php' => ['name' => '引用模拟器', 'icon' => 'quote'],
     'ai-citation-preferences.php' => ['name' => 'AI偏好对照表', 'icon' => 'table-2'],
     'tasks.php' => ['name' => '任务管理', 'icon' => 'zap'],
@@ -67,18 +64,7 @@ if ($is_super_admin) {
 
 $primary_nav_items = [
     ['type' => 'link', 'page' => 'dashboard.php', 'name' => '首页', 'icon' => 'home'],
-    [
-        'type' => 'dropdown',
-        'name' => '客户运营',
-        'icon' => 'building-2',
-        'children' => [
-            ['page' => 'customers.php',       'name' => '客户工作台', 'desc' => '客户档案、阶段进度与当前客户上下文'],
-            ['page' => 'ops-dashboard.php',   'name' => '运营总览',   'desc' => '跨客户健康度、告警与内容产能'],
-            ['page' => 'geo-roadmap.php',     'name' => '执行路线图', 'desc' => '把诊断和监测结果转为下一步动作'],
-            ['page' => 'monthly-report.php',  'name' => '月度复盘',   'desc' => '沉淀客户阶段成果与续费材料'],
-            ['page' => 'client-manage.php',   'name' => '客户门户',   'desc' => '开通客户自助数据看板账号'],
-        ],
-    ],
+    ['type' => 'link', 'page' => 'customers.php', 'name' => '客户运营', 'icon' => 'building-2'],
     [
         'type' => 'dropdown',
         'name' => '诊断',
@@ -113,7 +99,6 @@ $primary_nav_items = [
 
 $settings_menu_items = [
     ['page' => 'site-settings.php', 'name' => '网站设置', 'icon' => 'settings', 'desc' => '站点与账号设置'],
-    ['page' => 'client-manage.php', 'name' => '客户门户', 'icon' => 'users', 'desc' => '客户自助看板账号管理'],
     ['page' => 'security-settings.php', 'name' => '安全管理', 'icon' => 'shield', 'desc' => '权限与安全策略'],
 ];
 

@@ -184,8 +184,8 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-                <section class="rounded-lg border border-gray-200 bg-white shadow-sm xl:col-span-1">
+            <div class="grid grid-cols-1 gap-6 xl:grid-cols-5">
+                <section class="rounded-lg border border-gray-200 bg-white shadow-sm xl:col-span-2">
                     <div class="border-b border-gray-200 px-6 py-4">
                         <h2 class="text-lg font-semibold text-gray-900">新建诊断</h2>
                     </div>
@@ -227,28 +227,38 @@ require_once __DIR__ . '/includes/header.php';
                                     <span class="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-blue-700">建议 10 条</span>
                                 </div>
                             </summary>
-                            <div class="mt-4 space-y-3">
+                            <div class="mt-4 overflow-hidden rounded-lg border border-blue-100 bg-white">
+                                <div class="hidden grid-cols-[2.5rem_minmax(0,1.1fr)_8rem_minmax(0,1.4fr)_7rem_minmax(0,0.9fr)] gap-2 border-b border-gray-100 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-500 lg:grid">
+                                    <div>#</div>
+                                    <div>问题</div>
+                                    <div>平台</div>
+                                    <div>首次答案</div>
+                                    <div>情绪</div>
+                                    <div>关键词</div>
+                                </div>
+                                <div class="max-h-[520px] divide-y divide-gray-100 overflow-y-auto">
                                 <?php foreach ($defaultBaselineQuestions as $idx => $question): ?>
-                                    <div class="rounded-md border border-blue-100 bg-white p-3">
-                                        <div class="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
+                                    <div class="grid grid-cols-1 gap-2 px-3 py-3 lg:grid-cols-[2.5rem_minmax(0,1.1fr)_8rem_minmax(0,1.4fr)_7rem_minmax(0,0.9fr)] lg:items-start">
+                                        <div class="hidden pt-2 text-xs font-semibold text-gray-400 lg:block"><?php echo (int) $idx + 1; ?></div>
+                                        <label class="block">
+                                            <span class="mb-1 block text-xs font-semibold text-gray-500 lg:hidden">问题 <?php echo (int) $idx + 1; ?></span>
                                             <input name="baseline_question[]" type="text" data-baseline-index="<?php echo (int) $idx; ?>" data-auto-baseline="1" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" value="<?php echo htmlspecialchars($question); ?>">
-                                            <select name="baseline_platform[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                        </label>
+                                        <select name="baseline_platform[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
                                                 <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
                                                     <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo $platformKey === 'deepseek' ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
                                                 <?php endforeach; ?>
-                                            </select>
-                                        </div>
-                                        <textarea name="baseline_answer[]" rows="3" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
-                                        <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[120px_minmax(0,1fr)]">
-                                            <select name="baseline_sentiment[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm">
-                                                <option value="positive">正面</option>
-                                                <option value="neutral" selected>中性</option>
-                                                <option value="negative">负面</option>
-                                            </select>
-                                            <input name="baseline_keywords[]" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm" placeholder="关键词：优势、价格、案例、竞品等">
-                                        </div>
+                                        </select>
+                                        <textarea name="baseline_answer[]" rows="2" class="block min-h-[42px] w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
+                                        <select name="baseline_sentiment[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm">
+                                            <option value="positive">正面</option>
+                                            <option value="neutral" selected>中性</option>
+                                            <option value="negative">负面</option>
+                                        </select>
+                                        <input name="baseline_keywords[]" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm" placeholder="优势、价格、案例">
                                     </div>
                                 <?php endforeach; ?>
+                                </div>
                             </div>
                         </details>
                         <button type="submit" class="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
@@ -258,7 +268,7 @@ require_once __DIR__ . '/includes/header.php';
                     </form>
                 </section>
 
-                <section class="rounded-lg border border-gray-200 bg-white shadow-sm xl:col-span-2">
+                <section class="rounded-lg border border-gray-200 bg-white shadow-sm xl:col-span-3">
                     <div class="flex flex-col gap-2 border-b border-gray-200 px-6 py-4 md:flex-row md:items-center md:justify-between">
                         <div>
                             <h2 class="text-lg font-semibold text-gray-900">诊断报告</h2>
