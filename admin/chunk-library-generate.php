@@ -113,7 +113,7 @@ function chunk_asset_normalize_list($items, string $key, int $limit): array {
 function chunk_asset_fetch_context(PDO $db, int $knowledgeBaseId, string $intent, int $limit = 12): array {
     $query = trim($intent);
     if ($query === '') {
-        $query = '客户真实问题 购买决策 价格 对比 方案 痛点 案例 FAQ 行业信任';
+        $query = '根据知识库内容自动识别客户最可能提问的问题 购买决策 痛点 对比 价格 成本 方案 适用场景 实施风险 案例 FAQ 行业信任';
     }
 
     $retrieved = knowledge_retrieval_fetch_context($db, $knowledgeBaseId, $query, $limit, 9000);
@@ -268,16 +268,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('这个知识库还没有可用 chunk，请先在知识库里更新切片/向量化。');
         }
 
-        $systemPrompt = '你是 GEO+AI 内容策略师。你只能基于给定知识片段生成关键词和标题，不得编造资料。目标是把向量化知识库里的 chunk 转成最贴近客户真实提问、购买决策和 AI 可引用语境的关键词库与标题库。只输出严格 JSON。';
+        $intentInstruction = $intent !== ''
+            ? "用户补充的问题方向：{$intent}\n请以这个方向为优先，但仍然必须受知识片段约束。"
+            : "用户没有提供问题方向。请你先根据这些知识片段自动判断：目标客户最可能关心什么、会怎么问、购买前会比较什么、会担心什么。";
+
+        $systemPrompt = '你是 GEO+AI 内容策略师。你只能基于给定知识片段生成关键词和标题，不得编造资料。你的第一步是从 chunk 里归纳客户最可能问的问题方向；第二步才把这些方向转成关键词库和标题库。输出必须是严格 JSON。';
         $userPrompt = <<<PROMPT
 知识库名称：{$knowledgeBase['name']}
-客户/业务意图补充：{$intent}
+{$intentInstruction}
 
 下面是从已切割/向量化知识库中召回的 chunk。请把它们转化成素材库：
 {$context}
 
 请输出严格 JSON，格式如下：
 {
+  "question_directions": [
+    {"question": "客户最可能问的问题方向", "reason": "为什么这些 chunk 支持这个方向", "source": "对应知识片段编号"}
+  ],
   "keywords": [
     {"keyword": "短关键词或长尾问法", "intent": "客户为什么会搜/问它", "source": "对应知识片段编号"}
   ],
@@ -287,6 +294,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 生成要求：
+0. 如果用户没有提供问题方向，必须先根据 chunk 自动归纳 8-12 个 question_directions。
 1. keywords 生成 {$keywordCount} 条，优先覆盖：购买决策、痛点、对比、价格/成本、方案选型、案例、FAQ、行业信任、风险疑虑。
 2. titles 生成 {$titleCount} 条，要像客户真的会问的问题或会点击的解决方案标题，不要空泛营销标题。
 3. 每条都必须能追溯到 chunk，不要写知识片段里没有依据的事实。
@@ -302,6 +310,7 @@ PROMPT;
 
         $keywords = chunk_asset_normalize_list($decoded['keywords'] ?? [], 'keyword', $keywordCount);
         $titles = chunk_asset_normalize_list($decoded['titles'] ?? [], 'title', $titleCount);
+        $questionDirections = chunk_asset_normalize_list($decoded['question_directions'] ?? [], 'question', 12);
         if (empty($keywords) || empty($titles)) {
             throw new RuntimeException('AI 返回的关键词或标题为空，请换一个模型或补充业务意图后重试。');
         }
@@ -310,6 +319,7 @@ PROMPT;
         $generated = [
             'keywords' => $keywords,
             'titles' => $titles,
+            'question_directions' => $questionDirections,
             'chunks' => $contextPack['chunks'] ?? [],
             'keyword_library_id' => $saveResult['keyword_library_id'],
             'title_library_id' => $saveResult['title_library_id'],
@@ -328,7 +338,7 @@ require_once __DIR__ . '/includes/header.php';
         <div>
             <h1 class="text-3xl font-bold text-gray-900">从知识 Chunk 生成素材库</h1>
             <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-600">
-                先从已切割/向量化的知识库召回相关 chunk，再用专门 prompt 生成贴近客户真实提问的关键词库和标题库。
+                先从已切割/向量化的知识库召回相关 chunk，再让 API 自动判断客户最可能问什么，并生成贴近真实提问的关键词库和标题库。
             </p>
         </div>
         <a href="<?php echo htmlspecialchars(admin_url('materials.php')); ?>" class="inline-flex h-10 w-fit items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 hover:bg-gray-50">
@@ -347,7 +357,7 @@ require_once __DIR__ . '/includes/header.php';
     <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
         <div class="border-b border-gray-100 px-6 py-5">
             <h2 class="text-xl font-semibold text-gray-900">Chunk → Prompt → 关键词库 / 标题库</h2>
-            <p class="mt-2 text-sm leading-6 text-gray-500">这里不是凭空生成标题，而是把知识库中最相关的 chunk 当成证据，让 AI 归纳客户会问的问题、关键词和标题。</p>
+            <p class="mt-2 text-sm leading-6 text-gray-500">这里不是让你先猜客户想问什么，而是把知识库中最相关的 chunk 当成证据，让 AI 先归纳客户会问的问题，再生成关键词和标题。</p>
         </div>
         <form method="post" class="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_320px]">
             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
@@ -377,8 +387,8 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
 
                 <div>
-                    <label class="mb-1 block text-sm font-semibold text-gray-700">客户想问的问题方向</label>
-                    <textarea name="intent" rows="4" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="例如：客户怎么选这类服务、和竞品区别、价格成本、实施风险、适合什么场景"><?php echo htmlspecialchars((string) ($_POST['intent'] ?? '')); ?></textarea>
+                    <label class="mb-1 block text-sm font-semibold text-gray-700">问题方向补充（可选）</label>
+                    <textarea name="intent" rows="4" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="可以不填。留空时，系统会根据最相关 chunk 自动判断客户最可能问什么。"><?php echo htmlspecialchars((string) ($_POST['intent'] ?? '')); ?></textarea>
                 </div>
 
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -398,7 +408,7 @@ require_once __DIR__ . '/includes/header.php';
                     <i data-lucide="wand-sparkles" class="h-5 w-5"></i>
                 </div>
                 <h3 class="mt-4 text-base font-semibold text-gray-900">生成逻辑</h3>
-                <p class="mt-2 text-sm leading-6 text-gray-600">系统会先召回最相关 chunk，再要求模型输出可追溯到 chunk 的关键词和标题，生成后直接写入关键词库与标题库。</p>
+                <p class="mt-2 text-sm leading-6 text-gray-600">系统会先召回最相关 chunk，再让模型自动推断客户问题方向，并输出可追溯到 chunk 的关键词和标题。</p>
                 <button type="submit" class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
                     <i data-lucide="sparkles" class="mr-2 h-4 w-4"></i>
                     从 Chunk 生成素材
@@ -408,6 +418,17 @@ require_once __DIR__ . '/includes/header.php';
     </section>
 
     <?php if ($generated): ?>
+        <?php if (!empty($generated['question_directions'])): ?>
+            <section class="mb-5 rounded-lg bg-white p-5 shadow-sm ring-1 ring-gray-200">
+                <h2 class="text-lg font-semibold text-gray-900">AI 从 Chunk 归纳出的客户问题方向</h2>
+                <div class="mt-4 flex flex-wrap gap-2">
+                    <?php foreach ($generated['question_directions'] as $question): ?>
+                        <span class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700"><?php echo htmlspecialchars($question); ?></span>
+                    <?php endforeach; ?>
+                </div>
+            </section>
+        <?php endif; ?>
+
         <section class="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <div class="rounded-lg bg-white p-5 shadow-sm ring-1 ring-gray-200">
                 <div class="flex items-center justify-between">
