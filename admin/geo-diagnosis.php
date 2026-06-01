@@ -10,6 +10,7 @@ require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
 require_once __DIR__ . '/../includes/geo_diagnosis_service.php';
+require_once __DIR__ . '/../includes/geo_baseline_qa_service.php';
 
 require_admin_login();
 
@@ -37,6 +38,13 @@ try {
             $scores = is_array($_POST['scores'] ?? null) ? $_POST['scores'] : [];
             geo_diagnosis_update_weights($db, $diagnosisId, $weights, $scores);
             admin_redirect('geo-diagnosis.php?id=' . urlencode($diagnosisId));
+        } elseif ($action === 'save_baseline_qa') {
+            $diagnosisId = trim((string) ($_POST['diagnosis_id'] ?? ''));
+            $baselineBrand = clean_input($_POST['brand_name'] ?? '');
+            $baselineCustomer = clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? ''));
+            $savedCount = geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, $baselineCustomer, $baselineBrand, $_POST);
+            $message = '问答基准线已保存 ' . $savedCount . ' 条，并同步为监测关键词';
+            $selectedId = $diagnosisId;
         } else {
             $diagnosisId = geo_diagnosis_create($db, [
                 'brand_name'  => clean_input($_POST['brand_name'] ?? ''),
@@ -46,6 +54,7 @@ try {
                 'evidence'    => trim((string) ($_POST['evidence'] ?? '')),
                 'customer_id' => clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? '')),
             ]);
+            geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? '')), clean_input($_POST['brand_name'] ?? ''), $_POST);
             admin_redirect('geo-diagnosis.php?id=' . urlencode($diagnosisId));
         }
     }
@@ -58,6 +67,9 @@ $dataSourceConfig = geo_diagnosis_data_source_config();
 $currentReport = geo_diagnosis_latest($db, $selectedId);
 $recentReports = geo_diagnosis_recent($db);
 $industries = geo_diagnosis_industries();
+$baselinePlatforms = geo_baseline_qa_platforms();
+$currentBaselineRows = $currentReport ? geo_baseline_qa_for_diagnosis($db, (string) $currentReport['id']) : [];
+$defaultBaselineQuestions = geo_baseline_qa_default_questions('', '');
 $page_title = '雷达诊断';
 
 // 拉取当前客户的真实监测缺口数据
@@ -177,9 +189,10 @@ require_once __DIR__ . '/includes/header.php';
                     <div class="border-b border-gray-200 px-6 py-4">
                         <h2 class="text-lg font-semibold text-gray-900">新建诊断</h2>
                     </div>
-                    <form method="POST" class="space-y-5 px-6 py-6">
+                    <form method="POST" class="space-y-5 px-6 py-6" id="diagnosis-create-form">
                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
                         <input type="hidden" name="action" value="create_diagnosis">
+                        <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars((string) ($current_customer_context['customer_id'] ?? '')); ?>">
                         <div>
                             <label class="mb-2 block text-sm font-medium text-gray-700" for="brand-name">品牌名称</label>
                             <input id="brand-name" name="brand_name" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="董逻辑">
@@ -204,6 +217,40 @@ require_once __DIR__ . '/includes/header.php';
                             <label class="mb-2 block text-sm font-medium text-gray-700" for="evidence">已知资料</label>
                             <textarea id="evidence" name="evidence" rows="5" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="可粘贴官网简介、媒体报道、平台账号、客户案例、数据点、备案/联系方式等。资料越完整，诊断越接近真实状态。"></textarea>
                         </div>
+                        <details class="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-4" open>
+                            <summary class="cursor-pointer list-none">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div class="text-sm font-semibold text-gray-900">首次 AI 问答基准线</div>
+                                        <div class="mt-1 text-xs text-gray-500">手动向大模型提问后，把问题和原始答案粘贴到这里。保存后会自动进入 GEO 监测复测队列。</div>
+                                    </div>
+                                    <span class="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-blue-700">建议 10 条</span>
+                                </div>
+                            </summary>
+                            <div class="mt-4 space-y-3">
+                                <?php foreach ($defaultBaselineQuestions as $idx => $question): ?>
+                                    <div class="rounded-md border border-blue-100 bg-white p-3">
+                                        <div class="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
+                                            <input name="baseline_question[]" type="text" data-baseline-index="<?php echo (int) $idx; ?>" data-auto-baseline="1" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" value="<?php echo htmlspecialchars($question); ?>">
+                                            <select name="baseline_platform[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                                <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
+                                                    <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo $platformKey === 'deepseek' ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <textarea name="baseline_answer[]" rows="3" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
+                                        <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[120px_minmax(0,1fr)]">
+                                            <select name="baseline_sentiment[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm">
+                                                <option value="positive">正面</option>
+                                                <option value="neutral" selected>中性</option>
+                                                <option value="negative">负面</option>
+                                            </select>
+                                            <input name="baseline_keywords[]" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm" placeholder="关键词：优势、价格、案例、竞品等">
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </details>
                         <button type="submit" class="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
                             <i data-lucide="radar" class="mr-2 h-4 w-4"></i>
                             生成雷达诊断
@@ -425,6 +472,102 @@ require_once __DIR__ . '/includes/header.php';
                     <?php endif; ?>
 	                </section>
 	            </div>
+
+            <?php if ($currentReport): ?>
+                <?php
+                $baselineEditRows = $currentBaselineRows;
+                if (empty($baselineEditRows)) {
+                    $questionsForCurrentBrand = geo_baseline_qa_default_questions((string) $currentReport['brand_name'], (string) $currentReport['industry']);
+                    $baselineEditRows = array_map(static function ($question, $index) {
+                        return [
+                            'question' => $question,
+                            'platform' => 'deepseek',
+                            'baseline_answer' => '',
+                            'sentiment' => 'neutral',
+                            'keywords' => '',
+                            'sort_order' => $index + 1,
+                        ];
+                    }, $questionsForCurrentBrand, array_keys($questionsForCurrentBrand));
+                }
+                $baselineMentionCount = 0;
+                foreach ($currentBaselineRows as $baselineRow) {
+                    if (!empty($baselineRow['mention_brand'])) {
+                        $baselineMentionCount++;
+                    }
+                }
+                ?>
+                <section class="mt-6 rounded-lg border border-blue-200 bg-white shadow-sm">
+                    <div class="border-b border-blue-100 bg-blue-50 px-6 py-4">
+                        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                            <div>
+                                <h2 class="text-lg font-semibold text-gray-900">首次 AI 问答基准线</h2>
+                                <p class="mt-1 text-sm text-gray-600">这组问题会同步到 GEO 监测，后续复测直接和首次答案对比。</p>
+                            </div>
+                            <div class="flex flex-wrap gap-2 text-xs font-semibold">
+                                <span class="rounded-full bg-white px-3 py-1 text-blue-700">已保存 <?php echo count($currentBaselineRows); ?> 条</span>
+                                <span class="rounded-full bg-white px-3 py-1 text-gray-700">首次提及 <?php echo $baselineMentionCount; ?> 条</span>
+                                <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="rounded-full bg-slate-900 px-3 py-1 text-white">去监测追踪</a>
+                            </div>
+                        </div>
+                    </div>
+                    <form method="POST" class="px-6 py-6">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                        <input type="hidden" name="action" value="save_baseline_qa">
+                        <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
+                        <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars((string) $currentReport['brand_name']); ?>">
+                        <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars((string) ($current_customer_context['customer_id'] ?? '')); ?>">
+                        <div class="overflow-x-auto rounded-lg border border-gray-200">
+                            <table class="min-w-[980px] w-full divide-y divide-gray-200 text-sm">
+                                <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                                    <tr>
+                                        <th class="px-4 py-3">问题</th>
+                                        <th class="px-4 py-3">平台</th>
+                                        <th class="px-4 py-3">首次答案</th>
+                                        <th class="px-4 py-3">情绪</th>
+                                        <th class="px-4 py-3">关键词</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-200 bg-white">
+                                    <?php foreach ($baselineEditRows as $row): ?>
+                                        <tr>
+                                            <td class="px-4 py-3 align-top">
+                                                <input name="baseline_question[]" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" value="<?php echo htmlspecialchars((string) ($row['question'] ?? '')); ?>">
+                                            </td>
+                                            <td class="px-4 py-3 align-top">
+                                                <select name="baseline_platform[]" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                                                    <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
+                                                        <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo (string) ($row['platform'] ?? '') === $platformKey ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </td>
+                                            <td class="px-4 py-3 align-top">
+                                                <textarea name="baseline_answer[]" rows="3" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"><?php echo htmlspecialchars((string) ($row['baseline_answer'] ?? '')); ?></textarea>
+                                            </td>
+                                            <td class="px-4 py-3 align-top">
+                                                <select name="baseline_sentiment[]" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+                                                    <?php foreach (['positive' => '正面', 'neutral' => '中性', 'negative' => '负面'] as $sentimentKey => $sentimentLabel): ?>
+                                                        <option value="<?php echo htmlspecialchars($sentimentKey); ?>" <?php echo (string) ($row['sentiment'] ?? 'neutral') === $sentimentKey ? 'selected' : ''; ?>><?php echo htmlspecialchars($sentimentLabel); ?></option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </td>
+                                            <td class="px-4 py-3 align-top">
+                                                <input name="baseline_keywords[]" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" value="<?php echo htmlspecialchars((string) ($row['keywords'] ?? '')); ?>">
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <p class="text-sm text-gray-500">保存后，这些问题会作为客户监测关键词，监测页的“基准线追踪”会展示最新答案变化。</p>
+                            <button type="submit" class="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
+                                <i data-lucide="save" class="mr-2 h-4 w-4"></i>
+                                保存基准线
+                            </button>
+                        </div>
+                    </form>
+                </section>
+            <?php endif; ?>
 
             <?php if (!empty($monitorGapData)): ?>
                 <section class="mt-6 rounded-lg border border-blue-200 bg-white shadow-sm">
@@ -801,6 +944,47 @@ require_once __DIR__ . '/includes/header.php';
 	                    })();
 	                </script>
             <?php endif; ?>
+            <script>
+                (() => {
+                    const createForm = document.getElementById('diagnosis-create-form');
+                    if (!createForm) return;
+                    const brandInput = document.getElementById('brand-name');
+                    const industryInput = document.getElementById('brand-industry');
+                    const questionInputs = Array.from(createForm.querySelectorAll('input[name="baseline_question[]"][data-baseline-index]'));
+                    const buildQuestions = () => {
+                        const brand = (brandInput?.value || '').trim() || '这个品牌';
+                        const industry = (industryInput?.value || '').trim() || '这个行业';
+                        return [
+                            `${brand}是什么品牌？`,
+                            `${brand}主要提供什么服务？`,
+                            `${brand}适合哪些客户选择？`,
+                            `${brand}在${industry}里有什么优势？`,
+                            `${brand}和同类竞品相比怎么样？`,
+                            `${brand}有没有真实案例或客户评价？`,
+                            `${brand}值得信任吗？`,
+                            `推荐几个${industry}服务商，${brand}会被提到吗？`,
+                            `选择${industry}服务商时要看哪些标准？`,
+                            `${brand}有哪些需要注意的地方？`,
+                        ];
+                    };
+                    const refreshQuestions = () => {
+                        const questions = buildQuestions();
+                        questionInputs.forEach((input) => {
+                            if (input.dataset.autoBaseline !== '1') return;
+                            const index = Number(input.dataset.baselineIndex || 0);
+                            input.value = questions[index] || input.value;
+                        });
+                    };
+                    questionInputs.forEach((input) => {
+                        input.addEventListener('input', () => {
+                            input.dataset.autoBaseline = '0';
+                        });
+                    });
+                    brandInput?.addEventListener('input', refreshQuestions);
+                    industryInput?.addEventListener('change', refreshQuestions);
+                    refreshQuestions();
+                })();
+            </script>
 <?php
 require_once __DIR__ . '/includes/footer.php';
 ?>

@@ -10,6 +10,7 @@ require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
 require_once __DIR__ . '/../includes/geo_monitor_alert_service.php';
+require_once __DIR__ . '/../includes/geo_baseline_qa_service.php';
 
 require_admin_login();
 
@@ -54,6 +55,10 @@ $page_header = '
 // --- 从 geo_monitor_records 读真实数据 ---
 $customerId  = $currentCustomer['id'] ?? 'default';
 $customerSeed = abs(crc32($customerId));
+$baselineTracking = geo_baseline_qa_tracking($db, $customerId);
+$baselineRows = $baselineTracking['rows'];
+$baselineSummary = $baselineTracking['summary'];
+$baselinePlatforms = geo_baseline_qa_platforms();
 
 // 真实监测数据：最近 90 天
 $realMonitorData = ['total' => 0, 'mentioned' => 0, 'records' => [], 'by_date' => []];
@@ -666,6 +671,29 @@ require_once __DIR__ . '/includes/header.php';
         </div>
     </section>
 
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-4">
+        <div class="rounded-xl border border-blue-200 bg-blue-50 p-5 shadow-sm">
+            <p class="text-sm font-semibold text-blue-700">问答基准线</p>
+            <div class="mt-2 text-3xl font-bold text-gray-900"><?php echo (int) $baselineSummary['total']; ?> 条</div>
+            <p class="mt-1 text-xs text-blue-700">来自雷达诊断首次人工问答</p>
+        </div>
+        <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <p class="text-sm font-semibold text-gray-500">已复测</p>
+            <div class="mt-2 text-3xl font-bold text-gray-900"><?php echo (int) $baselineSummary['retested']; ?> 条</div>
+            <p class="mt-1 text-xs text-gray-400">同问题同平台已有新答案</p>
+        </div>
+        <div class="rounded-xl border <?php echo (int) $baselineSummary['changed'] > 0 ? 'border-amber-200 bg-amber-50' : 'border-gray-200 bg-white'; ?> p-5 shadow-sm">
+            <p class="text-sm font-semibold <?php echo (int) $baselineSummary['changed'] > 0 ? 'text-amber-700' : 'text-gray-500'; ?>">答案变化</p>
+            <div class="mt-2 text-3xl font-bold text-gray-900"><?php echo (int) $baselineSummary['changed']; ?> 条</div>
+            <p class="mt-1 text-xs <?php echo (int) $baselineSummary['changed'] > 0 ? 'text-amber-700' : 'text-gray-400'; ?>">语义相似度低或品牌提及状态变化</p>
+        </div>
+        <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <p class="text-sm font-semibold text-gray-500">待复测</p>
+            <div class="mt-2 text-3xl font-bold text-gray-900"><?php echo (int) $baselineSummary['missing']; ?> 条</div>
+            <p class="mt-1 text-xs text-gray-400">等待监测脚本写入结果</p>
+        </div>
+    </section>
+
     <?php
     // 6 个平台的展示配置（供 platforms tab 面板使用）
     $platformDisplay = [
@@ -686,6 +714,7 @@ require_once __DIR__ . '/includes/header.php';
             <div class="flex flex-wrap gap-2" role="tablist" aria-label="GEO监测视图">
                 <?php
                 $monitorTabs = [
+                    'baseline'     => ['label' => '基准线追踪' . ((int) $baselineSummary['changed'] > 0 ? ' <span class="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white">' . (int) $baselineSummary['changed'] . '</span>' : ''), 'desc' => '首次答案 vs 最新答案'],
                     'coverage'     => ['label' => '内容收录',     'desc' => '关键词监测列表与生命周期'],
                     'trend'        => ['label' => '引用趋势',     'desc' => '提及率随时间变化曲线'],
                     'competitors'  => ['label' => '竞品对标',     'desc' => '品牌 vs 竞品被引用对比'],
@@ -695,7 +724,7 @@ require_once __DIR__ . '/includes/header.php';
                     'articles'     => ['label' => '文章采信率' . (!empty($articleAdoption) ? ' <span class="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500 text-[10px] font-bold text-white">' . count($articleAdoption) . '</span>' : ''), 'desc' => '已发布文章被AI引用次数'],
                 ];
                 foreach ($monitorTabs as $key => $tab):
-                    $isActive = $key === 'coverage';
+                    $isActive = $key === 'baseline';
                 ?>
                     <button type="button" data-monitor-tab="<?php echo htmlspecialchars($key, ENT_QUOTES, 'UTF-8'); ?>"
                         class="monitor-tab rounded-lg px-4 py-2.5 text-left <?php echo $isActive ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-100'; ?>">
@@ -704,6 +733,90 @@ require_once __DIR__ . '/includes/header.php';
                     </button>
                 <?php endforeach; ?>
             </div>
+        </div>
+
+        <div data-monitor-panel="baseline" class="monitor-panel p-6">
+            <?php if (empty($baselineRows)): ?>
+                <div class="rounded-xl border border-blue-200 bg-blue-50 p-8 text-center">
+                    <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white text-blue-600">
+                        <i data-lucide="radar" class="h-6 w-6"></i>
+                    </div>
+                    <h3 class="mt-4 text-lg font-bold text-gray-900">还没有问答基准线</h3>
+                    <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-gray-600">先到雷达诊断录入第一次手动问大模型得到的问题和答案，系统会把这些问题同步到监测队列。</p>
+                    <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php')); ?>" class="mt-5 inline-flex items-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
+                        <i data-lucide="plus" class="mr-2 h-4 w-4"></i>建立基准线
+                    </a>
+                </div>
+            <?php else: ?>
+                <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-900">首次答案变化检测</h3>
+                        <p class="mt-1 text-sm text-gray-500">按“同问题 + 同平台”匹配最新监测记录，用来判断品牌认知是否偏离首次人工标准答案。</p>
+                    </div>
+                    <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php')); ?>" class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                        <i data-lucide="edit-3" class="mr-2 h-4 w-4"></i>维护基准线
+                    </a>
+                </div>
+                <div class="space-y-4">
+                    <?php foreach ($baselineRows as $row): ?>
+                        <?php
+                        $platformLabel = $baselinePlatforms[(string) ($row['platform'] ?? '')] ?? (string) ($row['platform'] ?? '');
+                        $statusClass = 'border-gray-200 bg-white';
+                        $statusText = '待复测';
+                        if (!empty($row['has_current'])) {
+                            if (!empty($row['mention_changed']) || !empty($row['semantic_changed'])) {
+                                $statusClass = 'border-amber-200 bg-amber-50';
+                                $statusText = '有变化';
+                            } else {
+                                $statusClass = 'border-emerald-200 bg-emerald-50';
+                                $statusText = '稳定';
+                            }
+                        }
+                        ?>
+                        <article class="rounded-xl border <?php echo $statusClass; ?> p-5">
+                            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                <div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-gray-700"><?php echo htmlspecialchars($platformLabel, ENT_QUOTES, 'UTF-8'); ?></span>
+                                        <span class="rounded-full bg-white px-2.5 py-1 text-xs font-bold <?php echo $statusText === '有变化' ? 'text-amber-700' : ($statusText === '稳定' ? 'text-emerald-700' : 'text-gray-500'); ?>"><?php echo $statusText; ?></span>
+                                        <?php if ($row['similarity'] !== null): ?>
+                                            <span class="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-gray-700">相似度 <?php echo htmlspecialchars((string) $row['similarity'], ENT_QUOTES, 'UTF-8'); ?>%</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <h4 class="mt-3 text-base font-bold text-gray-900"><?php echo htmlspecialchars((string) $row['question'], ENT_QUOTES, 'UTF-8'); ?></h4>
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                    <?php echo !empty($row['queried_at']) ? '最新复测：' . htmlspecialchars((string) $row['queried_at'], ENT_QUOTES, 'UTF-8') : '尚未复测'; ?>
+                                </div>
+                            </div>
+                            <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                                <div class="rounded-lg bg-white/80 p-4">
+                                    <div class="mb-2 flex items-center justify-between gap-2">
+                                        <span class="text-sm font-semibold text-gray-700">首次人工答案</span>
+                                        <span class="text-xs <?php echo !empty($row['mention_brand']) ? 'text-blue-700' : 'text-gray-400'; ?>"><?php echo !empty($row['mention_brand']) ? '提及品牌' : '未提及品牌'; ?></span>
+                                    </div>
+                                    <p class="max-h-40 overflow-auto whitespace-pre-wrap text-sm leading-6 text-gray-700"><?php echo htmlspecialchars((string) ($row['baseline_answer'] ?: '未填写首次答案'), ENT_QUOTES, 'UTF-8'); ?></p>
+                                </div>
+                                <div class="rounded-lg bg-white/80 p-4">
+                                    <div class="mb-2 flex items-center justify-between gap-2">
+                                        <span class="text-sm font-semibold text-gray-700">最新监测答案</span>
+                                        <?php if (!empty($row['has_current'])): ?>
+                                            <span class="text-xs <?php echo !empty($row['current_mention']) ? 'text-blue-700' : 'text-gray-400'; ?>"><?php echo !empty($row['current_mention']) ? '提及品牌' : '未提及品牌'; ?></span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <p class="max-h-40 overflow-auto whitespace-pre-wrap text-sm leading-6 text-gray-700"><?php echo htmlspecialchars((string) ($row['current_answer'] ?: '等待 GEO 监测运行后生成最新答案'), ENT_QUOTES, 'UTF-8'); ?></p>
+                                </div>
+                            </div>
+                            <?php if (!empty($row['mention_changed']) || !empty($row['semantic_changed'])): ?>
+                                <div class="mt-4 rounded-lg bg-white/80 p-3 text-sm text-amber-800">
+                                    <span class="font-semibold">建议处理：</span>
+                                    <?php echo !empty($row['mention_changed']) ? '品牌提及状态发生变化，优先检查该问题对应的内容和信源。' : '答案语义偏离首次标准答案，建议补充可引用的品牌事实页、案例和第三方内容。'; ?>
+                                </div>
+                            <?php endif; ?>
+                        </article>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
         </div>
 
         <div data-monitor-panel="trend" class="monitor-panel hidden p-6">
@@ -736,7 +849,7 @@ require_once __DIR__ . '/includes/header.php';
             </div>
         </div>
 
-        <div data-monitor-panel="coverage" class="monitor-panel p-6">
+        <div data-monitor-panel="coverage" class="monitor-panel hidden p-6">
             <?php if (empty($kwLifecycle)): ?>
                 <div class="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center">
                     <p class="font-semibold text-amber-800">暂未监测到任何关键词</p>
