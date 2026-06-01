@@ -12,8 +12,6 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
 require_admin_login();
 
-admin_redirect('dashboard.php#automation-flow');
-
 session_write_close();
 
 $automationMediaAccounts = [];

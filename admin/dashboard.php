@@ -265,110 +265,161 @@ try {
 $quick_start_steps = [
     [
         'no' => '1',
-        'title' => '接入客户与品牌资料',
-        'desc' => '先建立客户上下文，把行业、竞品、目标关键词、知识库和素材库沉淀为可复用资产。',
-        'icon' => 'building-2',
-        'link' => 'customers.php',
-        'button' => '进入客户中心',
+        'title' => '配置 API',
+        'desc' => '添加至少一个可用的聊天模型；如果需要知识库 RAG 召回，再配置一个 embedding 模型。',
+        'icon' => 'plug',
+        'link' => 'ai-configurator.php',
+        'button' => '配置 AI 模型',
         'tone' => 'blue',
     ],
     [
         'no' => '2',
-        'title' => '跑诊断与策略路线',
-        'desc' => '用雷达诊断、引用模拟和 AI 偏好对照表确认短板、机会词和平台优先级。',
-        'icon' => 'radar',
-        'link' => 'geo-diagnosis.php',
-        'button' => '开始诊断',
+        'title' => '配置素材库',
+        'desc' => '把真实、可靠的业务资料沉淀为素材库，任务生成时优先使用这些内容。',
+        'icon' => 'database',
+        'link' => 'materials.php',
+        'chips' => [
+            ['label' => '知识库', 'link' => 'knowledge-bases.php', 'class' => 'border-orange-100 bg-orange-50 text-orange-700 hover:bg-orange-100'],
+            ['label' => '标题库', 'link' => 'chunk-library-generate.php?focus=titles', 'class' => 'border-green-100 bg-green-50 text-green-700 hover:bg-green-100'],
+            ['label' => '关键词库', 'link' => 'chunk-library-generate.php?focus=keywords', 'class' => 'border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100'],
+            ['label' => '图片库', 'link' => 'image-libraries.php', 'class' => 'border-purple-100 bg-purple-50 text-purple-700 hover:bg-purple-100'],
+            ['label' => '作者', 'link' => 'authors.php', 'class' => 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'],
+        ],
         'tone' => 'emerald',
     ],
     [
         'no' => '3',
-        'title' => '一键启动自动交付',
-        'desc' => '从入驻自动化直接串起资料整理、策略生成、内容任务、分发与监测，不用每步手动切页面。',
-        'icon' => 'play',
-        'link' => 'dashboard.php#automation-flow',
-        'button' => '一键运行',
+        'title' => '新建任务',
+        'desc' => '选择标题库、素材和模型，设置生成数量与发布频率，系统自动生成并发布内容。',
+        'icon' => 'plus',
+        'link' => 'tasks.php',
+        'button' => '新建任务',
         'tone' => 'slate',
-        'action' => 'start_automation',
     ],
 ];
 
 $automation_nodes = [
     [
-        'title' => '客户上下文',
-        'desc' => '客户档案、行业边界、竞品与目标 AI 场景',
-        'icon' => 'users',
-        'link' => 'customers.php',
-        'status' => $active_customers > 0 ? 'ready' : 'attention',
-        'meta' => $active_customers . ' 个活跃客户',
-        'tone' => 'blue',
+        'title' => 'S1 配置 API 与模型',
+        'desc' => '先配置可用 Chat 模型和 Embedding 模型',
+        'icon' => 'cpu',
+        'link' => 'ai-configurator.php',
+        'status' => 'attention',
+        'meta' => '人工配置',
+        'tone' => 'orange',
     ],
     [
-        'title' => '诊断 / 模拟',
-        'desc' => '雷达分、引用现状、机会词和短板报告',
-        'icon' => 'scan-search',
+        'title' => 'S2 上传内容资产',
+        'desc' => '上传业务资料、案例、FAQ、产品文档和素材',
+        'icon' => 'folder-up',
+        'link' => 'materials.php',
+        'status' => 'attention',
+        'meta' => '素材入库',
+        'tone' => 'orange',
+    ],
+    [
+        'title' => 'S3 内容切割与向量化',
+        'desc' => '按结构化规则切片，并写入 Embedding 向量',
+        'icon' => 'scissors',
+        'link' => 'materials.php',
+        'status' => 'attention',
+        'meta' => '知识库中枢',
+        'tone' => 'orange',
+    ],
+    [
+        'title' => 'S4 补齐关键词/标题库',
+        'desc' => '准备关键词库、标题库、图片库和作者资料',
+        'icon' => 'library',
+        'link' => 'materials.php',
+        'status' => 'attention',
+        'meta' => '人工校准',
+        'tone' => 'orange',
+    ],
+    [
+        'title' => 'S5 填写基准问答',
+        'desc' => '手动跑首次 AI 问答采样，补录问题和原始答案',
+        'icon' => 'message-square-text',
+        'link' => 'geo-diagnosis.php',
+        'status' => 'attention',
+        'meta' => '人工采样',
+        'tone' => 'orange',
+    ],
+    [
+        'title' => 'S6 确认雷达诊断',
+        'desc' => '基于知识库和基准问答确认六维评分',
+        'icon' => 'radar',
         'link' => 'geo-diagnosis.php',
         'status' => $geo_tool_stats['total_diagnoses'] > 0 ? 'ready' : 'attention',
         'meta' => ($geo_tool_stats['total_diagnoses'] ?: '待跑') . ' 次诊断',
         'tone' => 'violet',
     ],
     [
-        'title' => '策略 SOP',
-        'desc' => '90 天路线图、平台组合、主题矩阵和负责人',
-        'icon' => 'book-open-check',
-        'link' => 'sop-center.php',
-        'status' => $stage_counts['strategy'] > 0 ? 'running' : 'ready',
-        'meta' => $stage_counts['strategy'] . ' 个策略中',
+        'title' => 'S7 生成知识图谱',
+        'desc' => '从已向量化知识库中抽取可引用事实条目',
+        'icon' => 'network',
+        'link' => 'materials.php',
+        'status' => 'ready',
+        'meta' => '事实条目',
         'tone' => 'emerald',
     ],
     [
-        'title' => '一键执行',
-        'desc' => '品牌入驻自动化统一拉起任务、内容、分发和状态回写',
-        'icon' => 'workflow',
-        'link' => 'dashboard.php#automation-flow',
-        'status' => 'running',
-        'meta' => $doing_customers . ' 个交付中',
-        'tone' => 'blue',
-        'primary' => true,
-        'action' => 'start_automation',
+        'title' => 'S8 意图挖掘',
+        'desc' => '基于客户资料和知识库发现真实问题空白',
+        'icon' => 'crosshair',
+        'link' => 'geo-diagnosis.php',
+        'status' => 'ready',
+        'meta' => '问题空白',
+        'tone' => 'violet',
     ],
     [
-        'title' => '内容生产',
-        'desc' => '事实密度内容、问答稿、作者与知识库引用',
-        'icon' => 'file-pen-line',
+        'title' => 'S9 创建并启动任务',
+        'desc' => '选择知识库、标题库、模型、数量和发布范围',
+        'icon' => 'zap',
+        'link' => 'tasks.php',
+        'status' => $doing_customers > 0 ? 'running' : 'ready',
+        'meta' => $doing_customers . ' 个交付中',
+        'tone' => 'emerald',
+    ],
+    [
+        'title' => 'S10 首篇文章生成',
+        'desc' => '使用向量召回资料生成首篇内容，剩余后台继续',
+        'icon' => 'file-text',
         'link' => 'articles.php',
         'status' => $stage_counts['execute'] > 0 ? 'running' : 'ready',
-        'meta' => $stage_counts['execute'] . ' 个执行中',
+        'meta' => '内容生产',
         'tone' => 'emerald',
     ],
     [
-        'title' => '媒体分发',
-        'desc' => '站点包、渠道队列、远端同步与发布回调',
-        'icon' => 'radio-tower',
+        'title' => 'S11 启动媒体分发',
+        'desc' => '按渠道配置发布文章，自动发布或生成待办',
+        'icon' => 'send',
         'link' => 'distribution.php',
         'status' => 'ready',
-        'meta' => '可远程同步',
+        'meta' => '媒体分发',
         'tone' => 'orange',
     ],
     [
-        'title' => 'AI 监测',
-        'desc' => '关键词引用率、竞品变化、告警与月度复盘',
+        'title' => 'S12 启动监测',
+        'desc' => '发布后添加监测关键词，持续跟踪引用变化',
         'icon' => 'activity',
         'link' => 'geo-monitor.php',
-        'status' => $total_alerts > 0 ? 'attention' : 'ready',
+        'status' => $total_alerts > 0 ? 'attention' : 'running',
         'meta' => $total_alerts . ' 个告警',
         'tone' => 'orange',
     ],
     [
-        'title' => '续费复盘',
-        'desc' => '前后雷达对比、引用提升曲线和下季度动作',
-        'icon' => 'repeat-2',
-        'link' => 'customers.php',
-        'status' => $expiring_soon > 0 ? 'attention' : 'ready',
-        'meta' => $expiring_soon . ' 个临期',
+        'title' => 'S13 生成全景诊断',
+        'desc' => '汇总诊断、内容、分发和监测结果形成复盘',
+        'icon' => 'scan-search',
+        'link' => 'geo-diagnosis.php',
+        'status' => 'ready',
+        'meta' => '全景档案',
         'tone' => 'slate',
     ],
 ];
+
+$automation_running_count = count(array_filter($automation_nodes, fn($node) => ($node['status'] ?? '') === 'running'));
+$automation_attention_count = count(array_filter($automation_nodes, fn($node) => ($node['status'] ?? '') === 'attention'));
 
 $tone_classes = [
     'blue' => 'bg-blue-50 text-blue-700 border-blue-100',
@@ -406,10 +457,10 @@ require_once __DIR__ . '/includes/header.php';
                         <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
                         刷新
                     </button>
-                    <button type="button" onclick="openStartModal()" class="inline-flex h-10 items-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                        <i data-lucide="play" class="mr-2 h-4 w-4"></i>
-                        一键运行
-                    </button>
+                    <a href="<?php echo htmlspecialchars(admin_url('tasks.php')); ?>" class="inline-flex h-10 items-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                        <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
+                        新建任务
+                    </a>
                 </div>
             </div>
 
@@ -417,9 +468,9 @@ require_once __DIR__ . '/includes/header.php';
                 <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <p class="text-xs font-semibold uppercase text-blue-600">快速启动</p>
-                        <h2 class="mt-2 text-xl font-semibold text-gray-900">三步启动 GEO 客户自动交付</h2>
+                        <h2 class="mt-2 text-xl font-semibold text-gray-900">只需三步，启动 GEO+AI 自动内容生产</h2>
                         <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-                            借鉴 GEOFlow 的清晰入口，但这里突出我们的核心差异：不只是建任务，而是把客户入驻、诊断、策略、内容、分发和监测串成可点击执行的交付流。
+                            先接入可用模型，再准备知识库、标题、关键词和图片素材，最后创建任务，即可自动生成内容并按发布节奏上线。
                         </p>
                     </div>
                     <span class="inline-flex w-fit items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
@@ -441,10 +492,20 @@ require_once __DIR__ . '/includes/header.php';
                                         <h3 class="text-base font-semibold text-gray-900"><?php echo htmlspecialchars($step['title']); ?></h3>
                                     </div>
                                     <p class="mt-2 text-sm leading-6 text-gray-500"><?php echo htmlspecialchars($step['desc']); ?></p>
-                                    <a href="<?php echo htmlspecialchars(admin_url($step['link'])); ?>" <?php echo ($step['action'] ?? '') === 'start_automation' ? 'onclick="openStartModal(); return false;"' : ''; ?> class="mt-4 inline-flex h-9 items-center rounded-lg <?php echo $step['tone'] === 'slate' ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'; ?> px-3 text-sm font-semibold">
-                                        <?php echo htmlspecialchars($step['button']); ?>
-                                        <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4"></i>
-                                    </a>
+                                    <?php if (!empty($step['chips'])): ?>
+                                        <div class="mt-4 flex flex-wrap gap-2">
+                                            <?php foreach ($step['chips'] as $chip): ?>
+                                                <a href="<?php echo htmlspecialchars(admin_url($chip['link'])); ?>" class="rounded-full border px-3 py-1 text-xs font-semibold <?php echo htmlspecialchars($chip['class']); ?>">
+                                                    <?php echo htmlspecialchars($chip['label']); ?>
+                                                </a>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php else: ?>
+                                        <a href="<?php echo htmlspecialchars(admin_url($step['link'])); ?>" class="mt-4 inline-flex h-9 items-center rounded-lg <?php echo $step['tone'] === 'slate' ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'; ?> px-3 text-sm font-semibold">
+                                            <?php echo htmlspecialchars($step['button']); ?>
+                                            <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4"></i>
+                                        </a>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -455,42 +516,31 @@ require_once __DIR__ . '/includes/header.php';
             <section id="automation-flow" class="mb-8 scroll-mt-24 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
                 <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                        <h2 class="text-xl font-semibold text-gray-900">GEO+AI 自动化交付流</h2>
+                        <h2 class="text-xl font-semibold text-gray-900">品牌入驻自动化</h2>
                         <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-500">
-                            系统按客户服务依赖关系串联后台能力：先做客户上下文和诊断，再落策略、内容、分发和监测。节点可点进对应模块，异常节点优先处理。
+                            先完成 API、素材上传、知识切割向量化和基准诊断这些人工准备项，再进入任务、内容、分发、监测和复盘自动化。
                         </p>
                     </div>
                     <div class="flex flex-wrap gap-2">
                         <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
                             <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
-                            <?php echo $doing_customers; ?> 个流程运行中
+                            <?php echo $automation_running_count; ?> 个节点运行中
                         </span>
                         <span class="inline-flex items-center rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
                             <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
-                            <?php echo $total_alerts + $expiring_soon; ?> 项需要关注
+                            <?php echo $automation_attention_count; ?> 项需要关注
                         </span>
                     </div>
                 </div>
                 <div class="p-5">
-                    <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                            <h3 class="text-base font-semibold text-gray-900">自动化流水线</h3>
-                            <p class="mt-1 text-sm leading-6 text-gray-500">从左到右是标准交付路径；“一键执行”是我们的主入口。</p>
-                        </div>
-                        <button type="button" onclick="openStartModal()" class="inline-flex h-9 w-fit items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                            <i data-lucide="settings-2" class="mr-2 h-4 w-4"></i>
-                            自动化设置
-                        </button>
-                    </div>
                     <div class="relative grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                         <div class="pointer-events-none absolute left-[8%] right-[8%] top-[42px] hidden h-0.5 bg-gradient-to-r from-blue-200 via-emerald-200 to-orange-200 xl:block"></div>
                         <?php foreach ($automation_nodes as $node): ?>
                             <?php
                             $tone = $tone_classes[$node['tone']] ?? $tone_classes['slate'];
                             $status = $status_classes[$node['status']] ?? $status_classes['ready'];
-                            $is_primary = !empty($node['primary']);
                             ?>
-                            <a href="<?php echo htmlspecialchars(admin_url($node['link'])); ?>" <?php echo ($node['action'] ?? '') === 'start_automation' ? 'onclick="openStartModal(); return false;"' : ''; ?> class="relative z-10 flex min-h-[178px] flex-col rounded-lg border <?php echo $is_primary ? 'border-blue-300 bg-blue-50/60 ring-1 ring-blue-200' : 'border-gray-200 bg-white'; ?> p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                            <a href="<?php echo htmlspecialchars(admin_url($node['link'])); ?>" class="relative z-10 flex min-h-[178px] flex-col rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border <?php echo $tone; ?>">
                                         <i data-lucide="<?php echo htmlspecialchars($node['icon']); ?>" class="h-5 w-5"></i>
@@ -512,277 +562,7 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </section>
 
-            <section class="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
-                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-                    <div class="flex items-center justify-between gap-3">
-                        <h3 class="text-base font-semibold text-gray-900">活跃客户</h3>
-                        <i data-lucide="users" class="h-5 w-5 text-blue-600"></i>
-                    </div>
-                    <div class="mt-5 text-3xl font-bold text-gray-900"><?php echo $active_customers; ?></div>
-                    <div class="mt-2 text-sm font-medium text-gray-500">共 <?php echo $total_customers; ?> 个客户档案</div>
-                </div>
-                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-                    <div class="flex items-center justify-between gap-3">
-                        <h3 class="text-base font-semibold text-gray-900">交付中</h3>
-                        <i data-lucide="zap" class="h-5 w-5 text-emerald-600"></i>
-                    </div>
-                    <div class="mt-5 text-3xl font-bold text-gray-900"><?php echo $doing_customers; ?></div>
-                    <div class="mt-2 text-sm font-medium text-gray-500">策略 / 执行 / 监测阶段</div>
-                </div>
-                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-                    <div class="flex items-center justify-between gap-3">
-                        <h3 class="text-base font-semibold text-gray-900">诊断资产</h3>
-                        <i data-lucide="radar" class="h-5 w-5 text-violet-600"></i>
-                    </div>
-                    <div class="mt-5 text-3xl font-bold text-gray-900"><?php echo $geo_tool_stats['total_diagnoses'] ?: '—'; ?></div>
-                    <div class="mt-2 text-sm font-medium text-gray-500">引用模拟 <?php echo $geo_tool_stats['total_sim_queries'] ?: '—'; ?> 次</div>
-                </div>
-                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-                    <div class="flex items-center justify-between gap-3">
-                        <h3 class="text-base font-semibold text-gray-900">待处理告警</h3>
-                        <i data-lucide="bell-ring" class="h-5 w-5 text-orange-600"></i>
-                    </div>
-                    <div class="mt-5 text-3xl font-bold <?php echo $total_alerts > 0 ? 'text-orange-600' : 'text-gray-900'; ?>"><?php echo $total_alerts; ?></div>
-                    <div class="mt-2 text-sm font-medium text-gray-500"><?php echo $expiring_soon; ?> 个客户 60 天内到期</div>
-                </div>
-            </section>
-
-            <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-                <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-                    <h2 class="text-xl font-semibold text-gray-900">六阶段服务路径</h2>
-                    <p class="mt-2 text-sm leading-6 text-gray-500">把客户从获客诊断带到执行、监测和续费复盘。</p>
-                    <div class="mt-5 space-y-3">
-                        <?php foreach ($journey_stages as $stage): ?>
-                            <?php $colors = $journey_color_classes[$stage['color']]; ?>
-                            <a href="<?php echo htmlspecialchars(admin_url($stage['link'])); ?>" class="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
-                                <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold <?php echo $colors['badge']; ?>"><?php echo htmlspecialchars($stage['no']); ?></span>
-                                <span class="min-w-0 flex-1">
-                                    <span class="block text-sm font-semibold text-gray-900"><?php echo htmlspecialchars($stage['name']); ?> · <?php echo htmlspecialchars($stage['tagline']); ?></span>
-                                    <span class="mt-1 block truncate text-xs text-gray-500"><?php echo htmlspecialchars($stage['output']); ?></span>
-                                </span>
-                                <i data-lucide="chevron-right" class="h-4 w-4 text-gray-400"></i>
-                            </a>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-
-                <div class="xl:col-span-2 rounded-lg border border-gray-200 bg-white shadow-sm">
-                    <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4">
-                        <div>
-                            <h2 class="text-xl font-semibold text-gray-900">客户下一步动作</h2>
-                            <p class="mt-1 text-sm text-gray-500">只保留首页需要看到的客户状态和关键行动项。</p>
-                        </div>
-                        <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="text-sm font-semibold text-blue-600 hover:text-blue-800">全部客户</a>
-                    </div>
-                    <div class="divide-y divide-gray-100">
-                        <?php foreach ($customers as $c): ?>
-                            <?php
-                            $alert_cnt = count($c['alerts']);
-                            $days_left = (int) round((strtotime($c['contract_end_at']) - time()) / 86400);
-                            ?>
-                            <a href="<?php echo htmlspecialchars(admin_url('customers.php?select=' . rawurlencode($c['id']))); ?>" class="grid gap-4 px-5 py-4 transition hover:bg-gray-50 lg:grid-cols-[minmax(0,1.2fr)_160px_minmax(0,1.4fr)_90px] lg:items-center">
-                                <span class="min-w-0">
-                                    <span class="block text-sm font-semibold text-gray-900"><?php echo htmlspecialchars($c['name']); ?></span>
-                                    <span class="mt-1 block text-xs text-gray-500"><?php echo htmlspecialchars($c['industry']); ?> · <?php echo htmlspecialchars($c['owner']); ?></span>
-                                </span>
-                                <span>
-                                    <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700"><?php echo htmlspecialchars($c['stage_label']); ?></span>
-                                    <span class="mt-2 flex items-center gap-2">
-                                        <span class="h-2 flex-1 rounded-full bg-gray-100">
-                                            <span class="block h-2 rounded-full bg-blue-500" style="width:<?php echo (int)$c['overall_pct']; ?>%"></span>
-                                        </span>
-                                        <span class="text-xs tabular-nums text-gray-500"><?php echo (int)$c['overall_pct']; ?>%</span>
-                                    </span>
-                                </span>
-                                <span class="text-sm leading-6 text-gray-600">
-                                    <?php echo htmlspecialchars($c['pending'][0] ?? ($c['alerts'][0] ?? '暂无待办')); ?>
-                                </span>
-                                <span class="flex items-center justify-start gap-2 lg:justify-end">
-                                    <?php if ($alert_cnt > 0): ?>
-                                        <span class="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-orange-100 px-2 text-xs font-bold text-orange-700"><?php echo $alert_cnt; ?></span>
-                                    <?php endif; ?>
-                                    <?php if ($days_left <= 60): ?>
-                                        <span class="text-xs font-semibold text-orange-600">剩 <?php echo $days_left; ?> 天</span>
-                                    <?php endif; ?>
-                                    <i data-lucide="arrow-up-right" class="h-4 w-4 text-gray-400"></i>
-                                </span>
-                            </a>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </section>
             </div>
-
-<!-- 首页内置自动化启动弹窗 -->
-<div id="start-modal" class="fixed inset-0 z-50 hidden">
-    <div class="absolute inset-0 bg-gray-900/50 backdrop-blur-sm" onclick="closeStartModal()"></div>
-    <div class="absolute left-1/2 top-1/2 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 px-4">
-        <div class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-2xl">
-            <div class="bg-blue-600 px-6 py-5">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/15">
-                        <i data-lucide="rocket" class="h-5 w-5 text-white"></i>
-                    </div>
-                    <div>
-                        <h2 class="text-lg font-bold text-white">启动品牌自动化交付</h2>
-                        <p class="text-sm text-blue-100">在首页直接拉起资料整理、诊断、内容、分发和监测</p>
-                    </div>
-                </div>
-            </div>
-            <div class="max-h-[64vh] space-y-4 overflow-y-auto p-6">
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-gray-700">品牌名称 <span class="text-red-500">*</span></label>
-                    <input type="text" id="input-brand" placeholder="如：文韵爱阅读" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-                </div>
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-gray-700">行业 <span class="text-red-500">*</span></label>
-                        <input type="text" id="input-industry" placeholder="如：教培 / 知识付费" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-gray-700">官网</label>
-                        <input type="text" id="input-website" placeholder="如：example.com" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-                    </div>
-                </div>
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-gray-700">核心服务</label>
-                    <input type="text" id="input-services" placeholder="用逗号分隔，如：AI阅读, 知识付费, 在线课程" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-                </div>
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-gray-700">竞品</label>
-                    <input type="text" id="input-competitors" placeholder="用逗号分隔，如：竞品A, 竞品B" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-                </div>
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-gray-700">品牌定位</label>
-                    <textarea id="input-positioning" rows="2" placeholder="一句话描述品牌定位" class="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"></textarea>
-                </div>
-                <div>
-                    <label class="mb-1 block text-sm font-medium text-gray-700">生成文章数量</label>
-                    <select id="input-article-count" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
-                        <option value="5">5 篇（快速预览）</option>
-                        <option value="10" selected>10 篇（标准）</option>
-                        <option value="20">20 篇（完整）</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="mb-2 block text-sm font-medium text-gray-700">发布平台 / 账号</label>
-                    <?php if (empty($automationMediaAccounts)): ?>
-                        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">暂无启用媒体账号，后续不会创建媒体分发任务。</div>
-                    <?php else: ?>
-                        <div class="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
-                            <?php foreach ($automationMediaAccounts as $account): ?>
-                                <?php $mode = (string) ($account['publish_mode'] ?? 'manual'); ?>
-                                <label class="flex items-start gap-3 rounded-md bg-white px-3 py-2 text-sm">
-                                    <input type="checkbox" class="automation-media-account mt-1 rounded border-gray-300 text-blue-600 focus:ring-blue-500" value="<?php echo (int) $account['id']; ?>" <?php echo $mode === 'browser' ? 'checked' : ''; ?>>
-                                    <span class="min-w-0 flex-1">
-                                        <span class="block font-medium text-gray-800"><?php echo htmlspecialchars($account['account_name']); ?></span>
-                                        <span class="text-xs text-gray-500"><?php echo htmlspecialchars($account['platform']); ?> · <?php echo $mode === 'browser' ? '浏览器自动发布' : '人工辅助待办'; ?></span>
-                                    </span>
-                                </label>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                <div id="automation-start-result" class="hidden rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700"></div>
-            </div>
-            <div class="flex items-center justify-between border-t border-gray-200 bg-gray-50 px-6 py-4">
-                <button type="button" onclick="closeStartModal()" class="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100">取消</button>
-                <button type="button" onclick="startAutomationFromDashboard()" id="btn-confirm-start" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                    <i data-lucide="play" class="h-4 w-4"></i>
-                    开始执行
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script>
-function openStartModal() {
-    const modal = document.getElementById('start-modal');
-    if (!modal) return;
-    modal.classList.remove('hidden');
-    setTimeout(() => document.getElementById('input-brand')?.focus(), 50);
-    if (typeof lucide !== 'undefined') lucide.createIcons();
-}
-
-function closeStartModal() {
-    document.getElementById('start-modal')?.classList.add('hidden');
-}
-
-document.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape') closeStartModal();
-});
-
-function dashboardToast(message, type) {
-    if (window.AdminUtils && typeof window.AdminUtils.showToast === 'function') {
-        window.AdminUtils.showToast(message, type === 'warn' ? 'warning' : type);
-    } else {
-        alert(message);
-    }
-}
-
-async function startAutomationFromDashboard() {
-    const brand = document.getElementById('input-brand').value.trim();
-    const industry = document.getElementById('input-industry').value.trim();
-    const result = document.getElementById('automation-start-result');
-
-    if (!brand || !industry) {
-        dashboardToast('请填写品牌名称和行业', 'error');
-        return;
-    }
-
-    const button = document.getElementById('btn-confirm-start');
-    button.disabled = true;
-    button.innerHTML = '<i data-lucide="loader-2" class="h-4 w-4 animate-spin"></i> 正在启动...';
-    if (typeof lucide !== 'undefined') lucide.createIcons();
-
-    const payload = {
-        brand_name: brand,
-        industry: industry,
-        website: document.getElementById('input-website').value.trim(),
-        services: document.getElementById('input-services').value.trim(),
-        competitors: document.getElementById('input-competitors').value.trim(),
-        positioning: document.getElementById('input-positioning').value.trim(),
-        article_count: parseInt(document.getElementById('input-article-count').value, 10) || 10,
-        media_account_ids: Array.from(document.querySelectorAll('.automation-media-account:checked')).map(el => parseInt(el.value, 10)).filter(Boolean),
-    };
-
-    try {
-        const resp = await fetch(window.adminUrl('api/automation-start.php'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-        const data = await resp.json();
-
-        if (!data.success) {
-            dashboardToast(data.error || '启动失败', 'error');
-            return;
-        }
-
-        result.classList.remove('hidden');
-        result.textContent = '自动化已启动：' + data.workflow_id + '。系统会在后台继续执行，首页刷新后可看到流程状态变化。';
-        dashboardToast('自动化流程已启动', 'success');
-        setTimeout(() => {
-            closeStartModal();
-            window.location.hash = 'automation-flow';
-            window.location.reload();
-        }, 900);
-    } catch (err) {
-        dashboardToast('请求失败：' + err.message, 'error');
-    } finally {
-        button.disabled = false;
-        button.innerHTML = '<i data-lucide="play" class="h-4 w-4"></i> 开始执行';
-        if (typeof lucide !== 'undefined') lucide.createIcons();
-    }
-}
-
-if (window.location.hash === '#automation-flow') {
-    document.addEventListener('DOMContentLoaded', function() {
-        document.getElementById('automation-flow')?.scrollIntoView({ block: 'start' });
-    });
-}
-</script>
 
 <?php
 // 包含统一底部

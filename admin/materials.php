@@ -95,9 +95,9 @@ require_once __DIR__ . '/includes/header.php';
                                 <i data-lucide="database" class="mr-2 h-4 w-4"></i>
                                 管理知识库
                             </a>
-                            <a href="ai-models.php" class="inline-flex items-center justify-center whitespace-nowrap rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                                <i data-lucide="settings" class="mr-2 h-4 w-4"></i>
-                                向量化配置
+                            <a href="chunk-library-generate.php" class="inline-flex items-center justify-center whitespace-nowrap rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100">
+                                <i data-lucide="wand-sparkles" class="mr-2 h-4 w-4"></i>
+                                Chunk生成素材
                             </a>
                         </div>
                     </div>

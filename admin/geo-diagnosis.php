@@ -69,7 +69,7 @@ $recentReports = geo_diagnosis_recent($db);
 $industries = geo_diagnosis_industries();
 $baselinePlatforms = geo_baseline_qa_platforms();
 $currentBaselineRows = $currentReport ? geo_baseline_qa_for_diagnosis($db, (string) $currentReport['id']) : [];
-$defaultBaselineQuestions = geo_baseline_qa_default_questions('', '');
+$defaultBaselineQuestions = array_fill(0, 10, '');
 $page_title = '雷达诊断';
 
 // 拉取当前客户的真实监测缺口数据
@@ -227,37 +227,69 @@ require_once __DIR__ . '/includes/header.php';
                                     <span class="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-blue-700">建议 10 条</span>
                                 </div>
                             </summary>
-                            <div class="mt-4 overflow-hidden rounded-lg border border-blue-100 bg-white">
-                                <div class="hidden grid-cols-[2.5rem_minmax(0,1.1fr)_8rem_minmax(0,1.4fr)_7rem_minmax(0,0.9fr)] gap-2 border-b border-gray-100 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-500 lg:grid">
-                                    <div>#</div>
-                                    <div>问题</div>
-                                    <div>平台</div>
-                                    <div>首次答案</div>
-                                    <div>情绪</div>
-                                    <div>关键词</div>
-                                </div>
-                                <div class="max-h-[520px] divide-y divide-gray-100 overflow-y-auto">
-                                <?php foreach ($defaultBaselineQuestions as $idx => $question): ?>
-                                    <div class="grid grid-cols-1 gap-2 px-3 py-3 lg:grid-cols-[2.5rem_minmax(0,1.1fr)_8rem_minmax(0,1.4fr)_7rem_minmax(0,0.9fr)] lg:items-start">
-                                        <div class="hidden pt-2 text-xs font-semibold text-gray-400 lg:block"><?php echo (int) $idx + 1; ?></div>
-                                        <label class="block">
-                                            <span class="mb-1 block text-xs font-semibold text-gray-500 lg:hidden">问题 <?php echo (int) $idx + 1; ?></span>
-                                            <input name="baseline_question[]" type="text" data-baseline-index="<?php echo (int) $idx; ?>" data-auto-baseline="1" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" value="<?php echo htmlspecialchars($question); ?>">
-                                        </label>
-                                        <select name="baseline_platform[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                                                <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
-                                                    <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo $platformKey === 'deepseek' ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
-                                                <?php endforeach; ?>
-                                        </select>
-                                        <textarea name="baseline_answer[]" rows="2" class="block min-h-[42px] w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
-                                        <select name="baseline_sentiment[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm">
-                                            <option value="positive">正面</option>
-                                            <option value="neutral" selected>中性</option>
-                                            <option value="negative">负面</option>
-                                        </select>
-                                        <input name="baseline_keywords[]" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm" placeholder="优势、价格、案例">
+                            <div class="mt-4 rounded-lg border border-blue-100 bg-white p-4">
+                                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <div class="text-sm font-semibold text-gray-900">手动采样录入区</div>
+                                        <p class="mt-1 text-xs leading-5 text-gray-500">这里不再塞表格。点击进入全屏页面后，逐条粘贴你手动跑出来的问题和原始答案。</p>
                                     </div>
-                                <?php endforeach; ?>
+                                    <button type="button" data-open-baseline-fullscreen class="inline-flex h-10 shrink-0 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                                        <i data-lucide="expand" class="mr-2 h-4 w-4"></i>
+                                        全屏填写
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="baseline-fullscreen-modal" class="fixed inset-0 z-[70] hidden bg-white">
+                                <div class="flex h-full flex-col">
+                                    <div class="flex shrink-0 flex-col gap-3 border-b border-gray-200 bg-white px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
+                                        <div>
+                                            <h2 class="text-xl font-bold text-gray-900">首次 AI 问答基准线</h2>
+                                            <p class="mt-1 text-sm text-gray-500">你自己到 AI 平台手动提问，把问题和原始答案逐条粘贴到这里。完成后关闭面板，再生成雷达诊断。</p>
+                                        </div>
+                                        <div class="flex flex-wrap gap-2">
+                                            <button type="button" data-close-baseline-fullscreen class="inline-flex h-10 items-center rounded-md border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                                                完成填写
+                                            </button>
+                                            <button type="submit" class="inline-flex h-10 items-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700">
+                                                生成雷达诊断
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="min-h-0 flex-1 overflow-y-auto bg-gray-50 px-6 py-5">
+                                        <div class="mx-auto max-w-[1600px] overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+                                            <div class="hidden grid-cols-[3rem_minmax(220px,1fr)_9rem_minmax(360px,1.35fr)_8rem_minmax(180px,0.75fr)] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-500 xl:grid">
+                                                <div>#</div>
+                                                <div>问题</div>
+                                                <div>平台</div>
+                                                <div>首次答案</div>
+                                                <div>情绪</div>
+                                                <div>关键词</div>
+                                            </div>
+                                            <div class="divide-y divide-gray-100">
+                                            <?php foreach ($defaultBaselineQuestions as $idx => $question): ?>
+                                                <div class="grid grid-cols-1 gap-3 px-4 py-4 xl:grid-cols-[3rem_minmax(220px,1fr)_9rem_minmax(360px,1.35fr)_8rem_minmax(180px,0.75fr)] xl:items-start">
+                                                    <div class="hidden pt-2 text-sm font-semibold text-gray-400 xl:block"><?php echo (int) $idx + 1; ?></div>
+                                                    <label class="block">
+                                                        <span class="mb-1 block text-xs font-semibold text-gray-500 xl:hidden">问题 <?php echo (int) $idx + 1; ?></span>
+                                                        <input name="baseline_question[]" type="text" data-baseline-index="<?php echo (int) $idx; ?>" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" value="<?php echo htmlspecialchars($question); ?>" placeholder="粘贴你手动问 AI 的问题">
+                                                    </label>
+                                                    <select name="baseline_platform[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                                        <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
+                                                            <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo $platformKey === 'deepseek' ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                    <textarea name="baseline_answer[]" rows="4" class="block min-h-[112px] w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
+                                                    <select name="baseline_sentiment[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm">
+                                                        <option value="positive">正面</option>
+                                                        <option value="neutral" selected>中性</option>
+                                                        <option value="negative">负面</option>
+                                                    </select>
+                                                    <input name="baseline_keywords[]" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm" placeholder="优势、价格、案例">
+                                                </div>
+                                            <?php endforeach; ?>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </details>
@@ -487,7 +519,7 @@ require_once __DIR__ . '/includes/header.php';
                 <?php
                 $baselineEditRows = $currentBaselineRows;
                 if (empty($baselineEditRows)) {
-                    $questionsForCurrentBrand = geo_baseline_qa_default_questions((string) $currentReport['brand_name'], (string) $currentReport['industry']);
+                    $questionsForCurrentBrand = array_fill(0, 10, '');
                     $baselineEditRows = array_map(static function ($question, $index) {
                         return [
                             'question' => $question,
@@ -956,43 +988,29 @@ require_once __DIR__ . '/includes/header.php';
             <?php endif; ?>
             <script>
                 (() => {
-                    const createForm = document.getElementById('diagnosis-create-form');
-                    if (!createForm) return;
-                    const brandInput = document.getElementById('brand-name');
-                    const industryInput = document.getElementById('brand-industry');
-                    const questionInputs = Array.from(createForm.querySelectorAll('input[name="baseline_question[]"][data-baseline-index]'));
-                    const buildQuestions = () => {
-                        const brand = (brandInput?.value || '').trim() || '这个品牌';
-                        const industry = (industryInput?.value || '').trim() || '这个行业';
-                        return [
-                            `${brand}是什么品牌？`,
-                            `${brand}主要提供什么服务？`,
-                            `${brand}适合哪些客户选择？`,
-                            `${brand}在${industry}里有什么优势？`,
-                            `${brand}和同类竞品相比怎么样？`,
-                            `${brand}有没有真实案例或客户评价？`,
-                            `${brand}值得信任吗？`,
-                            `推荐几个${industry}服务商，${brand}会被提到吗？`,
-                            `选择${industry}服务商时要看哪些标准？`,
-                            `${brand}有哪些需要注意的地方？`,
-                        ];
+                    const modal = document.getElementById('baseline-fullscreen-modal');
+                    const openButton = document.querySelector('[data-open-baseline-fullscreen]');
+                    const closeButtons = document.querySelectorAll('[data-close-baseline-fullscreen]');
+                    if (!modal || !openButton) return;
+
+                    const openModal = () => {
+                        modal.classList.remove('hidden');
+                        document.documentElement.classList.add('overflow-hidden');
+                        document.body.classList.add('overflow-hidden');
                     };
-                    const refreshQuestions = () => {
-                        const questions = buildQuestions();
-                        questionInputs.forEach((input) => {
-                            if (input.dataset.autoBaseline !== '1') return;
-                            const index = Number(input.dataset.baselineIndex || 0);
-                            input.value = questions[index] || input.value;
-                        });
+                    const closeModal = () => {
+                        modal.classList.add('hidden');
+                        document.documentElement.classList.remove('overflow-hidden');
+                        document.body.classList.remove('overflow-hidden');
                     };
-                    questionInputs.forEach((input) => {
-                        input.addEventListener('input', () => {
-                            input.dataset.autoBaseline = '0';
-                        });
+
+                    openButton.addEventListener('click', openModal);
+                    closeButtons.forEach((button) => button.addEventListener('click', closeModal));
+                    document.addEventListener('keydown', (event) => {
+                        if (event.key === 'Escape' && !modal.classList.contains('hidden')) {
+                            closeModal();
+                        }
                     });
-                    brandInput?.addEventListener('input', refreshQuestions);
-                    industryInput?.addEventListener('change', refreshQuestions);
-                    refreshQuestions();
                 })();
             </script>
 <?php
