@@ -12,9 +12,267 @@ require_once __DIR__ . '/../includes/database_admin.php';
 
 require_admin_login();
 
+function sop_h($value): string {
+    return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+}
+
+function sop_current_customer_id(array $customer): string {
+    return (string) ($customer['id'] ?? $customer['customer_id'] ?? '');
+}
+
+function sop_compact_text(string $text, int $limit = 260): string {
+    $text = trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
+    if (mb_strlen($text, 'UTF-8') <= $limit) {
+        return $text;
+    }
+    return mb_substr($text, 0, $limit, 'UTF-8') . '...';
+}
+
+function sop_ensure_strategy_analysis_table(PDO $db): void {
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS sop_strategy_analyses (
+            id BIGSERIAL PRIMARY KEY,
+            customer_id VARCHAR(80) NOT NULL DEFAULT '',
+            brand_name VARCHAR(200) NOT NULL DEFAULT '',
+            recommended_scenario VARCHAR(40) NOT NULL DEFAULT '',
+            analysis_md TEXT NOT NULL DEFAULT '',
+            input_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+            model_used VARCHAR(200) NOT NULL DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_sop_strategy_analyses_customer ON sop_strategy_analyses(customer_id, created_at DESC)");
+}
+
+function sop_fetch_reality_snapshot(PDO $db, array $customer): array {
+    $customerId = sop_current_customer_id($customer);
+    $brandName  = (string) ($customer['name'] ?? '');
+    $industry   = (string) ($customer['industry'] ?? '');
+    $facts      = [];
+    $p0Questions = [];
+    $weakKeywords = [];
+    $weakSignals = [];
+    $brandKnowledge = [];
+    $geoMaterials = [];
+    $contentQueue = [];
+    $monitorSamples = [];
+    $diagnosisActions = [];
+    $monitor = ['total' => 0, 'mentioned' => 0, 'mention_rate' => null, 'platform_count' => 0];
+    $humanTasks = ['pending' => 0, 'in_progress' => 0, 'done' => 0];
+    $contentQueuePending = 0;
+
+    if ($customerId !== '') {
+        try {
+            $stmt = $db->prepare("SELECT fact_key, fact_value FROM geo_brand_facts WHERE customer_id = ?");
+            $stmt->execute([$customerId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $facts[$row['fact_key']] = $row['fact_value'];
+            }
+            $brandName = $facts['brand_name'] ?? $brandName;
+            $industry = $facts['industry'] ?? $industry;
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT question, dimension, suggested_action
+                FROM geo_intent_questions
+                WHERE customer_id = ? AND priority = 'P0' AND covered = false
+                ORDER BY created_at ASC
+                LIMIT 8
+            ");
+            $stmt->execute([$customerId]);
+            $p0Questions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT query_text,
+                       ROUND(100.0 * SUM(CASE WHEN brand_mentioned THEN 1 ELSE 0 END) / COUNT(*), 1) AS mention_rate,
+                       COUNT(*) AS total
+                FROM geo_monitor_records
+                WHERE customer_id = ? AND queried_at >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY query_text
+                HAVING ROUND(100.0 * SUM(CASE WHEN brand_mentioned THEN 1 ELSE 0 END) / COUNT(*), 1) < 30
+                ORDER BY mention_rate ASC, total DESC
+                LIMIT 8
+            ");
+            $stmt->execute([$customerId]);
+            $weakKeywords = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE brand_mentioned = TRUE) AS mentioned,
+                       COUNT(DISTINCT provider) AS platform_count
+                FROM geo_monitor_records
+                WHERE customer_id = ? AND queried_at >= CURRENT_DATE - INTERVAL '30 days'
+            ");
+            $stmt->execute([$customerId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $monitor['total'] = (int) ($row['total'] ?? 0);
+            $monitor['mentioned'] = (int) ($row['mentioned'] ?? 0);
+            $monitor['platform_count'] = (int) ($row['platform_count'] ?? 0);
+            $monitor['mention_rate'] = $monitor['total'] > 0 ? round($monitor['mentioned'] * 100 / $monitor['total'], 1) : null;
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT s.signal_key, d.name, s.score
+                FROM geo_diagnosis_signal_scores s
+                JOIN geo_diagnosis_signal_definitions d ON d.signal_key = s.signal_key
+                WHERE s.diagnosis_id = (
+                    SELECT r.id
+                    FROM geo_diagnosis_runs r
+                    JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+                    WHERE b.name = ?
+                    ORDER BY r.created_at DESC
+                    LIMIT 1
+                ) AND s.score < 60
+                ORDER BY s.score ASC
+                LIMIT 6
+            ");
+            $stmt->execute([$brandName]);
+            $weakSignals = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT category, title, content, source, citability_score
+                FROM geo_brand_knowledge
+                WHERE customer_id = ?
+                ORDER BY citability_score DESC, updated_at DESC, id DESC
+                LIMIT 12
+            ");
+            $stmt->execute([$customerId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $brandKnowledge[] = [
+                    'category' => $row['category'],
+                    'title' => $row['title'],
+                    'content' => sop_compact_text((string) $row['content'], 240),
+                    'source' => $row['source'],
+                    'citability_score' => (int) $row['citability_score'],
+                ];
+            }
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT material_type, title, notes, content_json, status
+                FROM geo_materials
+                WHERE customer_id = ? AND status = 'active'
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 8
+            ");
+            $stmt->execute([$customerId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $geoMaterials[] = [
+                    'material_type' => $row['material_type'],
+                    'title' => $row['title'],
+                    'notes' => sop_compact_text((string) $row['notes'], 160),
+                    'content' => sop_compact_text((string) $row['content_json'], 240),
+                ];
+            }
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT week_num, platform, keyword, title, angle, content_format, priority, status, article_title
+                FROM geo_content_queue
+                WHERE customer_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 12
+            ");
+            $stmt->execute([$customerId]);
+            $contentQueue = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT provider, query_text, brand_mentioned, mention_position, mention_depth, accuracy_score, response_snippet, queried_at::text AS queried_at
+                FROM geo_monitor_records
+                WHERE customer_id = ?
+                ORDER BY queried_at DESC, id DESC
+                LIMIT 8
+            ");
+            $stmt->execute([$customerId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $monitorSamples[] = [
+                    'provider' => $row['provider'],
+                    'query_text' => sop_compact_text((string) $row['query_text'], 120),
+                    'brand_mentioned' => (bool) $row['brand_mentioned'],
+                    'mention_position' => $row['mention_position'],
+                    'mention_depth' => $row['mention_depth'],
+                    'accuracy_score' => $row['accuracy_score'],
+                    'response_snippet' => sop_compact_text((string) $row['response_snippet'], 220),
+                    'queried_at' => $row['queried_at'],
+                ];
+            }
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT a.signal_key, a.priority, a.action_text, a.estimated_impact, a.sku_id
+                FROM geo_diagnosis_actions a
+                WHERE a.diagnosis_id = (
+                    SELECT r.id
+                    FROM geo_diagnosis_runs r
+                    JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+                    WHERE b.name = ?
+                    ORDER BY r.created_at DESC
+                    LIMIT 1
+                )
+                ORDER BY a.priority ASC, a.estimated_impact DESC NULLS LAST
+                LIMIT 8
+            ");
+            $stmt->execute([$brandName]);
+            $diagnosisActions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("
+                SELECT status, COUNT(*) AS c
+                FROM sop_dispatched_tasks
+                WHERE customer_id = ?
+                GROUP BY status
+            ");
+            $stmt->execute([$customerId]);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $humanTasks[$row['status']] = (int) $row['c'];
+            }
+        } catch (Throwable $e) {}
+
+        try {
+            $stmt = $db->prepare("SELECT COUNT(*) FROM geo_content_queue WHERE customer_id = ? AND status IN ('pending','processing')");
+            $stmt->execute([$customerId]);
+            $contentQueuePending = (int) $stmt->fetchColumn();
+        } catch (Throwable $e) {}
+    }
+
+    return [
+        'customer_id' => $customerId,
+        'brand_name' => $brandName,
+        'industry' => $industry,
+        'facts' => $facts,
+        'p0_questions' => $p0Questions,
+        'weak_keywords' => $weakKeywords,
+        'weak_signals' => $weakSignals,
+        'brand_knowledge' => $brandKnowledge,
+        'geo_materials' => $geoMaterials,
+        'content_queue' => $contentQueue,
+        'monitor_samples' => $monitorSamples,
+        'diagnosis_actions' => $diagnosisActions,
+        'monitor' => $monitor,
+        'human_tasks' => $humanTasks,
+        'content_queue_pending' => $contentQueuePending,
+    ];
+}
+
 // ── SOP 派发任务 POST 处理 ──────────────────────────────────────────────────
 $_dispatchMessage = '';
 $_dispatchError   = '';
+$_analysisMessage = '';
+$_analysisError   = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'sop_dispatch_task') {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
         $_dispatchError = 'CSRF验证失败';
@@ -60,7 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
         echo json_encode(['ok' => false, 'error' => 'CSRF']);
         exit;
     }
-    $customerId = (string) (($_SESSION['current_customer'] ?? [])['id'] ?? '');
+    $customerId = sop_current_customer_id($_SESSION['current_customer'] ?? []);
     $scenario   = trim((string) ($_POST['scenario']  ?? ''));
     $nodeCode   = trim((string) ($_POST['node_code'] ?? ''));
     $newStatus  = trim((string) ($_POST['status']    ?? ''));
@@ -80,10 +338,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     exit;
 }
 
-session_write_close();
-
 // ── 读取当前客户的节点状态覆盖 ───────────────────────────────────────────────
-$_currentCustomerId = (string) (($_SESSION['current_customer'] ?? [])['id'] ?? '');
+$_currentCustomer = $_SESSION['current_customer'] ?? [];
+$_currentCustomerId = sop_current_customer_id($_currentCustomer);
 $_nodeStatusOverrides = [];
 if ($_currentCustomerId !== '') {
     $stmtNs = $db->prepare("SELECT scenario, node_code, status FROM sop_node_status WHERE customer_id = ?");
@@ -284,6 +541,128 @@ foreach ($sop_scenarios as $scenarioKey => &$scenarioData) {
 }
 unset($scenarioData);
 
+$sopReality = sop_fetch_reality_snapshot($db, $_currentCustomer);
+sop_ensure_strategy_analysis_table($db);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'sop_generate_analysis') {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        $_analysisError = 'CSRF验证失败';
+    } elseif ($sopReality['customer_id'] === '') {
+        $_analysisError = '请先选择客户';
+    } else {
+        $scenarioLines = [];
+        foreach ($sop_scenarios as $scenario) {
+            $scenarioLines[] = sprintf(
+                "- %s：%d个节点；触发：%s；描述：%s",
+                $scenario['name'],
+                count($scenario['nodes']),
+                $scenario['trigger'],
+                $scenario['description']
+            );
+        }
+        $nodeLines = [];
+        foreach ($sop_scenarios as $scenario) {
+            foreach ($scenario['nodes'] as $node) {
+                $nodeLines[] = sprintf(
+                    "- [%s/%s] %s；KPI：%s；产出物：%s；当前状态：%s",
+                    $scenario['key'],
+                    $node['code'],
+                    $node['name'],
+                    $node['kpi'],
+                    $node['deliverable'],
+                    $node['status']
+                );
+            }
+        }
+
+        $snapshotForPrompt = [
+            'brand_name' => $sopReality['brand_name'],
+            'industry' => $sopReality['industry'],
+            'core_services' => $sopReality['facts']['core_services'] ?? '',
+            'positioning' => $sopReality['facts']['master_sentence'] ?? ($sopReality['facts']['positioning'] ?? ''),
+            'monitor_30d' => $sopReality['monitor'],
+            'p0_questions' => $sopReality['p0_questions'],
+            'weak_keywords' => $sopReality['weak_keywords'],
+            'weak_signals' => $sopReality['weak_signals'],
+            'brand_knowledge' => $sopReality['brand_knowledge'],
+            'geo_materials' => $sopReality['geo_materials'],
+            'content_queue' => $sopReality['content_queue'],
+            'monitor_samples' => $sopReality['monitor_samples'],
+            'diagnosis_actions' => $sopReality['diagnosis_actions'],
+            'human_tasks' => $sopReality['human_tasks'],
+            'content_queue_pending' => $sopReality['content_queue_pending'],
+        ];
+        $snapshotJson = json_encode($snapshotForPrompt, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $scenarioText = implode("\n", $scenarioLines);
+        $nodeText = implode("\n", array_slice($nodeLines, 0, 80));
+
+        $prompt = <<<PROMPT
+你是 GEO 客户交付负责人。请基于“当前客户真实数据、已有品牌资料、内容资产、监测样本”和“可用 SOP 节点”，判断下一步应该怎么执行。
+
+## 当前客户上下文包
+{$snapshotJson}
+
+## 可用 SOP 场景
+{$scenarioText}
+
+## 可派发节点
+{$nodeText}
+
+请只输出 Markdown，结构必须为：
+### 推荐场景
+- 场景：只能填写 onboard、emergency、annual、overview、maintain 中的一个
+- 原因：必须引用上下文包里的具体信号、资料或监测样本，不要泛泛而谈
+
+### 优先派发节点
+| 优先级 | 节点 | 关联上下文 | 为什么现在做 | 产出物 | 建议负责人 |
+|---|---|---|---|---|---|
+
+### 本周执行建议
+- 3 到 5 条，必须能落到任务、内容、分发或监测动作
+- 每条建议都要说明应复用哪类已有资料，或需要补哪类资料
+
+### 风险提醒
+- 如果数据不足，明确说缺哪类数据；不要编造不存在的监测结论、客户案例、效果数字
+PROMPT;
+
+        session_write_close();
+        $aiResult = geo_call_ai($prompt, 2600, 0.35);
+        if (!empty($aiResult['error'])) {
+            $_analysisError = 'AI 分析失败：' . $aiResult['error'];
+        } else {
+            $analysisMd = trim((string) ($aiResult['content'] ?? ''));
+            preg_match('/场景：\s*(onboard|emergency|annual|overview|maintain)/u', $analysisMd, $m);
+            $recommendedScenario = $m[1] ?? 'onboard';
+            $stmt = $db->prepare("
+                INSERT INTO sop_strategy_analyses
+                    (customer_id, brand_name, recommended_scenario, analysis_md, input_snapshot, model_used)
+                VALUES (?, ?, ?, ?, ?::jsonb, ?)
+            ");
+            $stmt->execute([
+                $sopReality['customer_id'],
+                $sopReality['brand_name'],
+                $recommendedScenario,
+                $analysisMd,
+                json_encode($snapshotForPrompt, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                (string) ($aiResult['model_used'] ?? ''),
+            ]);
+            $_analysisMessage = '已基于当前客户数据生成 SOP 分析建议';
+        }
+    }
+}
+
+$latestSopAnalysis = null;
+if ($sopReality['customer_id'] !== '') {
+    try {
+        $stmt = $db->prepare("SELECT * FROM sop_strategy_analyses WHERE customer_id = ? ORDER BY created_at DESC LIMIT 1");
+        $stmt->execute([$sopReality['customer_id']]);
+        $latestSopAnalysis = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) {}
+}
+
+$sopCsrfToken = generate_csrf_token();
+session_write_close();
+
 require_once __DIR__ . '/includes/header.php';
 ?>
 <?php if ($_dispatchMessage): ?>
@@ -292,7 +671,13 @@ require_once __DIR__ . '/includes/header.php';
 <?php if ($_dispatchError): ?>
 <div class="mb-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><?= htmlspecialchars($_dispatchError) ?></div>
 <?php endif; ?>
-<script>const _sopCsrfToken = <?= json_encode(generate_csrf_token()) ?>;</script>
+<?php if ($_analysisMessage): ?>
+<div class="mb-5 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800"><?= sop_h($_analysisMessage) ?></div>
+<?php endif; ?>
+<?php if ($_analysisError): ?>
+<div class="mb-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><?= sop_h($_analysisError) ?></div>
+<?php endif; ?>
+<script>const _sopCsrfToken = <?= json_encode($sopCsrfToken) ?>;</script>
             <div class="mb-6">
                 <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div>
@@ -334,6 +719,74 @@ require_once __DIR__ . '/includes/header.php';
                     <div class="mt-2 text-sm leading-6 text-gray-500">连接任务、交付、监测和复盘。</div>
                 </section>
             </div>
+
+            <section class="mb-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+                <div class="border-b border-gray-200 p-5">
+                    <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                            <h2 class="text-xl font-semibold text-gray-900">真实策略信号</h2>
+                            <p class="mt-1 text-sm text-gray-500">来自当前客户的意图、监测、诊断、知识图谱、素材、队列和人工任务。</p>
+                        </div>
+                        <form method="POST">
+                            <input type="hidden" name="csrf_token" value="<?= sop_h($sopCsrfToken) ?>">
+                            <input type="hidden" name="action" value="sop_generate_analysis">
+                            <button type="submit" class="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                                <i data-lucide="sparkles" class="mr-2 h-4 w-4"></i>
+                                AI 分析下一步 SOP
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 gap-4 p-5 lg:grid-cols-[520px_minmax(0,1fr)]">
+                    <div class="grid grid-cols-2 gap-3 xl:grid-cols-3">
+                        <div class="rounded-lg bg-red-50 p-4">
+                            <div class="text-xs font-semibold text-red-700">P0 未覆盖</div>
+                            <div class="mt-2 text-2xl font-bold text-red-700"><?= count($sopReality['p0_questions']) ?></div>
+                        </div>
+                        <div class="rounded-lg bg-orange-50 p-4">
+                            <div class="text-xs font-semibold text-orange-700">失守关键词</div>
+                            <div class="mt-2 text-2xl font-bold text-orange-700"><?= count($sopReality['weak_keywords']) ?></div>
+                        </div>
+                        <div class="rounded-lg bg-yellow-50 p-4">
+                            <div class="text-xs font-semibold text-yellow-700">诊断短板</div>
+                            <div class="mt-2 text-2xl font-bold text-yellow-700"><?= count($sopReality['weak_signals']) ?></div>
+                        </div>
+                        <div class="rounded-lg bg-blue-50 p-4">
+                            <div class="text-xs font-semibold text-blue-700">30天提及率</div>
+                            <div class="mt-2 text-2xl font-bold text-blue-700">
+                                <?= $sopReality['monitor']['mention_rate'] === null ? '-' : sop_h($sopReality['monitor']['mention_rate'] . '%') ?>
+                            </div>
+                        </div>
+                        <div class="rounded-lg bg-emerald-50 p-4">
+                            <div class="text-xs font-semibold text-emerald-700">知识图谱</div>
+                            <div class="mt-2 text-2xl font-bold text-emerald-700"><?= count($sopReality['brand_knowledge']) ?></div>
+                        </div>
+                        <div class="rounded-lg bg-purple-50 p-4">
+                            <div class="text-xs font-semibold text-purple-700">可用素材</div>
+                            <div class="mt-2 text-2xl font-bold text-purple-700"><?= count($sopReality['geo_materials']) ?></div>
+                        </div>
+                    </div>
+                    <div class="rounded-lg bg-gray-50 p-4">
+                        <?php if ($latestSopAnalysis): ?>
+                            <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <div class="text-sm font-semibold text-gray-900">
+                                    最新 AI SOP 建议
+                                    <span class="ml-2 rounded-full bg-blue-100 px-2 py-1 text-xs text-blue-700">推荐：<?= sop_h($latestSopAnalysis['recommended_scenario']) ?></span>
+                                </div>
+                                <div class="text-xs text-gray-500"><?= sop_h($latestSopAnalysis['created_at']) ?> · <?= sop_h($latestSopAnalysis['model_used']) ?></div>
+                            </div>
+                            <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-white p-4 text-sm leading-6 text-gray-700"><?= sop_h($latestSopAnalysis['analysis_md']) ?></pre>
+                        <?php else: ?>
+                            <div class="flex h-full min-h-40 items-center justify-center rounded-md border border-dashed border-gray-300 bg-white p-6 text-center">
+                                <div>
+                                    <div class="text-sm font-semibold text-gray-900">还没有生成过 SOP 分析</div>
+                                    <div class="mt-1 text-sm text-gray-500">点击右上角按钮，会把这些真实信号送进 AI，生成推荐场景和优先派发节点。</div>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </section>
 
             <section class="mb-6 rounded-lg border border-gray-200 bg-white shadow-sm">
                 <div class="border-b border-gray-200 p-5">
@@ -401,7 +854,8 @@ require_once __DIR__ . '/includes/header.php';
 
             <script>
                 const SOP_SCENARIOS = <?php echo json_encode($sop_scenarios, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
-                let activeScenario = 'onboard';
+                const REQUESTED_SCENARIO = <?php echo json_encode((string) ($_GET['scenario'] ?? '')); ?>;
+                let activeScenario = SOP_SCENARIOS[REQUESTED_SCENARIO] ? REQUESTED_SCENARIO : 'onboard';
                 let activeView = 'table';
                 let selectedNodeCode = SOP_SCENARIOS[activeScenario].nodes[0].code;
 
