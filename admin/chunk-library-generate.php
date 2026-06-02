@@ -20,6 +20,15 @@ $message = '';
 $error = '';
 $generated = null;
 
+const CHUNK_ASSET_CONTEXT_LIMIT = 14;
+const CHUNK_ASSET_CONTEXT_MAX_CHARS = 9000;
+const CHUNK_ASSET_AI_TIMEOUT_SECONDS = 120;
+const CHUNK_ASSET_AI_MAX_TOKENS = 5000;
+const CHUNK_ASSET_BATCH_KEYWORDS = 5;
+const CHUNK_ASSET_BATCH_TITLES = 5;
+const CHUNK_ASSET_BATCH_CONTEXT_CHUNKS = 5;
+const CHUNK_ASSET_BATCH_CONTEXT_MAX_CHARS = 3600;
+
 function chunk_asset_clean_json(string $text): string {
     $text = trim($text);
     $text = preg_replace('/^```(?:json)?\s*/iu', '', $text);
@@ -32,7 +41,7 @@ function chunk_asset_clean_json(string $text): string {
     return $text;
 }
 
-function chunk_asset_call_chat_model(PDO $db, array $model, string $systemPrompt, string $userPrompt): string {
+function chunk_asset_call_chat_model(PDO $db, array $model, string $systemPrompt, string $userPrompt, int $maxTokens = CHUNK_ASSET_AI_MAX_TOKENS): string {
     $apiKey = trim(decrypt_ai_api_key((string) ($model['api_key'] ?? '')));
     $modelId = trim((string) ($model['model_id'] ?? ''));
     $url = ai_build_chat_completions_url((string) ($model['api_url'] ?? ''));
@@ -48,7 +57,8 @@ function chunk_asset_call_chat_model(PDO $db, array $model, string $systemPrompt
             ['role' => 'user', 'content' => $userPrompt],
         ],
         'temperature' => 0.35,
-        'max_tokens' => 5000,
+        'max_tokens' => max(1200, min(CHUNK_ASSET_AI_MAX_TOKENS, $maxTokens)),
+        'response_format' => ['type' => 'json_object'],
     ];
 
     $ch = curl_init($url);
@@ -61,7 +71,7 @@ function chunk_asset_call_chat_model(PDO $db, array $model, string $systemPrompt
             'Content-Type: application/json',
             'Authorization: Bearer ' . $apiKey,
         ],
-        CURLOPT_TIMEOUT => 120,
+        CURLOPT_TIMEOUT => CHUNK_ASSET_AI_TIMEOUT_SECONDS,
         CURLOPT_CONNECTTIMEOUT => 12,
         CURLOPT_SSL_VERIFYPEER => false,
     ]);
@@ -79,9 +89,9 @@ function chunk_asset_call_chat_model(PDO $db, array $model, string $systemPrompt
     }
 
     $data = json_decode((string) $raw, true);
-    $content = (string) ($data['choices'][0]['message']['content'] ?? $data['choices'][0]['text'] ?? '');
+    $content = is_array($data) ? chunk_asset_extract_chat_content($data) : '';
     if ($content === '') {
-        throw new RuntimeException('AI 响应里没有可用内容。');
+        throw new RuntimeException('AI 响应里没有可用内容：' . chunk_asset_response_diagnostic($data, (string) $raw));
     }
 
     try {
@@ -91,7 +101,77 @@ function chunk_asset_call_chat_model(PDO $db, array $model, string $systemPrompt
     return trim($content);
 }
 
+function chunk_asset_extract_chat_content(array $data): string {
+    $choice = $data['choices'][0] ?? [];
+    $message = is_array($choice) ? ($choice['message'] ?? []) : [];
+
+    if (is_array($message)) {
+        $content = $message['content'] ?? '';
+        if (is_string($content) && trim($content) !== '') {
+            return trim($content);
+        }
+        if (is_array($content)) {
+            $parts = [];
+            foreach ($content as $part) {
+                if (is_array($part)) {
+                    $parts[] = (string) ($part['text'] ?? $part['content'] ?? '');
+                } elseif (is_string($part)) {
+                    $parts[] = $part;
+                }
+            }
+            $joined = trim(implode("\n", array_filter($parts)));
+            if ($joined !== '') {
+                return $joined;
+            }
+        }
+        if (!empty($message['reasoning_content']) && is_string($message['reasoning_content'])) {
+            return trim((string) $message['reasoning_content']);
+        }
+    }
+
+    foreach (['text', 'output_text', 'response', 'content'] as $field) {
+        if (!empty($choice[$field]) && is_string($choice[$field])) {
+            return trim((string) $choice[$field]);
+        }
+        if (!empty($data[$field]) && is_string($data[$field])) {
+            return trim((string) $data[$field]);
+        }
+    }
+
+    return '';
+}
+
+function chunk_asset_response_diagnostic($data, string $raw): string {
+    if (!is_array($data)) {
+        return '响应不是 JSON：' . mb_substr($raw, 0, 300, 'UTF-8');
+    }
+
+    $choice = $data['choices'][0] ?? [];
+    $message = is_array($choice) ? ($choice['message'] ?? []) : [];
+    $diagnostic = [
+        'finish_reason' => is_array($choice) ? ($choice['finish_reason'] ?? null) : null,
+        'message_keys' => is_array($message) ? array_keys($message) : [],
+        'usage' => $data['usage'] ?? null,
+        'error' => $data['error']['message'] ?? $data['message'] ?? null,
+    ];
+
+    return json_encode($diagnostic, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+function chunk_asset_trim_context(string $context, int $maxChars = CHUNK_ASSET_CONTEXT_MAX_CHARS): string {
+    $context = trim($context);
+    if (mb_strlen($context, 'UTF-8') <= $maxChars) {
+        return $context;
+    }
+
+    return rtrim(mb_substr($context, 0, $maxChars, 'UTF-8')) . "\n\n【系统提示】以上为本次生成采用的优先证据片段，已按相关性截断。";
+}
+
 function chunk_asset_normalize_list($items, string $key, int $limit): array {
+    if ($limit <= 0) {
+        return [];
+    }
+
     $result = [];
     foreach (is_array($items) ? $items : [] as $item) {
         $value = is_array($item) ? (string) ($item[$key] ?? '') : (string) $item;
@@ -110,14 +190,15 @@ function chunk_asset_normalize_list($items, string $key, int $limit): array {
     return array_values($result);
 }
 
-function chunk_asset_fetch_context(PDO $db, int $knowledgeBaseId, string $intent, int $limit = 12): array {
+function chunk_asset_fetch_context(PDO $db, int $knowledgeBaseId, string $intent, int $limit = CHUNK_ASSET_CONTEXT_LIMIT): array {
     $query = trim($intent);
     if ($query === '') {
         $query = '根据知识库内容自动识别客户最可能提问的问题 购买决策 痛点 对比 价格 成本 方案 适用场景 实施风险 案例 FAQ 行业信任';
     }
 
-    $retrieved = knowledge_retrieval_fetch_context($db, $knowledgeBaseId, $query, $limit, 9000);
+    $retrieved = knowledge_retrieval_fetch_context($db, $knowledgeBaseId, $query, $limit, CHUNK_ASSET_CONTEXT_MAX_CHARS);
     if (!empty($retrieved['chunks'])) {
+        $retrieved['context'] = chunk_asset_trim_context((string) ($retrieved['context'] ?? ''));
         return $retrieved;
     }
 
@@ -140,7 +221,122 @@ function chunk_asset_fetch_context(PDO $db, int $knowledgeBaseId, string $intent
         $parts[] = '【知识片段' . ($index + 1) . "】\n" . knowledge_retrieval_normalize_text((string) ($chunk['content'] ?? ''));
     }
 
-    return ['context' => trim(implode("\n\n", $parts)), 'chunks' => $chunks];
+    return ['context' => chunk_asset_trim_context(trim(implode("\n\n", $parts))), 'chunks' => $chunks];
+}
+
+function chunk_asset_context_from_chunks(array $chunks, int $batchIndex): string {
+    $chunks = array_values($chunks);
+    if (empty($chunks)) {
+        return '';
+    }
+
+    $chunkCount = count($chunks);
+    $start = ($batchIndex * CHUNK_ASSET_BATCH_CONTEXT_CHUNKS) % $chunkCount;
+    $selected = [];
+    for ($offset = 0; $offset < min(CHUNK_ASSET_BATCH_CONTEXT_CHUNKS, $chunkCount); $offset++) {
+        $selected[] = $chunks[($start + $offset) % $chunkCount];
+    }
+
+    $parts = [];
+    foreach ($selected as $index => $chunk) {
+        $label = '【知识片段' . ($index + 1) . ' / chunk #' . (int) ($chunk['chunk_index'] ?? $index) . "】\n";
+        $parts[] = $label . knowledge_retrieval_normalize_text((string) ($chunk['content'] ?? ''));
+    }
+
+    return chunk_asset_trim_context(trim(implode("\n\n", $parts)), CHUNK_ASSET_BATCH_CONTEXT_MAX_CHARS);
+}
+
+function chunk_asset_merge_unique(array $base, array $items, int $limit): array {
+    $merged = [];
+    foreach ([...$base, ...$items] as $item) {
+        $value = trim((string) $item);
+        if ($value === '') {
+            continue;
+        }
+        $key = mb_strtolower($value, 'UTF-8');
+        if (!isset($merged[$key])) {
+            $merged[$key] = $value;
+        }
+        if (count($merged) >= $limit) {
+            break;
+        }
+    }
+
+    return array_values($merged);
+}
+
+function chunk_asset_batch_prompt(
+    string $knowledgeBaseName,
+    string $intentInstruction,
+    string $context,
+    int $batchNumber,
+    int $batchTotal,
+    int $keywordCount,
+    int $titleCount,
+    array $existingKeywords,
+    array $existingTitles
+): string {
+    $avoidKeywords = empty($existingKeywords) ? '无' : implode('、', array_slice($existingKeywords, -20));
+    $avoidTitles = empty($existingTitles) ? '无' : implode('、', array_slice($existingTitles, -12));
+
+    return <<<PROMPT
+知识库名称：{$knowledgeBaseName}
+批次：{$batchNumber} / {$batchTotal}
+{$intentInstruction}
+
+下面是本批次召回的 chunk。请只基于这些 chunk 生成本批次素材：
+{$context}
+
+已经生成过的关键词，必须避免重复：
+{$avoidKeywords}
+
+已经生成过的标题，必须避免重复：
+{$avoidTitles}
+
+请输出紧凑严格 JSON，格式如下。三个字段都必须是字符串数组，不要输出对象：
+{
+  "question_directions": [
+    "客户最可能问的问题方向（chunk #编号）"
+  ],
+  "keywords": [
+    "短关键词或长尾问法（chunk #编号）"
+  ],
+  "titles": [
+    "贴近客户真实问题的文章标题（chunk #编号）"
+  ]
+}
+
+生成要求：
+1. 本批次 keywords 生成 {$keywordCount} 条，titles 生成 {$titleCount} 条。
+2. 每条都必须能追溯到本批次 chunk，不要写知识片段里没有依据的事实。
+3. 关键词要包含短词、长尾词和问句式关键词；标题要像客户真实问题或解决方案标题。
+4. 如果本批次是第 1 批，请归纳 3-5 个 question_directions；后续批次可以返回空数组。
+5. 不要 reason、source、intent 等额外字段，不要 Markdown，不要解释，只返回 JSON。
+PROMPT;
+}
+
+function chunk_asset_decode_json_or_null(string $raw): ?array {
+    $decoded = json_decode(chunk_asset_clean_json($raw), true);
+    return is_array($decoded) ? $decoded : null;
+}
+
+function chunk_asset_retry_json_prompt(string $raw, int $keywordCount, int $titleCount): string {
+    $raw = mb_substr($raw, 0, 3500, 'UTF-8');
+    return <<<PROMPT
+上一轮输出不是可解析 JSON。请只把下面内容改写为严格 JSON，不要补充新事实，不要解释。
+
+必须使用这个格式，三个字段都必须是字符串数组：
+{
+  "question_directions": [],
+  "keywords": [],
+  "titles": []
+}
+
+数量要求：keywords {$keywordCount} 条，titles {$titleCount} 条；如果原文不足，请保留能从原文看出的条目，不要编造。
+
+上一轮原文：
+{$raw}
+PROMPT;
 }
 
 function chunk_asset_save_libraries(PDO $db, string $baseName, array $keywords, array $titles): array {
@@ -262,7 +458,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('请选择可用 Chat 模型。');
         }
 
-        $contextPack = chunk_asset_fetch_context($db, $knowledgeBaseId, $intent, 14);
+        $contextPack = chunk_asset_fetch_context($db, $knowledgeBaseId, $intent, CHUNK_ASSET_CONTEXT_LIMIT);
         $context = trim((string) ($contextPack['context'] ?? ''));
         if ($context === '') {
             throw new RuntimeException('这个知识库还没有可用 chunk，请先在知识库里更新切片/向量化。');
@@ -272,47 +468,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? "用户补充的问题方向：{$intent}\n请以这个方向为优先，但仍然必须受知识片段约束。"
             : "用户没有提供问题方向。请你先根据这些知识片段自动判断：目标客户最可能关心什么、会怎么问、购买前会比较什么、会担心什么。";
 
-        $systemPrompt = '你是 GEO+AI 内容策略师。你只能基于给定知识片段生成关键词和标题，不得编造资料。你的第一步是从 chunk 里归纳客户最可能问的问题方向；第二步才把这些方向转成关键词库和标题库。输出必须是严格 JSON。';
-        $userPrompt = <<<PROMPT
-知识库名称：{$knowledgeBase['name']}
-{$intentInstruction}
+        $systemPrompt = '你是 GEO+AI 内容策略师。你只能基于给定知识片段生成关键词和标题，不得编造资料。请把 chunk 里的证据转成客户真实会问的关键词和标题。输出必须是严格 JSON。';
+        $keywords = [];
+        $titles = [];
+        $questionDirections = [];
+        $batchTotal = max(
+            (int) ceil($keywordCount / CHUNK_ASSET_BATCH_KEYWORDS),
+            (int) ceil($titleCount / CHUNK_ASSET_BATCH_TITLES)
+        );
+        set_time_limit(max(240, ($batchTotal * (CHUNK_ASSET_AI_TIMEOUT_SECONDS + 30)) + 60));
 
-下面是从已切割/向量化知识库中召回的 chunk。请把它们转化成素材库：
-{$context}
+        for ($batchIndex = 0; $batchIndex < $batchTotal; $batchIndex++) {
+            $remainingKeywords = max(0, $keywordCount - count($keywords));
+            $remainingTitles = max(0, $titleCount - count($titles));
+            if ($remainingKeywords <= 0 && $remainingTitles <= 0) {
+                break;
+            }
 
-请输出严格 JSON，格式如下：
-{
-  "question_directions": [
-    {"question": "客户最可能问的问题方向", "reason": "为什么这些 chunk 支持这个方向", "source": "对应知识片段编号"}
-  ],
-  "keywords": [
-    {"keyword": "短关键词或长尾问法", "intent": "客户为什么会搜/问它", "source": "对应知识片段编号"}
-  ],
-  "titles": [
-    {"title": "贴近客户真实问题的文章标题", "keyword": "对应关键词", "source": "对应知识片段编号"}
-  ]
-}
+            $batchKeywordCount = min(CHUNK_ASSET_BATCH_KEYWORDS, $remainingKeywords);
+            $batchTitleCount = min(CHUNK_ASSET_BATCH_TITLES, $remainingTitles);
+            $batchContext = chunk_asset_context_from_chunks($contextPack['chunks'] ?? [], $batchIndex);
+            if ($batchContext === '') {
+                throw new RuntimeException('没有可用于第 ' . ($batchIndex + 1) . ' 批生成的 chunk。');
+            }
 
-生成要求：
-0. 如果用户没有提供问题方向，必须先根据 chunk 自动归纳 8-12 个 question_directions。
-1. keywords 生成 {$keywordCount} 条，优先覆盖：购买决策、痛点、对比、价格/成本、方案选型、案例、FAQ、行业信任、风险疑虑。
-2. titles 生成 {$titleCount} 条，要像客户真的会问的问题或会点击的解决方案标题，不要空泛营销标题。
-3. 每条都必须能追溯到 chunk，不要写知识片段里没有依据的事实。
-4. 关键词要包含短词、长尾词和问句式关键词；标题要适合后续内容生产。
-5. 不要 Markdown，不要解释，只返回 JSON。
-PROMPT;
+            $userPrompt = chunk_asset_batch_prompt(
+                (string) $knowledgeBase['name'],
+                $intentInstruction,
+                $batchContext,
+                $batchIndex + 1,
+                $batchTotal,
+                $batchKeywordCount,
+                $batchTitleCount,
+                $keywords,
+                $titles
+            );
 
-        $raw = chunk_asset_call_chat_model($db, $aiModel, $systemPrompt, $userPrompt);
-        $decoded = json_decode(chunk_asset_clean_json($raw), true);
-        if (!is_array($decoded)) {
-            throw new RuntimeException('AI 没有返回可解析 JSON：' . mb_substr($raw, 0, 500));
+            try {
+                $batchMaxTokens = 1200 + (($batchKeywordCount + $batchTitleCount) * 80);
+                $raw = chunk_asset_call_chat_model($db, $aiModel, $systemPrompt, $userPrompt, $batchMaxTokens);
+                $decoded = chunk_asset_decode_json_or_null($raw);
+                if (!is_array($decoded)) {
+                    $retryPrompt = chunk_asset_retry_json_prompt($raw, $batchKeywordCount, $batchTitleCount);
+                    $retryRaw = chunk_asset_call_chat_model($db, $aiModel, '你是 JSON 修复器。你只能输出严格 JSON，不要解释。', $retryPrompt, 1800);
+                    $decoded = chunk_asset_decode_json_or_null($retryRaw);
+                    if (!is_array($decoded)) {
+                        throw new RuntimeException('AI 没有返回可解析 JSON：' . mb_substr($raw, 0, 500));
+                    }
+                }
+            } catch (Throwable $batchError) {
+                throw new RuntimeException('第 ' . ($batchIndex + 1) . ' / ' . $batchTotal . ' 批 AI 生成失败：' . $batchError->getMessage());
+            }
+
+            $batchKeywords = chunk_asset_normalize_list($decoded['keywords'] ?? [], 'keyword', $batchKeywordCount);
+            $batchTitles = chunk_asset_normalize_list($decoded['titles'] ?? [], 'title', $batchTitleCount);
+            $batchDirections = chunk_asset_normalize_list($decoded['question_directions'] ?? [], 'question', 12);
+
+            if ($batchKeywordCount > 0 && empty($batchKeywords)) {
+                throw new RuntimeException('第 ' . ($batchIndex + 1) . ' 批 AI 返回的关键词为空。');
+            }
+            if ($batchTitleCount > 0 && empty($batchTitles)) {
+                throw new RuntimeException('第 ' . ($batchIndex + 1) . ' 批 AI 返回的标题为空。');
+            }
+
+            $keywords = chunk_asset_merge_unique($keywords, $batchKeywords, $keywordCount);
+            $titles = chunk_asset_merge_unique($titles, $batchTitles, $titleCount);
+            $questionDirections = chunk_asset_merge_unique($questionDirections, $batchDirections, 12);
         }
 
-        $keywords = chunk_asset_normalize_list($decoded['keywords'] ?? [], 'keyword', $keywordCount);
-        $titles = chunk_asset_normalize_list($decoded['titles'] ?? [], 'title', $titleCount);
-        $questionDirections = chunk_asset_normalize_list($decoded['question_directions'] ?? [], 'question', 12);
-        if (empty($keywords) || empty($titles)) {
-            throw new RuntimeException('AI 返回的关键词或标题为空，请换一个模型或补充业务意图后重试。');
+        if (count($keywords) < $keywordCount || count($titles) < $titleCount) {
+            throw new RuntimeException('AI 分批生成完成但数量不足：关键词 ' . count($keywords) . ' / ' . $keywordCount . '，标题 ' . count($titles) . ' / ' . $titleCount . '。请减少数量或补充问题方向后重试。');
         }
 
         $saveResult = chunk_asset_save_libraries($db, (string) $knowledgeBase['name'], $keywords, $titles);
@@ -324,7 +549,7 @@ PROMPT;
             'keyword_library_id' => $saveResult['keyword_library_id'],
             'title_library_id' => $saveResult['title_library_id'],
         ];
-        $message = '已基于知识 chunk 生成素材：关键词 ' . $saveResult['saved_keywords'] . ' 条，标题 ' . $saveResult['saved_titles'] . ' 条。';
+        $message = '已分 ' . $batchTotal . ' 批基于知识 chunk 生成素材：关键词 ' . $saveResult['saved_keywords'] . ' 条，标题 ' . $saveResult['saved_titles'] . ' 条。';
     } catch (Throwable $e) {
         $error = $e->getMessage();
     }
@@ -359,7 +584,7 @@ require_once __DIR__ . '/includes/header.php';
             <h2 class="text-xl font-semibold text-gray-900">Chunk → Prompt → 关键词库 / 标题库</h2>
             <p class="mt-2 text-sm leading-6 text-gray-500">这里不是让你先猜客户想问什么，而是把知识库中最相关的 chunk 当成证据，让 AI 先归纳客户会问的问题，再生成关键词和标题。</p>
         </div>
-        <form method="post" class="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <form method="post" class="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_320px]" data-chunk-asset-form>
             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
             <div class="space-y-5">
                 <div>
@@ -367,7 +592,8 @@ require_once __DIR__ . '/includes/header.php';
                     <select name="knowledge_base_id" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20" required>
                         <option value="">请选择已切割的知识库</option>
                         <?php foreach ($knowledgeBases as $kb): ?>
-                            <option value="<?php echo (int) $kb['id']; ?>" <?php echo (int) ($_POST['knowledge_base_id'] ?? 0) === (int) $kb['id'] ? 'selected' : ''; ?>>
+                            <?php $selectedKnowledgeBaseId = (int) ($_POST['knowledge_base_id'] ?? (count($knowledgeBases) === 1 ? $knowledgeBases[0]['id'] : 0)); ?>
+                            <option value="<?php echo (int) $kb['id']; ?>" <?php echo $selectedKnowledgeBaseId === (int) $kb['id'] ? 'selected' : ''; ?>>
                                 <?php echo htmlspecialchars($kb['name']); ?>（chunk <?php echo (int) $kb['chunk_count']; ?> / 向量 <?php echo (int) $kb['vectorized_count']; ?>）
                             </option>
                         <?php endforeach; ?>
@@ -379,7 +605,8 @@ require_once __DIR__ . '/includes/header.php';
                     <select name="ai_model_id" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20" required>
                         <option value="">请选择用于生成素材的模型</option>
                         <?php foreach ($aiModels as $model): ?>
-                            <option value="<?php echo (int) $model['id']; ?>" <?php echo (int) ($_POST['ai_model_id'] ?? 0) === (int) $model['id'] ? 'selected' : ''; ?>>
+                            <?php $selectedAiModelId = (int) ($_POST['ai_model_id'] ?? (count($aiModels) === 1 ? $aiModels[0]['id'] : 0)); ?>
+                            <option value="<?php echo (int) $model['id']; ?>" <?php echo $selectedAiModelId === (int) $model['id'] ? 'selected' : ''; ?>>
                                 <?php echo htmlspecialchars($model['name'] . ' / ' . $model['model_id']); ?>
                             </option>
                         <?php endforeach; ?>
@@ -408,11 +635,21 @@ require_once __DIR__ . '/includes/header.php';
                     <i data-lucide="wand-sparkles" class="h-5 w-5"></i>
                 </div>
                 <h3 class="mt-4 text-base font-semibold text-gray-900">生成逻辑</h3>
-                <p class="mt-2 text-sm leading-6 text-gray-600">系统会先召回最相关 chunk，再让模型自动推断客户问题方向，并输出可追溯到 chunk 的关键词和标题。</p>
-                <button type="submit" class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+                <p class="mt-2 text-sm leading-6 text-gray-600">系统会先召回最相关 chunk，再分批让模型生成可追溯到 chunk 的关键词和标题；任一批失败都会直接报错，不保存半成品。</p>
+                <button type="submit" class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700" data-chunk-asset-submit>
                     <i data-lucide="sparkles" class="mr-2 h-4 w-4"></i>
-                    从 Chunk 生成素材
+                    <span data-chunk-asset-submit-label>从 Chunk 生成素材</span>
                 </button>
+                <div class="mt-4 hidden" data-chunk-asset-progress>
+                    <div class="flex items-center justify-between text-xs font-semibold text-blue-700">
+                        <span data-chunk-asset-progress-label>正在召回知识 chunk</span>
+                        <span data-chunk-asset-progress-value>0%</span>
+                    </div>
+                    <div class="mt-2 h-2 overflow-hidden rounded-full bg-blue-100">
+                        <div class="h-full rounded-full bg-blue-600 transition-all duration-500 ease-out" style="width: 8%;" data-chunk-asset-progress-bar></div>
+                    </div>
+                    <p class="mt-2 text-xs leading-5 text-blue-700">每批最多生成 5 条关键词和 5 条标题；如果任一批模型响应失败，系统会保留失败信息，不会创建素材库。</p>
+                </div>
             </aside>
         </form>
     </section>
@@ -455,5 +692,48 @@ require_once __DIR__ . '/includes/header.php';
         </section>
     <?php endif; ?>
 </div>
+
+<script>
+document.querySelector('[data-chunk-asset-form]')?.addEventListener('submit', function () {
+    const form = this;
+    const button = form.querySelector('[data-chunk-asset-submit]');
+    const label = form.querySelector('[data-chunk-asset-submit-label]');
+    const progress = form.querySelector('[data-chunk-asset-progress]');
+    const progressLabel = form.querySelector('[data-chunk-asset-progress-label]');
+    const progressValue = form.querySelector('[data-chunk-asset-progress-value]');
+    const progressBar = form.querySelector('[data-chunk-asset-progress-bar]');
+    let percent = 8;
+
+    if (button) {
+        button.disabled = true;
+        button.classList.add('cursor-wait', 'opacity-80');
+    }
+    if (label) {
+        label.textContent = '生成中';
+    }
+    if (progress) {
+        progress.classList.remove('hidden');
+    }
+
+    const render = () => {
+        if (progressValue) progressValue.textContent = `${percent}%`;
+        if (progressBar) progressBar.style.width = `${percent}%`;
+        if (progressLabel) {
+            progressLabel.textContent = percent >= 72
+                ? '正在保存关键词库和标题库'
+                : (percent >= 36 ? '正在分批请求模型生成素材' : '正在召回知识 chunk');
+        }
+    };
+
+    render();
+    const timer = window.setInterval(function () {
+        percent = Math.min(92, percent + (percent < 50 ? 11 : 5));
+        render();
+        if (percent >= 92) {
+            window.clearInterval(timer);
+        }
+    }, 520);
+});
+</script>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>
