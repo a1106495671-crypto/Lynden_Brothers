@@ -84,7 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $version = trim($_POST['version'] ?? '');
                 $api_key = trim($_POST['api_key'] ?? '');
                 $model_id = trim($_POST['model_id'] ?? '');
-                $api_url = trim($_POST['api_url'] ?? 'https://api.tu-zi.com');
+	                $api_url = trim($_POST['api_url'] ?? 'https://api.deepseek.com');
                 $daily_limit = intval($_POST['daily_limit'] ?? 0);
                 $model_type = normalize_ai_model_type($_POST['model_type'] ?? 'chat');
                 
@@ -474,7 +474,8 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
                 <div class="px-6 py-5 space-y-3 text-sm text-gray-700">
                     <p><span class="font-medium text-gray-900">聊天模型：</span>用于任务中心正文生成、关键词生成、描述生成和标题 AI 生成。</p>
-                    <p><span class="font-medium text-gray-900">Embedding 模型：</span>用于知识库切块向量化和检索召回，不会出现在任务中心的 AI 模型下拉框里。</p>
+	                    <p><span class="font-medium text-gray-900">Embedding 模型：</span>用于知识库切块向量化和检索召回，支持填写基础地址或完整 embedding 接口，不会出现在任务中心的 AI 模型下拉框里。</p>
+	                    <p><span class="font-medium text-gray-900">Rerank / 重排序：</span>当前后台尚未接入独立 rerank 模型配置和调用链路，后续会沿用同样的 provider URL 规则补齐。</p>
                     <p><span class="font-medium text-gray-900">回退策略：</span>如果当前数据库没启用 pgvector 或 embedding 模型不可用，系统会自动回退到轻量检索，不会阻断文章生成。</p>
                 </div>
             </div>
@@ -522,10 +523,11 @@ require_once __DIR__ . '/includes/header.php';
                                                     <span class="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800">默认检索模型</span>
                                                 <?php endif; ?>
                                             </div>
-                                            <div class="text-sm text-gray-500"><?php echo htmlspecialchars($model['model_id']); ?></div>
-                                            <div class="text-xs text-gray-400">密钥: <?php echo htmlspecialchars(mask_api_key($model['api_key'])); ?></div>
-                                        </div>
-                                    </td>
+	                                            <div class="text-sm text-gray-500"><?php echo htmlspecialchars($model['model_id']); ?></div>
+	                                            <div class="text-xs text-gray-400">密钥: <?php echo htmlspecialchars(mask_api_key($model['api_key'])); ?></div>
+	                                            <div class="text-xs text-gray-400">智能切换优先级：<?php echo (int) ($model['priority'] ?? 100); ?></div>
+	                                        </div>
+	                                    </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                         <?php echo htmlspecialchars($model['version'] ?: '-'); ?>
                                     </td>
@@ -579,10 +581,10 @@ require_once __DIR__ . '/includes/header.php';
         </div>
 
         <!-- 创建/编辑模型模态框 -->
-        <div id="modelModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden">
-            <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
-                <div class="mt-3">
-                    <div class="flex items-center justify-between mb-4">
+	        <div id="modelModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
+	            <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+	                <div class="mt-3">
+	                    <div class="flex items-center justify-between mb-4">
                         <h3 class="text-lg font-medium text-gray-900" id="modalTitle">新增AI模型</h3>
                         <button onclick="closeModelModal()" class="text-gray-400 hover:text-gray-600">
                             <i data-lucide="x" class="w-6 h-6"></i>
@@ -591,12 +593,33 @@ require_once __DIR__ . '/includes/header.php';
 
                     <form id="modelForm" method="POST" class="space-y-6">
                         <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
-                        <input type="hidden" name="action" id="formAction" value="create_model">
-                        <input type="hidden" name="id" id="modelId" value="">
+	                        <input type="hidden" name="action" id="formAction" value="create_model">
+	                        <input type="hidden" name="id" id="modelId" value="">
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label for="name" class="block text-sm font-medium text-gray-700">模型名称 *</label>
+	                        <div>
+	                            <label class="block text-sm font-medium text-gray-700 mb-2">服务商快速填充（聊天模型）</label>
+	                            <div class="flex flex-wrap gap-2">
+	                                <button type="button" onclick="fillPreset('minimax')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">MiniMax</button>
+	                                <button type="button" onclick="fillPreset('minimax_highspeed')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">MiniMax Highspeed</button>
+	                                <button type="button" onclick="fillPreset('openai')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">OpenAI</button>
+	                                <button type="button" onclick="fillPreset('gemini')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">Gemini</button>
+	                                <button type="button" onclick="fillPreset('deepseek')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">DeepSeek</button>
+	                                <button type="button" onclick="fillPreset('zhipu')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">Zhipu GLM</button>
+	                                <button type="button" onclick="fillPreset('volcengine_ark')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">Volcengine Ark</button>
+	                            </div>
+	                            <label class="block text-sm font-medium text-gray-700 mt-4 mb-2">服务商快速填充（Embedding 模型）</label>
+	                            <div class="flex flex-wrap gap-2">
+	                                <button type="button" onclick="fillPreset('openai_embedding')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">OpenAI Embedding</button>
+	                                <button type="button" onclick="fillPreset('gemini_embedding')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">Gemini Embedding</button>
+	                                <button type="button" onclick="fillPreset('zhipu_embedding')" class="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-xs font-medium text-gray-700 bg-white hover:bg-gray-50">Zhipu Embedding</button>
+	                            </div>
+	                            <p class="mt-1 text-xs text-gray-500">点击自动填充常见服务商配置。Gemini 使用 Google 原生 v1beta 接口；其他聊天模型会按 provider 规则补全聊天接口，embedding 模型会补全 /v1/embeddings 或版本化 provider 的 /embeddings。火山方舟聊天通常使用推理接入点 ID（如 ep-xxxx）作为模型 ID。</p>
+	                            <p class="mt-2 text-xs text-amber-700">Gemini Embedding 2 会按检索最佳实践自动加入 query/document 前缀；本系统不支持 gemini-embedding-001 的 task_type 配置。</p>
+	                        </div>
+
+	                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+	                            <div>
+	                                <label for="name" class="block text-sm font-medium text-gray-700">模型名称 *</label>
                                 <input type="text" name="name" id="name" required
                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                                        placeholder="例如：Claude Sonnet 4">
@@ -617,7 +640,7 @@ require_once __DIR__ . '/includes/header.php';
                                 <option value="chat">聊天模型</option>
                                 <option value="embedding">Embedding 检索模型</option>
                             </select>
-                            <p class="mt-1 text-xs text-gray-500">聊天模型用于任务中心生成内容；embedding 模型用于知识库向量化与召回。</p>
+	                            <p class="mt-1 text-xs text-gray-500">聊天模型用于任务中心生成内容；embedding 模型用于知识库向量化与召回；Rerank / 重排序接口当前暂未接入。</p>
                         </div>
 
                         <div>
@@ -637,30 +660,31 @@ require_once __DIR__ . '/includes/header.php';
                             <p id="apiKeyHelp" class="mt-1 text-xs text-gray-500">创建模型时必填。</p>
                         </div>
 
-                        <div>
-                            <label for="api_url" class="block text-sm font-medium text-gray-700">API地址</label>
-                            <input type="url" name="api_url" id="api_url"
-                                   class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                                   value="https://api.tu-zi.com"
-                                   placeholder="https://api.tu-zi.com">
-                        </div>
+	                            <div>
+	                                <label for="api_url" class="block text-sm font-medium text-gray-700">API地址（基础地址或完整接口）</label>
+	                                <input type="url" name="api_url" id="api_url"
+	                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+	                                       value="https://api.deepseek.com"
+	                                       placeholder="例如：https://api.openai.com 或 https://open.bigmodel.cn/api/paas/v4 或完整 .../chat/completions / .../embeddings">
+	                                <p class="mt-1 text-xs text-gray-500">支持填写基础地址或完整接口 URL。Gemini 会统一规范为 https://generativelanguage.googleapis.com/v1beta；其他聊天模型默认补全 /v1/chat/completions，embedding 模型默认补全 /v1/embeddings；智谱 /api/paas/v4、火山方舟 /api/v3 这类版本化基础地址会自动补全各自对应的 capability 路径。</p>
+	                            </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label for="daily_limit" class="block text-sm font-medium text-gray-700">每日调用限制</label>
-                                <input type="number" name="daily_limit" id="daily_limit" min="0"
-                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                                       placeholder="0表示无限制">
-                                <p class="mt-1 text-xs text-gray-500">0表示无限制，大于0表示每日最大调用次数</p>
-                            </div>
+	                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+	                            <div>
+		                                <label for="priority" class="block text-sm font-medium text-gray-700">智能切换优先级</label>
+		                                <input type="number" name="priority" id="priority" min="1"
+	                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+		                                       placeholder="100" value="100">
+		                                <p class="mt-1 text-xs text-gray-500">数值越小，越优先作为智能模型切换的后备模型。主模型始终先尝试，只有失败时才按优先级切换。</p>
+	                            </div>
 
-                            <div>
-                                <label for="priority" class="block text-sm font-medium text-gray-700">优先级</label>
-                                <input type="number" name="priority" id="priority" min="1" max="99"
-                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                                       placeholder="10" value="10">
-                                <p class="mt-1 text-xs text-gray-500">数字越小优先级越高，fallback时按此顺序尝试</p>
-                            </div>
+	                            <div>
+	                                <label for="daily_limit" class="block text-sm font-medium text-gray-700">每日调用限制</label>
+	                                <input type="number" name="daily_limit" id="daily_limit" min="0"
+		                                       class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+	                                       placeholder="0">
+	                                <p class="mt-1 text-xs text-gray-500">0表示无限制，大于0表示每日最大调用次数</p>
+	                            </div>
 
                             <div id="statusField" class="hidden">
                                 <label for="status" class="block text-sm font-medium text-gray-700">状态</label>
@@ -686,10 +710,23 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </div>
         </div>
-    <script>
-        // 显示创建模型模态框
-        function showCreateModelModal() {
-            document.getElementById('modalTitle').textContent = '新增AI模型';
+	    <script>
+	        const PROVIDER_PRESETS = {
+	            minimax: {name: 'MiniMax M2.7', version: 'M2.7', model_id: 'MiniMax-M2.7', api_url: 'https://api.minimax.io', model_type: 'chat'},
+	            minimax_highspeed: {name: 'MiniMax M2.7 Highspeed', version: 'M2.7', model_id: 'MiniMax-M2.7-highspeed', api_url: 'https://api.minimax.io', model_type: 'chat'},
+	            openai: {name: 'GPT-4o', version: '', model_id: 'gpt-4o', api_url: 'https://api.openai.com', model_type: 'chat'},
+	            gemini: {name: 'Gemini 3 Flash Preview', version: 'v1beta', model_id: 'gemini-3-flash-preview', api_url: 'https://generativelanguage.googleapis.com/v1beta', model_type: 'chat'},
+	            deepseek: {name: 'DeepSeek Chat', version: '', model_id: 'deepseek-chat', api_url: 'https://api.deepseek.com', model_type: 'chat'},
+	            zhipu: {name: '智谱 GLM-4.6', version: 'v4', model_id: 'glm-4.6', api_url: 'https://open.bigmodel.cn/api/paas/v4', model_type: 'chat'},
+	            volcengine_ark: {name: '火山方舟 Chat', version: 'v3', model_id: '', api_url: 'https://ark.cn-beijing.volces.com/api/v3', model_type: 'chat'},
+	            openai_embedding: {name: 'OpenAI Embedding 3 Small', version: '', model_id: 'text-embedding-3-small', api_url: 'https://api.openai.com', model_type: 'embedding'},
+	            gemini_embedding: {name: 'Gemini Embedding 2', version: 'v1beta', model_id: 'gemini-embedding-2', api_url: 'https://generativelanguage.googleapis.com/v1beta', model_type: 'embedding'},
+	            zhipu_embedding: {name: '智谱 Embedding-3', version: 'v4', model_id: 'embedding-3', api_url: 'https://open.bigmodel.cn/api/paas/v4', model_type: 'embedding'},
+	        };
+
+	        // 显示创建模型模态框
+	        function showCreateModelModal() {
+	            document.getElementById('modalTitle').textContent = '新增AI模型';
             document.getElementById('formAction').value = 'create_model';
             document.getElementById('modelId').value = '';
             document.getElementById('statusField').classList.add('hidden');
@@ -697,11 +734,26 @@ require_once __DIR__ . '/includes/header.php';
             document.getElementById('model_type').value = 'chat';
             document.getElementById('api_key').required = true;
             document.getElementById('apiKeyRequiredMarker').textContent = '*';
-            document.getElementById('api_key').placeholder = '输入API密钥';
-            document.getElementById('apiKeyHelp').textContent = '创建模型时必填。';
-            document.getElementById('api_url').value = 'https://api.tu-zi.com';
-            document.getElementById('modelModal').classList.remove('hidden');
-        }
+	            document.getElementById('api_key').placeholder = '输入API密钥';
+	            document.getElementById('apiKeyHelp').textContent = '创建模型时必填。';
+	            document.getElementById('api_url').value = 'https://api.deepseek.com';
+	            document.getElementById('priority').value = 100;
+	            document.getElementById('modelModal').classList.remove('hidden');
+	        }
+
+	        function fillPreset(key) {
+	            const preset = PROVIDER_PRESETS[key];
+	            if (!preset) {
+	                return;
+	            }
+
+	            document.getElementById('name').value = preset.name;
+	            document.getElementById('version').value = preset.version;
+	            document.getElementById('model_id').value = preset.model_id;
+	            document.getElementById('model_type').value = preset.model_type;
+	            document.getElementById('api_url').value = preset.api_url;
+	            document.getElementById('priority').value = 100;
+	        }
 
         // 编辑模型
         function editModel(model) {
@@ -716,10 +768,10 @@ require_once __DIR__ . '/includes/header.php';
             document.getElementById('api_key').required = false;
             document.getElementById('apiKeyRequiredMarker').textContent = '';
             document.getElementById('api_key').placeholder = '已保存；留空则保留当前密钥';
-            document.getElementById('apiKeyHelp').textContent = '出于安全原因不会回显明文密钥。留空表示不修改；只有需要轮换密钥时才填写新值。';
-            document.getElementById('api_url').value = model.api_url;
-            document.getElementById('daily_limit').value = model.daily_limit;
-            document.getElementById('priority').value = model.priority || 10;
+	            document.getElementById('apiKeyHelp').textContent = '出于安全原因不会回显明文密钥。留空表示不修改；只有需要轮换密钥时才填写新值。';
+	            document.getElementById('api_url').value = model.api_url;
+	            document.getElementById('daily_limit').value = model.daily_limit;
+	            document.getElementById('priority').value = model.priority || 100;
             document.getElementById('status').value = model.status;
             document.getElementById('statusField').classList.remove('hidden');
             document.getElementById('modelModal').classList.remove('hidden');
