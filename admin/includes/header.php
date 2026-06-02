@@ -95,7 +95,6 @@ $primary_nav_items = [
             ['page' => 'geo-article-impact.php',   'name' => '效果归因',   'desc' => '文章发布前后AI提及率对比'],
         ],
     ],
-    ['type' => 'link', 'page' => 'ai-configurator.php', 'name' => 'AI配置', 'icon' => 'cpu'],
 ];
 
 $settings_menu_items = [

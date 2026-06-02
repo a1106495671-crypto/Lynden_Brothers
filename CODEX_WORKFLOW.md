@@ -1,5 +1,11 @@
 # Codex 工作流约定
 
+## 新终端第一条规则
+
+每次打开新终端、新会话，或开始改这个项目之前，先读本文件和 `DOCKER_SYNC_REQUIRED.md`。
+
+只要修改了会影响 `http://localhost:18094/dl-console/` 的代码，必须在本地改完后立即同步到 Docker 容器 `geo-app:/app`。不要等用户提醒，不要只做本地 `git diff`。
+
 本项目运行页面来自 Docker 容器 `geo-app`，访问地址通常是：
 
 ```text

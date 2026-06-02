@@ -336,25 +336,7 @@ $automation_nodes = [
         'tone' => 'orange',
     ],
     [
-        'title' => 'S5 填写基准问答',
-        'desc' => '手动跑首次 AI 问答采样，补录问题和原始答案',
-        'icon' => 'message-square-text',
-        'link' => 'geo-diagnosis.php',
-        'status' => 'attention',
-        'meta' => '人工采样',
-        'tone' => 'orange',
-    ],
-    [
-        'title' => 'S6 确认雷达诊断',
-        'desc' => '基于知识库和基准问答确认六维评分',
-        'icon' => 'radar',
-        'link' => 'geo-diagnosis.php',
-        'status' => $geo_tool_stats['total_diagnoses'] > 0 ? 'ready' : 'attention',
-        'meta' => ($geo_tool_stats['total_diagnoses'] ?: '待跑') . ' 次诊断',
-        'tone' => 'violet',
-    ],
-    [
-        'title' => 'S7 生成知识图谱',
+        'title' => 'S5 生成知识图谱',
         'desc' => '从已向量化知识库中抽取可引用事实条目',
         'icon' => 'network',
         'link' => 'materials.php',
@@ -363,7 +345,7 @@ $automation_nodes = [
         'tone' => 'emerald',
     ],
     [
-        'title' => 'S8 意图挖掘',
+        'title' => 'S6 意图挖掘',
         'desc' => '基于客户资料和知识库发现真实问题空白',
         'icon' => 'crosshair',
         'link' => 'geo-diagnosis.php',
@@ -372,7 +354,7 @@ $automation_nodes = [
         'tone' => 'violet',
     ],
     [
-        'title' => 'S9 创建并启动任务',
+        'title' => 'S7 创建并启动任务',
         'desc' => '选择知识库、标题库、模型、数量和发布范围',
         'icon' => 'zap',
         'link' => 'tasks.php',
@@ -381,7 +363,7 @@ $automation_nodes = [
         'tone' => 'emerald',
     ],
     [
-        'title' => 'S10 首篇文章生成',
+        'title' => 'S8 首篇文章生成',
         'desc' => '使用向量召回资料生成首篇内容，剩余后台继续',
         'icon' => 'file-text',
         'link' => 'articles.php',
@@ -390,7 +372,7 @@ $automation_nodes = [
         'tone' => 'emerald',
     ],
     [
-        'title' => 'S11 启动媒体分发',
+        'title' => 'S9 启动媒体分发',
         'desc' => '按渠道配置发布文章，自动发布或生成待办',
         'icon' => 'send',
         'link' => 'distribution.php',
@@ -399,7 +381,7 @@ $automation_nodes = [
         'tone' => 'orange',
     ],
     [
-        'title' => 'S12 启动监测',
+        'title' => 'S10 启动监测',
         'desc' => '发布后添加监测关键词，持续跟踪引用变化',
         'icon' => 'activity',
         'link' => 'geo-monitor.php',
@@ -408,13 +390,31 @@ $automation_nodes = [
         'tone' => 'orange',
     ],
     [
-        'title' => 'S13 生成全景诊断',
-        'desc' => '汇总诊断、内容、分发和监测结果形成复盘',
+        'title' => 'S11 生成全景诊断',
+        'desc' => '汇总内容、分发和监测结果形成复盘，不引用雷达评分',
         'icon' => 'scan-search',
-        'link' => 'geo-diagnosis.php',
+        'link' => 'geo-panorama.php',
         'status' => 'ready',
         'meta' => '全景档案',
         'tone' => 'slate',
+    ],
+    [
+        'title' => 'S12 填写基准问答',
+        'desc' => '可选补录首次 AI 问答采样，仅用于客户展示材料',
+        'icon' => 'message-square-text',
+        'link' => 'geo-diagnosis.php',
+        'status' => 'ready',
+        'meta' => '展示补充',
+        'tone' => 'violet',
+    ],
+    [
+        'title' => 'S13 生成雷达展示',
+        'desc' => '最后生成客户可看的雷达报告，不影响文章生成和自动化依据',
+        'icon' => 'radar',
+        'link' => 'geo-diagnosis.php',
+        'status' => $geo_tool_stats['total_diagnoses'] > 0 ? 'ready' : 'attention',
+        'meta' => ($geo_tool_stats['total_diagnoses'] ?: '待跑') . ' 次诊断',
+        'tone' => 'violet',
     ],
 ];
 
@@ -518,7 +518,7 @@ require_once __DIR__ . '/includes/header.php';
                     <div>
                         <h2 class="text-xl font-semibold text-gray-900">品牌入驻自动化</h2>
                         <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-500">
-                            先完成 API、素材上传、知识切割向量化和基准诊断这些人工准备项，再进入任务、内容、分发、监测和复盘自动化。
+                            先完成 API、素材上传、知识切割向量化这些准备项，再进入任务、内容、分发、监测和复盘自动化；雷达诊断最后生成，仅作为客户展示材料。
                         </p>
                     </div>
                     <div class="flex flex-wrap gap-2">

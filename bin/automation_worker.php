@@ -538,7 +538,9 @@ function step_keywords(PDO $db, array $wf): array {
 }
 
 /**
- * Step 2: 生成雷达诊断
+ * Final display step: 生成雷达诊断
+ *
+ * 雷达诊断只作为客户展示报告，不参与关键词、标题、知识库、文章生成或全景诊断决策。
  */
 function step_diagnosis(PDO $db, array $wf): array {
     $collected = wf_get_step_output($db, (string) $wf['workflow_id'], 'collect');
@@ -1395,18 +1397,7 @@ function step_panorama(PDO $db, array $wf): array {
         }
     }
 
-    $stmtSignals = $db->prepare("
-        SELECT s.signal_key, d.name, s.score
-        FROM geo_diagnosis_runs r
-        JOIN geo_diagnosis_brands b ON b.id = r.brand_id
-        JOIN geo_diagnosis_signal_scores s ON s.diagnosis_id = r.id
-        JOIN geo_diagnosis_signal_definitions d ON d.signal_key = s.signal_key
-        WHERE b.name = ?
-        ORDER BY r.created_at DESC, s.score ASC
-        LIMIT 6
-    ");
-    $stmtSignals->execute([$brandName]);
-    $signals = $stmtSignals->fetchAll(PDO::FETCH_ASSOC);
+    $signals = [];
 
     $stmtAlerts = $db->prepare("
         SELECT alert_type, level, keyword, competitor_name, brand_rate, competitor_rate, detail
@@ -1464,16 +1455,7 @@ function step_panorama(PDO $db, array $wf): array {
         $compText = "监测范围内暂无竞品被 AI 回答提及\n";
     }
 
-    $signalText = '';
-    if (!empty($signals)) {
-        foreach ($signals as $signal) {
-            $score = (float) ($signal['score'] ?? 0);
-            $flag = $score < 40 ? '低' : ($score < 70 ? '中' : '高');
-            $signalText .= "- {$flag} {$signal['name']}：{$score}分\n";
-        }
-    } else {
-        $signalText = "暂无雷达诊断数据，可前往雷达诊断页生成\n";
-    }
+    $signalText = "雷达诊断已从自动化决策链剥离；本报告不使用雷达评分作为依据。\n";
 
     $alertText = '';
     if (!empty($alerts)) {
@@ -1607,6 +1589,22 @@ function wf_execute_step(PDO $db, array $wf, string $stepId): array {
     }
 }
 
+function wf_is_optional_step(string $stepId): bool {
+    return $stepId === 'diagnosis';
+}
+
+function wf_complete_optional_step(PDO $db, string $workflowId, string $stepId, string $errorMsg): void {
+    $output = json_encode([
+        'optional' => true,
+        'skipped' => true,
+        'reason' => $errorMsg,
+        'note' => '雷达诊断只作为最终客户展示，不影响文章生成、分发、监测或全景诊断。',
+    ], JSON_UNESCAPED_UNICODE);
+
+    wf_update_step($db, $workflowId, $stepId, 'completed', null, $output);
+    wf_log($workflowId, "⚠ 可选展示步骤 {$stepId} 跳过，不影响主流程: {$errorMsg}");
+}
+
 // ═══════════════════════════════════════════════════════════
 //  执行单个工作流
 // ═══════════════════════════════════════════════════════════
@@ -1664,6 +1662,10 @@ function wf_run(PDO $db, string $workflowId): void {
                 wf_log($workflowId, "✓ 步骤 {$stepId} 完成");
             } else {
                 $errorMsg = $result['error'] ?? '未知错误';
+                if (wf_is_optional_step($stepId)) {
+                    wf_complete_optional_step($db, $workflowId, $stepId, $errorMsg);
+                    continue;
+                }
                 wf_update_step($db, $workflowId, $stepId, 'error', $errorMsg);
                 wf_update_workflow($db, $workflowId, ['status' => 'error', 'error_message' => "步骤 {$stepId} 失败: {$errorMsg}"]);
                 wf_log($workflowId, "✗ 步骤 {$stepId} 失败: {$errorMsg}");
@@ -1671,6 +1673,10 @@ function wf_run(PDO $db, string $workflowId): void {
             }
         } catch (Throwable $e) {
             $errorMsg = $e->getMessage();
+            if (wf_is_optional_step($stepId)) {
+                wf_complete_optional_step($db, $workflowId, $stepId, $errorMsg);
+                continue;
+            }
             wf_update_step($db, $workflowId, $stepId, 'error', $errorMsg);
             wf_update_workflow($db, $workflowId, ['status' => 'error', 'error_message' => "步骤 {$stepId} 异常: {$errorMsg}"]);
             wf_log($workflowId, "✗ 步骤 {$stepId} 异常: {$errorMsg}");

@@ -135,18 +135,18 @@ $page_title = '品牌入驻自动化';
             <?php
             $steps = [
                 ['id' => 'collect',          'no' => '01', 'name' => '搜集品牌资料',  'desc' => '搜索官网与媒体报道，整理品牌基本信息', 'icon' => 'search',           'color' => 'blue'],
-                ['id' => 'diagnosis',        'no' => '02', 'name' => '生成雷达诊断',  'desc' => '生成六维GEO权威性基线评分',          'icon' => 'radar',            'color' => 'violet'],
-                ['id' => 'keywords',         'no' => '03', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
-                ['id' => 'titles',           'no' => '04', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
-                ['id' => 'knowledge',        'no' => '05', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
-                ['id' => 'customer',         'no' => '06', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
-                ['id' => 'knowledge_graph',  'no' => '07', 'name' => '生成知识图谱',  'desc' => '为五类结构化知识生成可引用的品牌事实条目', 'icon' => 'network',          'color' => 'fuchsia'],
-                ['id' => 'intent_mining',    'no' => '08', 'name' => '意图挖掘',      'desc' => '从7个维度挖掘用户真实问题，发现覆盖空白', 'icon' => 'crosshair',        'color' => 'rose'],
-                ['id' => 'task',             'no' => '09', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
-                ['id' => 'generate',         'no' => '10', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
-                ['id' => 'distribute',       'no' => '11', 'name' => '启动媒体分发',  'desc' => '按所选账号创建外部分发任务，自动账号尝试发布，人工账号创建待办',   'icon' => 'send',             'color' => 'emerald'],
-                ['id' => 'monitor',          'no' => '12', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
-                ['id' => 'panorama',         'no' => '13', 'name' => '生成全景诊断',  'desc' => '基于监测结果生成并保存全景诊断档案', 'icon' => 'scan-search',      'color' => 'blue'],
+                ['id' => 'keywords',         'no' => '02', 'name' => '生成关键词库',  'desc' => '生成25-40个五类关键词',               'icon' => 'tags',             'color' => 'violet'],
+                ['id' => 'titles',           'no' => '03', 'name' => '生成标题库',    'desc' => '生成20个六类标题模板',               'icon' => 'heading',          'color' => 'indigo'],
+                ['id' => 'knowledge',        'no' => '04', 'name' => '生成知识库',    'desc' => '生成1200-1500字品牌知识文档',         'icon' => 'book-open',        'color' => 'purple'],
+                ['id' => 'customer',         'no' => '05', 'name' => '创建客户',      'desc' => '在系统中创建客户记录',               'icon' => 'building-2',       'color' => 'sky'],
+                ['id' => 'knowledge_graph',  'no' => '06', 'name' => '生成知识图谱',  'desc' => '为五类结构化知识生成可引用的品牌事实条目', 'icon' => 'network',          'color' => 'fuchsia'],
+                ['id' => 'intent_mining',    'no' => '07', 'name' => '意图挖掘',      'desc' => '从7个维度挖掘用户真实问题，发现覆盖空白', 'icon' => 'crosshair',        'color' => 'rose'],
+                ['id' => 'task',             'no' => '08', 'name' => '创建并启动任务','desc' => '关联标题库、AI模型与GEO语义优化',     'icon' => 'zap',              'color' => 'cyan'],
+                ['id' => 'generate',         'no' => '09', 'name' => '首篇文章生成',  'desc' => '生成首篇后进入发布，剩余文章后台继续生成', 'icon' => 'file-text',        'color' => 'teal'],
+                ['id' => 'distribute',       'no' => '10', 'name' => '启动媒体分发',  'desc' => '按所选账号创建外部分发任务，自动账号尝试发布，人工账号创建待办',   'icon' => 'send',             'color' => 'emerald'],
+                ['id' => 'monitor',          'no' => '11', 'name' => '启动监测',      'desc' => '首篇发布后添加监测关键词，持续跟踪变化', 'icon' => 'activity',         'color' => 'green'],
+                ['id' => 'panorama',         'no' => '12', 'name' => '生成全景诊断',  'desc' => '只基于监测、内容和分发结果生成复盘档案', 'icon' => 'scan-search',      'color' => 'blue'],
+                ['id' => 'diagnosis',        'no' => '13', 'name' => '生成雷达展示',  'desc' => '最后生成给客户看的雷达报告，不影响自动化决策', 'icon' => 'radar',            'color' => 'violet'],
             ];
 
             $color_map = [
@@ -405,10 +405,9 @@ $page_title = '品牌入驻自动化';
 $additional_js = <<<'JS'
 <script>
 // ── 状态管理 ──────────────────────────────────────────────────────────────────
-const STEP_IDS = ['collect','diagnosis','keywords','titles','knowledge','customer','knowledge_graph','intent_mining','task','generate','distribute','monitor','panorama'];
+const STEP_IDS = ['collect','keywords','titles','knowledge','customer','knowledge_graph','intent_mining','task','generate','distribute','monitor','panorama','diagnosis'];
 const STEP_META = {
     collect:         { name: '搜集品牌资料',  icon: 'search' },
-    diagnosis:       { name: '生成雷达诊断',  icon: 'radar' },
     keywords:        { name: '生成关键词库',  icon: 'tags' },
     titles:          { name: '生成标题库',    icon: 'heading' },
     knowledge:       { name: '生成知识库',    icon: 'book-open' },
@@ -420,6 +419,7 @@ const STEP_META = {
     distribute:      { name: '启动媒体分发',  icon: 'send' },
     monitor:         { name: '启动监测',      icon: 'activity' },
     panorama:        { name: '生成全景诊断',  icon: 'scan-search' },
+    diagnosis:       { name: '生成雷达展示',  icon: 'radar' },
 };
 
 let workflowState = {
@@ -784,6 +784,7 @@ function updateStepUI(stepId, stepData) {
 function renderStepOutputSummary(stepId, output) {
     if (!output || typeof output !== 'object') return '';
     if (stepId === 'diagnosis') {
+        if (output.skipped) return '可选展示已跳过';
         const score = output.overall_score !== undefined && output.overall_score !== null ? `评分 ${output.overall_score}` : '';
         const rate = output.predicted_hit_rate || '';
         return [score, rate].filter(Boolean).join(' · ');
@@ -902,9 +903,13 @@ function updateLiveStepSummaries() {
     }
 
     const diagStep = workflowState.steps?.diagnosis;
+    if (diagStep?.output?.skipped) {
+        set('diagnosis', '可选展示已跳过，不影响主流程');
+        return;
+    }
     if (diagStep?.output?.overall_score !== undefined) {
         const sourceLabel = diagStep.output.data_source === 'real_search' ? '实时搜索' : '估算';
-        set('diagnosis', `${sourceLabel}评分 ${diagStep.output.overall_score} · ${diagStep.output.predicted_hit_rate || ''}`);
+        set('diagnosis', `展示用${sourceLabel}评分 ${diagStep.output.overall_score} · ${diagStep.output.predicted_hit_rate || ''}`);
     }
 
     // 知识图谱统计（从步骤输出中读取）

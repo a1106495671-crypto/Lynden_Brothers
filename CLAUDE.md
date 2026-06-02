@@ -1,5 +1,11 @@
 # GEO System - Claude Code Automation Guide
 
+## 必读：Docker 同步规则
+
+新终端或新会话开始前，先读 `CODEX_WORKFLOW.md` 和 `DOCKER_SYNC_REQUIRED.md`。
+
+本项目浏览器页面通常来自 Docker 容器 `geo-app`。修改本地文件后，必须同步到 `geo-app:/app`，否则 `localhost:18094` 页面不会变化。
+
 ## 项目概述
 GEO+AI内容生成系统，用于品牌GEO优化的全链路交付。
 技术栈：PHP + PostgreSQL + Node.js

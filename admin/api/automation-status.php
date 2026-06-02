@@ -338,9 +338,6 @@ try {
     if (($runtime['monitor_records'] ?? 0) > 0 && (int) ($runtime['panorama_reports'] ?? 0) === 0) {
         $completionIssues[] = '全景诊断未生成档案';
     }
-    if ($diagnosis && ($diagnosis['data_source'] ?? '') !== 'real_search') {
-        $completionIssues[] = '雷达诊断不是实时搜索诊断：' . (($diagnosis['data_source'] ?? '') === 'site_crawl_estimate' ? '官网抓取估算' : '本地估算');
-    }
     foreach ($steps as $step) {
         if (($step['step_id'] ?? '') !== 'intent_mining') {
             continue;
