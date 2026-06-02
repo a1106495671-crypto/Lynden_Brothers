@@ -313,6 +313,7 @@ function knowledge_base_parse_uploaded_files(array $files, array &$storedPaths):
         }
 
         $originalName = (string) ($file['name'] ?? '');
+        $relativeName = trim((string) ($file['relative_name'] ?? $originalName));
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         if (!in_array($extension, ['txt', 'md', 'docx'], true)) {
             throw new RuntimeException('不支持的文件格式，请上传 TXT、MD 或 DOCX 文件');
@@ -339,7 +340,7 @@ function knowledge_base_parse_uploaded_files(array $files, array &$storedPaths):
         $parsedFiles[] = [
             'content' => (string) ($parsed['content'] ?? ''),
             'file_type' => (string) ($parsed['file_type'] ?? 'markdown'),
-            'original_name' => $originalName,
+            'original_name' => $relativeName !== '' ? $relativeName : $originalName,
         ];
     }
 
@@ -365,6 +366,7 @@ function knowledge_base_uploaded_files_from_request(string $fieldName = 'knowled
             'tmp_name' => $files['tmp_name'][$index] ?? '',
             'error' => $files['error'][$index] ?? UPLOAD_ERR_NO_FILE,
             'size' => $files['size'][$index] ?? 0,
+            'relative_name' => $files['full_path'][$index] ?? $name,
         ];
     }
 

@@ -178,7 +178,7 @@ require_once __DIR__ . '/includes/header.php';
                 <h3 class="text-lg font-medium text-gray-900">知识库内容</h3>
             </div>
 
-            <form method="POST" class="p-6">
+            <form method="POST" class="p-6" id="knowledge-detail-form">
                 <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
                 <input type="hidden" name="action" value="update_knowledge">
 
@@ -219,10 +219,19 @@ require_once __DIR__ . '/includes/header.php';
                     </div>
 
                     <div class="flex justify-end">
-                        <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500">
+                        <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500" data-detail-submit>
                             <i data-lucide="save" class="w-4 h-4 mr-2"></i>
-                            保存更改
+                            <span data-detail-submit-label>保存更改</span>
                         </button>
+                    </div>
+                    <div class="hidden" data-detail-progress>
+                        <div class="flex items-center justify-between text-xs font-medium text-orange-700">
+                            <span data-detail-progress-label>正在保存内容</span>
+                            <span data-detail-progress-value>0%</span>
+                        </div>
+                        <div class="mt-2 h-2 overflow-hidden rounded-full bg-orange-100">
+                            <div class="h-full rounded-full bg-orange-500 transition-all duration-500 ease-out" style="width: 8%;" data-detail-progress-bar></div>
+                        </div>
                     </div>
                 </div>
             </form>
@@ -324,18 +333,18 @@ require_once __DIR__ . '/includes/header.php';
 
 <!-- Chunk preview section -->
 <?php if ($knowledge_chunk_count > 0): ?>
-<div class="mt-6 bg-white shadow rounded-lg overflow-hidden">
+<div id="chunk-preview" class="mt-6 bg-white shadow rounded-lg overflow-hidden">
     <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
         <h3 class="text-lg font-medium text-gray-900">
             知识切片预览
             <span class="ml-2 text-sm font-normal text-gray-400"><?php echo $knowledge_chunk_count; ?> 个切片，<?php echo $knowledge_vector_count; ?> 个已向量化</span>
         </h3>
         <div class="flex items-center gap-3">
-            <form method="POST" onsubmit="return confirm('将重新切片并强制写入真实向量，确定继续吗？');">
+            <form method="POST" onsubmit="return confirm('将重新切片并强制写入真实向量，确定继续吗？');" data-detail-refresh-form>
                 <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
                 <input type="hidden" name="action" value="refresh_chunks">
-                <button type="submit" class="text-sm text-orange-600 hover:text-orange-700 flex items-center gap-1">
-                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> 更新切片
+                <button type="submit" class="text-sm text-orange-600 hover:text-orange-700 flex items-center gap-1" data-detail-refresh-button>
+                    <i data-lucide="refresh-cw" class="w-4 h-4" data-detail-refresh-icon></i> <span data-detail-refresh-label>更新切片</span>
                 </button>
             </form>
             <a href="rag-test.php" class="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1">
@@ -403,6 +412,68 @@ document.getElementById('content').addEventListener('input', function() {
 if (typeof lucide !== 'undefined') {
     lucide.createIcons();
 }
+
+document.getElementById('knowledge-detail-form')?.addEventListener('submit', function () {
+    const form = this;
+    const button = form.querySelector('[data-detail-submit]');
+    const label = form.querySelector('[data-detail-submit-label]');
+    const progress = form.querySelector('[data-detail-progress]');
+    const progressLabel = form.querySelector('[data-detail-progress-label]');
+    const progressValue = form.querySelector('[data-detail-progress-value]');
+    const progressBar = form.querySelector('[data-detail-progress-bar]');
+    let percent = 10;
+
+    if (button) {
+        button.disabled = true;
+        button.classList.add('cursor-wait', 'opacity-80');
+    }
+    if (label) {
+        label.textContent = '保存并刷新切片中';
+    }
+    if (progress) {
+        progress.classList.remove('hidden');
+    }
+
+    const render = () => {
+        if (progressValue) progressValue.textContent = `${percent}%`;
+        if (progressBar) progressBar.style.width = `${percent}%`;
+        if (progressLabel) {
+            progressLabel.textContent = percent >= 70
+                ? '正在写入知识片段与向量'
+                : (percent >= 36 ? '正在重新生成切片' : '正在保存内容');
+        }
+    };
+
+    render();
+    const timer = window.setInterval(function () {
+        percent = Math.min(92, percent + (percent < 50 ? 12 : 6));
+        render();
+        if (percent >= 92) {
+            window.clearInterval(timer);
+        }
+    }, 450);
+});
+
+document.querySelector('[data-detail-refresh-form]')?.addEventListener('submit', function (event) {
+    if (event.defaultPrevented) {
+        return;
+    }
+
+    const button = this.querySelector('[data-detail-refresh-button]');
+    const icon = this.querySelector('[data-detail-refresh-icon]');
+    const label = this.querySelector('[data-detail-refresh-label]');
+
+    if (button) {
+        button.disabled = true;
+        button.classList.add('cursor-wait', 'opacity-80');
+    }
+    if (icon) {
+        icon.classList.add('animate-spin');
+    }
+    if (label) {
+        label.textContent = '更新中';
+    }
+});
 </script>
 
 <?php require_once __DIR__ . '/includes/footer.php'; ?>

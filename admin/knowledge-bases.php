@@ -24,6 +24,20 @@ session_write_close();
 $message = '';
 $error = '';
 
+function knowledge_base_has_default_embedding_model(PDO $db): bool {
+    try {
+        $stmt = $db->query("
+            SELECT COUNT(*)
+            FROM ai_models
+            WHERE status = 'active'
+              AND COALESCE(NULLIF(model_type, ''), 'chat') = 'embedding'
+        ");
+        return (int) ($stmt ? $stmt->fetchColumn() : 0) > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
 // 处理POST请求
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -32,6 +46,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         
         switch ($action) {
+            case 'refresh_chunks':
+                $knowledge_id = intval($_POST['knowledge_id'] ?? 0);
+                if ($knowledge_id <= 0) {
+                    $error = '请选择要更新切片的知识库';
+                    break;
+                }
+
+                try {
+                    $stmt = $db->prepare("SELECT id, content FROM knowledge_bases WHERE id = ?");
+                    $stmt->execute([$knowledge_id]);
+                    $knowledge = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$knowledge) {
+                        throw new RuntimeException('知识库不存在');
+                    }
+
+                    $content = trim((string) ($knowledge['content'] ?? ''));
+                    if ($content === '') {
+                        throw new RuntimeException('知识库内容不能为空');
+                    }
+
+                    $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content, true);
+                    $vectorStmt = $db->prepare("
+                        SELECT COUNT(*)
+                        FROM knowledge_chunks
+                        WHERE knowledge_base_id = ?
+                          AND embedding_model_id IS NOT NULL
+                          AND embedding_model_id > 0
+                          AND embedding_dimensions > 0
+                    ");
+                    $vectorStmt->execute([$knowledge_id]);
+                    $vectorized_count = (int) $vectorStmt->fetchColumn();
+
+                    if ($chunk_count > 0 && $vectorized_count < $chunk_count) {
+                        $error = '切片已更新，但真实向量未完整写入：已向量化 ' . $vectorized_count . ' / ' . $chunk_count;
+                    } else {
+                        $message = '知识切片已更新，已向量化 ' . $vectorized_count . ' / ' . $chunk_count;
+                    }
+                } catch (Throwable $e) {
+                    $error = '更新切片失败: ' . $e->getMessage();
+                }
+                break;
+
             case 'create_knowledge':
                 $name = trim($_POST['name'] ?? '');
                 $description = trim($_POST['description'] ?? '');
@@ -42,8 +98,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 try {
                     $uploaded_files = knowledge_base_uploaded_files_from_request('knowledge_files');
-                    if (count($uploaded_files) > 10) {
-                        throw new RuntimeException('最多只能一次上传 10 个文件');
+                    if (count($uploaded_files) > 200) {
+                        throw new RuntimeException('最多只能一次导入 200 个文件');
                     }
                     $parsed_files = knowledge_base_parse_uploaded_files($uploaded_files, $stored_paths);
                     $content = knowledge_base_merge_sources($content, $parsed_files);
@@ -160,8 +216,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (empty($uploaded_files)) {
                         throw new RuntimeException('请选择要上传的文件');
                     }
-                    if (count($uploaded_files) > 10) {
-                        throw new RuntimeException('最多只能一次上传 10 个文件');
+                    if (count($uploaded_files) > 200) {
+                        throw new RuntimeException('最多只能一次导入 200 个文件');
                     }
                     $parsed_files = knowledge_base_parse_uploaded_files($uploaded_files, $stored_paths);
                     $content = knowledge_base_merge_sources('', $parsed_files);
@@ -214,11 +270,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+try {
+    knowledge_retrieval_ensure_chunk_schema($db);
+} catch (Throwable $e) {
+    // 列表页仍可展示知识库；切片统计会在后续查询失败时回退为 0。
+}
+
 // 获取知识库列表
-$knowledge_bases = $db->query("
-    SELECT * FROM knowledge_bases 
-    ORDER BY created_at DESC
-")->fetchAll();
+try {
+    $knowledge_bases = $db->query("
+        SELECT
+            kb.*,
+            COUNT(kc.id) AS chunk_count,
+            SUM(CASE WHEN kc.embedding_model_id IS NOT NULL AND kc.embedding_model_id > 0 AND kc.embedding_dimensions > 0 THEN 1 ELSE 0 END) AS vectorized_chunk_count
+        FROM knowledge_bases kb
+        LEFT JOIN knowledge_chunks kc ON kc.knowledge_base_id = kb.id
+        GROUP BY kb.id
+        ORDER BY kb.created_at DESC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    $knowledge_bases = $db->query("
+        SELECT *, 0 AS chunk_count, 0 AS vectorized_chunk_count
+        FROM knowledge_bases
+        ORDER BY created_at DESC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+}
 
 // 获取统计数据
 $stats = [
@@ -227,6 +303,7 @@ $stats = [
     'markdown_count' => $db->query("SELECT COUNT(*) as count FROM knowledge_bases WHERE file_type = 'markdown'")->fetch()['count'],
     'word_count' => $db->query("SELECT COUNT(*) as count FROM knowledge_bases WHERE file_type = 'word'")->fetch()['count']
 ];
+$has_default_embedding_model = knowledge_base_has_default_embedding_model($db);
 
 // 设置页面信息
 $page_title = 'AI知识库管理';
@@ -241,10 +318,16 @@ $page_header = '
             <p class="mt-1 text-sm text-gray-600">管理AI训练和参考的知识库文档</p>
         </div>
     </div>
-    <button onclick="showUploadModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700">
-        <i data-lucide="upload" class="w-4 h-4 mr-2"></i>
-        上传知识库
-    </button>
+    <div class="flex items-center gap-3">
+        <button onclick="showCreateModal()" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+            <i data-lucide="plus" class="w-4 h-4 mr-2"></i>
+            新建知识库
+        </button>
+        <button onclick="showCreateModal()" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-orange-600 hover:bg-orange-700">
+            <i data-lucide="upload" class="w-4 h-4 mr-2"></i>
+            导入知识库
+        </button>
+    </div>
 </div>
 ';
 
@@ -355,12 +438,16 @@ require_once __DIR__ . '/includes/header.php';
                     </div>
                 </div>
             <?php else: ?>
+                <div class="flex items-center justify-between gap-6 px-6 py-3 border-b border-gray-200 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <div>知识库</div>
+                    <div class="text-right" style="width: 440px;">操作</div>
+                </div>
                 <div class="divide-y divide-gray-200">
                     <?php foreach ($knowledge_bases as $knowledge): ?>
                         <div class="px-6 py-6">
-                            <div class="flex items-center justify-between">
-                                <div class="flex-1">
-                                    <div class="flex items-center space-x-3">
+                            <div class="flex flex-col gap-5 lg:flex-row lg:items-center">
+                                <div class="min-w-0 lg:flex-1">
+                                    <div class="flex flex-wrap items-center gap-2">
                                         <h4 class="text-lg font-medium text-gray-900">
                                             <a href="knowledge-base-detail.php?id=<?php echo $knowledge['id']; ?>" class="hover:text-orange-600">
                                                 <?php echo htmlspecialchars($knowledge['name']); ?>
@@ -378,11 +465,16 @@ require_once __DIR__ . '/includes/header.php';
                                         <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
                                             <?php echo number_format($knowledge['word_count']); ?> 字
                                         </span>
+                                        <?php if ((int) ($knowledge['chunk_count'] ?? 0) > 0): ?>
+                                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
+                                                已向量化 <?php echo (int) ($knowledge['vectorized_chunk_count'] ?? 0); ?> / <?php echo (int) ($knowledge['chunk_count'] ?? 0); ?>
+                                            </span>
+                                        <?php endif; ?>
                                     </div>
                                     <?php if ($knowledge['description']): ?>
                                         <p class="mt-1 text-sm text-gray-600"><?php echo htmlspecialchars($knowledge['description']); ?></p>
                                     <?php endif; ?>
-                                    <div class="mt-2 flex items-center space-x-4 text-sm text-gray-500">
+                                    <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
                                         <span>创建时间: <?php echo date('Y-m-d H:i', strtotime($knowledge['created_at'])); ?></span>
                                         <span>更新时间: <?php echo date('Y-m-d H:i', strtotime($knowledge['updated_at'])); ?></span>
                                         <?php if ($knowledge['usage_count'] > 0): ?>
@@ -391,7 +483,38 @@ require_once __DIR__ . '/includes/header.php';
                                     </div>
                                 </div>
                                 
-                                <div class="flex items-center space-x-2">
+                                <div class="flex flex-wrap items-start justify-start gap-2 lg:shrink-0 lg:justify-end lg:pl-8" style="width: 440px;">
+                                    <?php if ($has_default_embedding_model): ?>
+                                        <div style="width: 148px;" data-refresh-chunks-action>
+                                            <form method="POST" class="inline-block w-full" data-refresh-chunks-form data-knowledge-name="<?php echo htmlspecialchars($knowledge['name']); ?>" data-knowledge-summary="已向量化 <?php echo (int) ($knowledge['vectorized_chunk_count'] ?? 0); ?> / <?php echo (int) ($knowledge['chunk_count'] ?? 0); ?>" data-word-count="<?php echo number_format((int) ($knowledge['word_count'] ?? 0)); ?> 字">
+                                                <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
+                                                <input type="hidden" name="action" value="refresh_chunks">
+                                                <input type="hidden" name="knowledge_id" value="<?php echo (int) $knowledge['id']; ?>">
+                                                <button type="submit" class="inline-flex w-full items-center justify-center px-3 py-1.5 border border-emerald-200 text-xs font-medium rounded text-emerald-700 bg-emerald-50 hover:bg-emerald-100" data-refresh-submit-button>
+                                                    <i data-lucide="refresh-cw" class="w-4 h-4 mr-1" data-refresh-submit-icon></i>
+                                                    <span data-refresh-submit-label>更新切片</span>
+                                                </button>
+                                            </form>
+                                            <div class="mt-2 hidden" data-refresh-progress>
+                                                <div class="flex items-center justify-between text-[11px] font-medium text-emerald-700">
+                                                    <span data-refresh-progress-label>正在重建切片</span>
+                                                    <span data-refresh-progress-value>0%</span>
+                                                </div>
+                                                <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-emerald-100">
+                                                    <div class="h-full rounded-full bg-emerald-500 transition-all duration-500 ease-out" style="width: 8%;" data-refresh-progress-bar></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    <?php else: ?>
+                                        <button type="button" onclick="showEmbeddingConfigModal()" class="inline-flex items-center px-3 py-1.5 border border-amber-200 text-xs font-medium rounded text-amber-800 bg-amber-50 hover:bg-amber-100">
+                                            <i data-lucide="refresh-cw" class="w-4 h-4 mr-1"></i>
+                                            更新切片
+                                        </button>
+                                    <?php endif; ?>
+                                    <a href="knowledge-base-detail.php?id=<?php echo $knowledge['id']; ?>#chunk-preview" class="inline-flex items-center px-3 py-1.5 border border-blue-200 text-xs font-medium rounded text-blue-700 bg-blue-50 hover:bg-blue-100">
+                                        <i data-lucide="rows-3" class="w-4 h-4 mr-1"></i>
+                                        切片
+                                    </a>
                                     <a href="knowledge-base-detail.php?id=<?php echo $knowledge['id']; ?>" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
                                         <i data-lucide="eye" class="w-4 h-4 mr-1"></i>
                                         查看
@@ -417,14 +540,15 @@ require_once __DIR__ . '/includes/header.php';
                 <form method="POST" enctype="multipart/form-data" id="create-knowledge-form">
                     <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
                     <input type="hidden" name="action" value="create_knowledge">
+                    <input type="hidden" name="import_action" value="save_and_chunk" data-import-action-input>
                     
                     <div class="space-y-4">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">知识库名称 *</label>
-                                <input type="text" name="name" required 
+                                <input type="text" name="name"
                                        class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm"
-                                       placeholder="请输入知识库名称">
+                                       placeholder="可留空，系统会根据文件或正文自动命名">
                             </div>
                             
                             <div>
@@ -446,13 +570,13 @@ require_once __DIR__ . '/includes/header.php';
                         <div>
                             <label class="block text-sm font-medium text-gray-700">上传文档</label>
                             <div id="knowledge-dropzone" class="mt-1 flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-orange-200 bg-orange-50/30 px-6 py-8 text-center transition hover:border-orange-300 hover:bg-orange-50">
-                                <input type="file" id="knowledge-files-input" name="knowledge_files[]" accept=".txt,.md,.docx" multiple class="sr-only">
+                                <input type="file" id="knowledge-files-input" name="knowledge_files[]" accept=".txt,.md,.docx" multiple webkitdirectory directory class="sr-only">
                                 <label for="knowledge-files-input" class="cursor-pointer">
                                     <span class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white text-orange-600 shadow-sm ring-1 ring-orange-100">
                                         <i data-lucide="upload-cloud" class="h-6 w-6"></i>
                                     </span>
-                                    <span class="mt-4 block text-sm font-semibold text-gray-900">点击选择或拖拽文件到这里</span>
-                                    <span class="mt-1 block text-sm text-gray-500">支持 TXT、MD、DOCX；最多 10 个文件，单文件 50MB</span>
+                                    <span class="mt-4 block text-sm font-semibold text-gray-900">点击选择文件夹，或直接拖拽文件夹到这里</span>
+                                    <span class="mt-1 block text-sm text-gray-500">会读取文件夹内所有 TXT、MD、DOCX；最多 200 个文件，单文件 50MB</span>
                                 </label>
                             </div>
                             <div id="knowledge-file-list" class="mt-3 hidden rounded-lg border border-gray-200 divide-y divide-gray-100"></div>
@@ -473,12 +597,21 @@ require_once __DIR__ . '/includes/header.php';
                         <button type="button" onclick="hideCreateModal()" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
                             取消
                         </button>
-                        <button type="submit" name="import_action" value="save" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
+                        <button type="submit" class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50" data-import-submit data-import-action="save" data-import-label="正在保存">
                             只保存
                         </button>
-                        <button type="submit" name="import_action" value="save_and_chunk" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700">
+                        <button type="submit" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-orange-600 hover:bg-orange-700" data-import-submit data-import-action="save_and_chunk" data-import-label="正在切片向量化">
                             保存并切片向量化
                         </button>
+                    </div>
+                    <div class="mt-4 hidden" data-import-progress>
+                        <div class="flex items-center justify-between text-xs font-medium text-orange-700">
+                            <span data-import-progress-label>正在保存知识库</span>
+                            <span data-import-progress-value>0%</span>
+                        </div>
+                        <div class="mt-2 h-2 overflow-hidden rounded-full bg-orange-100">
+                            <div class="h-full rounded-full bg-orange-500 transition-all duration-500 ease-out" style="width: 8%;" data-import-progress-bar></div>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -511,7 +644,7 @@ require_once __DIR__ . '/includes/header.php';
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700">选择文件 *</label>
-                            <input type="file" name="knowledge_files[]" required accept=".txt,.md,.docx" multiple
+                            <input type="file" name="knowledge_files[]" required accept=".txt,.md,.docx" multiple webkitdirectory directory
                                    class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100">
                         </div>
                         
@@ -540,7 +673,85 @@ require_once __DIR__ . '/includes/header.php';
         </div>
     </div>
 
+    <div id="embedding-config-modal" class="hidden fixed inset-0 z-50">
+        <div class="absolute inset-0 bg-slate-900/45"></div>
+        <div class="relative flex min-h-screen items-center justify-center p-4">
+            <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
+                <div class="border-b border-slate-100 px-6 py-5">
+                    <h3 class="text-lg font-semibold text-slate-900">需要先配置 Embedding 模型</h3>
+                </div>
+                <div class="px-6 py-5">
+                    <div class="text-sm leading-7 text-slate-600">更新切片会重新生成知识片段并写入真实向量。当前没有可用的 embedding 模型，请先到 AI 模型配置里添加或启用 embedding 模型。</div>
+                </div>
+                <div class="flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4">
+                    <button type="button" onclick="hideEmbeddingConfigModal()" class="inline-flex items-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                        取消
+                    </button>
+                    <a href="ai-models.php" class="inline-flex items-center rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600">
+                        去配置
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="refresh-chunks-modal" class="hidden fixed inset-0 z-50" data-knowledge-refresh-modal>
+        <div class="absolute inset-0 bg-slate-900/45" data-refresh-chunks-cancel></div>
+        <div class="relative flex min-h-screen items-center justify-center p-4">
+            <div class="w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200">
+                <div class="border-b border-slate-100 px-6 py-5">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                            <i data-lucide="refresh-cw" class="h-5 w-5"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <h3 class="text-lg font-semibold text-slate-900">确认更新切片</h3>
+                            <p class="mt-1 text-sm leading-6 text-slate-600">系统会重新拆分知识库内容，并重新写入 embedding 向量。</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="space-y-5 px-6 py-5">
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div class="text-xs font-medium uppercase tracking-wide text-slate-500">目标知识库</div>
+                        <div class="mt-1 text-sm font-semibold text-slate-900" data-refresh-modal-name>-</div>
+                        <div class="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                            <span class="rounded-full bg-white px-2.5 py-1 ring-1 ring-slate-200" data-refresh-modal-summary>-</span>
+                            <span class="rounded-full bg-white px-2.5 py-1 ring-1 ring-slate-200" data-refresh-modal-words>-</span>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div class="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3">
+                            <div class="text-sm font-semibold text-emerald-800">重建切片</div>
+                            <p class="mt-1 text-xs leading-5 text-emerald-700">按当前内容重新生成知识片段。</p>
+                        </div>
+                        <div class="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
+                            <div class="text-sm font-semibold text-blue-800">生成向量</div>
+                            <p class="mt-1 text-xs leading-5 text-blue-700">调用默认 embedding 模型写入向量。</p>
+                        </div>
+                        <div class="rounded-xl border border-purple-100 bg-purple-50 px-3 py-3">
+                            <div class="text-sm font-semibold text-purple-800">覆盖写入</div>
+                            <p class="mt-1 text-xs leading-5 text-purple-700">新的切片会替换旧切片。</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4">
+                    <button type="button" class="inline-flex items-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" data-refresh-chunks-cancel>
+                        取消
+                    </button>
+                    <button type="button" class="inline-flex items-center rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700" data-refresh-chunks-confirm>
+                        <i data-lucide="play" class="mr-2 h-4 w-4"></i>
+                        继续更新
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
+        let pendingRefreshChunksForm = null;
+        let refreshChunksTimer = null;
+        let importProgressTimer = null;
+
         // 初始化Lucide图标
         document.addEventListener('DOMContentLoaded', function() {
             if (typeof lucide !== 'undefined') {
@@ -555,6 +766,7 @@ require_once __DIR__ . '/includes/header.php';
             const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
                 '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
             }[char]));
+            const supportedKnowledgeFile = (file) => /\.(txt|md|docx)$/i.test(file.name || '');
 
             function renderFileList() {
                 if (!fileInput || !fileList) return;
@@ -567,8 +779,9 @@ require_once __DIR__ . '/includes/header.php';
                 fileList.classList.remove('hidden');
                 fileList.innerHTML = files.map((file) => {
                     const sizeMb = (file.size / 1024 / 1024).toFixed(2);
+                    const displayName = file.webkitRelativePath || file.relativePath || file.name;
                     return `<div class="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                        <span class="truncate text-gray-700">${escapeHtml(file.name)}</span>
+                        <span class="truncate text-gray-700">${escapeHtml(displayName)}</span>
                         <span class="shrink-0 text-xs text-gray-400">${sizeMb} MB</span>
                     </div>`;
                 }).join('');
@@ -591,11 +804,50 @@ require_once __DIR__ . '/includes/header.php';
                         dropzone.classList.remove('border-orange-400', 'bg-orange-50');
                     });
                 });
-                dropzone.addEventListener('drop', (event) => {
-                    if (event.dataTransfer && event.dataTransfer.files) {
-                        fileInput.files = event.dataTransfer.files;
-                        renderFileList();
+                const readEntryFiles = async (entry, path = '') => {
+                    if (!entry) return [];
+                    if (entry.isFile) {
+                        return await new Promise((resolve) => {
+                            entry.file((file) => {
+                                if (!supportedKnowledgeFile(file)) {
+                                    resolve([]);
+                                    return;
+                                }
+                                Object.defineProperty(file, 'relativePath', {
+                                    value: path + file.name,
+                                    configurable: true
+                                });
+                                resolve([file]);
+                            }, () => resolve([]));
+                        });
                     }
+                    if (!entry.isDirectory) return [];
+                    const reader = entry.createReader();
+                    const entries = [];
+                    while (true) {
+                        const batch = await new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+                        if (!batch.length) break;
+                        entries.push(...batch);
+                    }
+                    const nested = await Promise.all(entries.map((child) => readEntryFiles(child, path + entry.name + '/')));
+                    return nested.flat();
+                };
+
+                dropzone.addEventListener('drop', async (event) => {
+                    if (!event.dataTransfer) return;
+                    const items = Array.from(event.dataTransfer.items || []);
+                    let files = [];
+                    if (items.length && items.some((item) => typeof item.webkitGetAsEntry === 'function')) {
+                        const collected = await Promise.all(items.map((item) => readEntryFiles(item.webkitGetAsEntry())));
+                        files = collected.flat();
+                    } else {
+                        files = Array.from(event.dataTransfer.files || []).filter(supportedKnowledgeFile);
+                    }
+
+                    const dt = new DataTransfer();
+                    files.slice(0, 200).forEach((file) => dt.items.add(file));
+                    fileInput.files = dt.files;
+                    renderFileList();
                 });
             }
 
@@ -610,7 +862,175 @@ require_once __DIR__ . '/includes/header.php';
             if (new URLSearchParams(window.location.search).get('create') === '1') {
                 showCreateModal();
             }
+
+            document.querySelectorAll('[data-refresh-chunks-form]').forEach(function (form) {
+                form.addEventListener('submit', function (event) {
+                    event.preventDefault();
+                    showRefreshChunksModal(form);
+                });
+            });
+
+            document.querySelectorAll('[data-refresh-chunks-cancel]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    pendingRefreshChunksForm = null;
+                    hideRefreshChunksModal();
+                });
+            });
+
+            const refreshConfirmButton = document.querySelector('[data-refresh-chunks-confirm]');
+            if (refreshConfirmButton) {
+                refreshConfirmButton.addEventListener('click', function () {
+                    if (!pendingRefreshChunksForm) {
+                        hideRefreshChunksModal();
+                        return;
+                    }
+
+                    const form = pendingRefreshChunksForm;
+                    pendingRefreshChunksForm = null;
+                    hideRefreshChunksModal();
+                    startRefreshChunksProgress(form);
+                });
+            }
+
+            document.querySelectorAll('#create-knowledge-form, #upload-modal form').forEach(function (form) {
+                form.addEventListener('submit', function (event) {
+                    startImportProgress(form, event.submitter || form.querySelector('[type="submit"]'));
+                });
+            });
+
+            document.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape' && pendingRefreshChunksForm) {
+                    pendingRefreshChunksForm = null;
+                    hideRefreshChunksModal();
+                }
+            });
         });
+
+        function startImportProgress(form, submitter) {
+            const progress = form.querySelector('[data-import-progress]');
+            const progressLabel = form.querySelector('[data-import-progress-label]');
+            const progressValue = form.querySelector('[data-import-progress-value]');
+            const progressBar = form.querySelector('[data-import-progress-bar]');
+            const buttons = form.querySelectorAll('button[type="submit"]');
+            const actionInput = form.querySelector('[data-import-action-input]');
+            let percent = 10;
+
+            if (actionInput && submitter && submitter.dataset && submitter.dataset.importAction) {
+                actionInput.value = submitter.dataset.importAction;
+            }
+
+            buttons.forEach((button) => {
+                button.disabled = true;
+                button.classList.add('cursor-wait', 'opacity-80');
+            });
+
+            if (submitter) {
+                const label = submitter.dataset && submitter.dataset.importLabel ? submitter.dataset.importLabel : '处理中';
+                submitter.innerHTML = `<span class="inline-flex items-center"><span class="mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"></span>${label}</span>`;
+            }
+
+            if (progress) {
+                progress.classList.remove('hidden');
+            }
+
+            const renderProgress = () => {
+                if (progressValue) progressValue.textContent = `${percent}%`;
+                if (progressBar) progressBar.style.width = `${percent}%`;
+                if (progressLabel) {
+                    progressLabel.textContent = percent >= 70
+                        ? '正在写入知识片段与向量'
+                        : (percent >= 36 ? '正在解析文件并生成切片' : '正在保存知识库');
+                }
+            };
+
+            renderProgress();
+            if (importProgressTimer) window.clearInterval(importProgressTimer);
+            importProgressTimer = window.setInterval(function () {
+                percent = Math.min(92, percent + (percent < 50 ? 12 : 6));
+                renderProgress();
+                if (percent >= 92 && importProgressTimer) {
+                    window.clearInterval(importProgressTimer);
+                    importProgressTimer = null;
+                }
+            }, 450);
+        }
+
+        function showRefreshChunksModal(form) {
+            const modal = document.querySelector('[data-knowledge-refresh-modal]');
+            if (!modal) {
+                return true;
+            }
+
+            pendingRefreshChunksForm = form;
+            const nameNode = modal.querySelector('[data-refresh-modal-name]');
+            const summaryNode = modal.querySelector('[data-refresh-modal-summary]');
+            const wordsNode = modal.querySelector('[data-refresh-modal-words]');
+
+            if (nameNode) nameNode.textContent = form.dataset.knowledgeName || '-';
+            if (summaryNode) summaryNode.textContent = form.dataset.knowledgeSummary || '-';
+            if (wordsNode) wordsNode.textContent = form.dataset.wordCount || '-';
+
+            modal.classList.remove('hidden');
+            const confirmButton = modal.querySelector('[data-refresh-chunks-confirm]');
+            if (confirmButton) {
+                setTimeout(function () {
+                    confirmButton.focus();
+                }, 0);
+            }
+
+            return false;
+        }
+
+        function hideRefreshChunksModal() {
+            const modal = document.querySelector('[data-knowledge-refresh-modal]');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+        }
+
+        function startRefreshChunksProgress(form) {
+            const wrapper = form.closest('[data-refresh-chunks-action]');
+            const button = form.querySelector('[data-refresh-submit-button]');
+            const icon = form.querySelector('[data-refresh-submit-icon]');
+            const buttonLabel = form.querySelector('[data-refresh-submit-label]');
+            const progress = wrapper ? wrapper.querySelector('[data-refresh-progress]') : null;
+            const progressLabel = wrapper ? wrapper.querySelector('[data-refresh-progress-label]') : null;
+            const progressValue = wrapper ? wrapper.querySelector('[data-refresh-progress-value]') : null;
+            const progressBar = wrapper ? wrapper.querySelector('[data-refresh-progress-bar]') : null;
+            let percent = 12;
+
+            if (button) {
+                button.disabled = true;
+                button.classList.add('cursor-wait', 'opacity-80');
+            }
+            if (icon) icon.classList.add('animate-spin');
+            if (buttonLabel) buttonLabel.textContent = '更新中';
+            if (progress) progress.classList.remove('hidden');
+
+            const renderProgress = function () {
+                if (progressValue) progressValue.textContent = percent + '%';
+                if (progressBar) progressBar.style.width = percent + '%';
+                if (progressLabel) {
+                    progressLabel.textContent = percent >= 70
+                        ? '正在写入向量'
+                        : (percent >= 38 ? '正在生成 embedding' : '正在重建切片');
+                }
+            };
+
+            renderProgress();
+            refreshChunksTimer = window.setInterval(function () {
+                percent = Math.min(92, percent + (percent < 50 ? 11 : 6));
+                renderProgress();
+                if (percent >= 92 && refreshChunksTimer) {
+                    window.clearInterval(refreshChunksTimer);
+                    refreshChunksTimer = null;
+                }
+            }, 420);
+
+            setTimeout(function () {
+                form.submit();
+            }, 180);
+        }
 
         // 显示创建模态框
         function showCreateModal() {
@@ -632,6 +1052,20 @@ require_once __DIR__ . '/includes/header.php';
             document.getElementById('upload-modal').classList.add('hidden');
         }
 
+        function showEmbeddingConfigModal() {
+            const modal = document.getElementById('embedding-config-modal');
+            if (modal) {
+                modal.classList.remove('hidden');
+            }
+        }
+
+        function hideEmbeddingConfigModal() {
+            const modal = document.getElementById('embedding-config-modal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+        }
+
         // 删除知识库
         function deleteKnowledge(knowledgeId, knowledgeName) {
             if (confirm(`确定要删除知识库"${knowledgeName}"吗？此操作不可恢复！`)) {
@@ -651,12 +1085,16 @@ require_once __DIR__ . '/includes/header.php';
         window.onclick = function(event) {
             const createModal = document.getElementById('create-modal');
             const uploadModal = document.getElementById('upload-modal');
+            const embeddingConfigModal = document.getElementById('embedding-config-modal');
             
             if (event.target === createModal) {
                 hideCreateModal();
             }
             if (event.target === uploadModal) {
                 hideUploadModal();
+            }
+            if (event.target === embeddingConfigModal) {
+                hideEmbeddingConfigModal();
             }
         }
     </script>
