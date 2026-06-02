@@ -63,15 +63,164 @@ function geo_baseline_qa_default_questions(string $brandName, string $industry):
     ];
 }
 
+function geo_baseline_qa_generate_from_chunks(PDO $db, string $customerId, string $brandName, string $industry, int $limit = 10): array {
+    geo_baseline_qa_ensure_schema($db);
+
+    $limit = max(5, min(20, $limit));
+    $chunks = geo_baseline_qa_load_chunk_context($db, $customerId, $brandName, 18);
+    if (empty($chunks)) {
+        return [
+            'rows' => geo_baseline_qa_fallback_rows($brandName, $industry, [], $limit),
+            'source' => 'fallback',
+            'message' => '未找到知识切片，已用品牌默认问题生成占位。',
+        ];
+    }
+
+    $contextLines = [];
+    foreach ($chunks as $idx => $chunk) {
+        $title = trim((string) ($chunk['chunk_title'] ?: $chunk['section_path'] ?: $chunk['kb_name'] ?? ''));
+        $content = trim(preg_replace('/\s+/u', ' ', (string) ($chunk['content'] ?? '')));
+        $contextLines[] = '【片段' . ($idx + 1) . ($title !== '' ? '：' . $title : '') . '】' . mb_substr($content, 0, 900);
+    }
+
+    $prompt = "你是GEO项目的客户问题设计师。请基于下面已经切片的客户知识库内容，生成最接近真实客户会拿去问AI的{$limit}个问题。\n\n"
+        . "品牌：{$brandName}\n"
+        . "行业/场景：{$industry}\n\n"
+        . "要求：\n"
+        . "1. 问题要像真实客户会问AI的问题，优先覆盖购买决策、服务能力、适用客户、区域/大湾区场景、竞品对比、交付方式、效果判断、风险注意事项。\n"
+        . "2. 不要生成答案，答案由用户复制问题去真实AI平台询问后手动记录。\n"
+        . "3. 返回严格JSON数组，不要Markdown，不要解释。每项字段只保留：question。\n\n"
+        . "知识片段：\n" . implode("\n\n", $contextLines);
+
+    $aiRows = [];
+    $aiError = '';
+    if (function_exists('geo_call_ai')) {
+        $result = geo_call_ai($prompt, 3500, 0.35);
+        $content = trim((string) ($result['content'] ?? ''));
+        if ($content !== '') {
+            $aiRows = geo_baseline_qa_parse_generated_rows($content, $limit);
+        } else {
+            $aiError = (string) ($result['error'] ?? 'AI未返回内容');
+        }
+    } else {
+        $aiError = '未找到统一AI调用函数';
+    }
+
+    if (empty($aiRows)) {
+        return [
+            'rows' => geo_baseline_qa_fallback_rows($brandName, $industry, $chunks, $limit),
+            'source' => 'fallback',
+            'message' => 'AI生成失败' . ($aiError !== '' ? '：' . $aiError : '') . '，已用知识切片规则生成占位。',
+        ];
+    }
+
+    return [
+            'rows' => $aiRows,
+            'source' => 'ai',
+        'message' => '已从 ' . count($chunks) . ' 个知识切片生成 ' . count($aiRows) . ' 条首问样本。',
+    ];
+}
+
+function geo_baseline_qa_load_chunk_context(PDO $db, string $customerId, string $brandName, int $limit = 18): array {
+    $limit = max(5, min(30, $limit));
+    $hasCustomerId = function_exists('db_column_exists') && db_column_exists($db, 'knowledge_bases', 'customer_id');
+    $brandNeedle = trim($brandName);
+    $where = [];
+    $params = [];
+
+    if ($hasCustomerId && $customerId !== '') {
+        $where[] = 'kb.customer_id = ?';
+        $params[] = $customerId;
+    }
+    if ($brandNeedle !== '') {
+        $where[] = "(LOWER(kb.name) LIKE LOWER(?) OR LOWER(kb.description) LIKE LOWER(?) OR LOWER(c.content) LIKE LOWER(?))";
+        $like = '%' . $brandNeedle . '%';
+        array_push($params, $like, $like, $like);
+    }
+
+    $whereSql = $where ? 'WHERE ' . implode(' OR ', $where) : '';
+    $sql = "
+        SELECT c.content, c.chunk_title, c.section_path, c.token_count, kb.name AS kb_name, kb.created_at
+        FROM knowledge_chunks c
+        JOIN knowledge_bases kb ON kb.id = c.knowledge_base_id
+        {$whereSql}
+        ORDER BY kb.created_at DESC, c.chunk_index ASC
+        LIMIT {$limit}
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (!empty($rows)) {
+        return $rows;
+    }
+
+    $stmt = $db->query("
+        SELECT c.content, c.chunk_title, c.section_path, c.token_count, kb.name AS kb_name, kb.created_at
+        FROM knowledge_chunks c
+        JOIN knowledge_bases kb ON kb.id = c.knowledge_base_id
+        ORDER BY kb.created_at DESC, c.chunk_index ASC
+        LIMIT {$limit}
+    ");
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function geo_baseline_qa_parse_generated_rows(string $content, int $limit): array {
+    $json = trim($content);
+    if (preg_match('/```(?:json)?\s*(.*?)```/is', $json, $m)) {
+        $json = trim($m[1]);
+    }
+    if (!str_starts_with($json, '[')) {
+        $start = strpos($json, '[');
+        $end = strrpos($json, ']');
+        if ($start !== false && $end !== false && $end > $start) {
+            $json = substr($json, $start, $end - $start + 1);
+        }
+    }
+
+    $decoded = json_decode($json, true);
+    if (!is_array($decoded)) {
+        return [];
+    }
+
+    $rows = [];
+    foreach ($decoded as $item) {
+        if (!is_array($item)) continue;
+        $question = trim((string) ($item['question'] ?? ''));
+        if ($question === '') continue;
+        $rows[] = [
+            'question' => $question,
+            'platform' => 'deepseek',
+            'baseline_answer' => '',
+            'sort_order' => count($rows) + 1,
+        ];
+        if (count($rows) >= $limit) break;
+    }
+
+    return $rows;
+}
+
+function geo_baseline_qa_fallback_rows(string $brandName, string $industry, array $chunks, int $limit): array {
+    $questions = geo_baseline_qa_default_questions($brandName, $industry);
+    $rows = [];
+    for ($i = 0; $i < $limit; $i++) {
+        $rows[] = [
+            'question' => $questions[$i] ?? (($brandName !== '' ? $brandName : '这个品牌') . '相关问题' . ($i + 1)),
+            'platform' => 'deepseek',
+            'baseline_answer' => '',
+            'sort_order' => $i + 1,
+        ];
+    }
+
+    return $rows;
+}
+
 function geo_baseline_qa_save_for_diagnosis(PDO $db, string $diagnosisId, string $customerId, string $brandName, array $input): int {
     geo_baseline_qa_ensure_schema($db);
 
     $questions = is_array($input['baseline_question'] ?? null) ? $input['baseline_question'] : [];
     $answers = is_array($input['baseline_answer'] ?? null) ? $input['baseline_answer'] : [];
     $platforms = is_array($input['baseline_platform'] ?? null) ? $input['baseline_platform'] : [];
-    $sentiments = is_array($input['baseline_sentiment'] ?? null) ? $input['baseline_sentiment'] : [];
-    $keywords = is_array($input['baseline_keywords'] ?? null) ? $input['baseline_keywords'] : [];
-
     $rows = [];
     foreach ($questions as $index => $rawQuestion) {
         $question = trim((string) $rawQuestion);
@@ -86,17 +235,11 @@ function geo_baseline_qa_save_for_diagnosis(PDO $db, string $diagnosisId, string
         if (!array_key_exists($platform, geo_baseline_qa_platforms())) {
             $platform = 'deepseek';
         }
-        $sentiment = trim((string) ($sentiments[$index] ?? 'neutral'));
-        if (!in_array($sentiment, ['positive', 'neutral', 'negative'], true)) {
-            $sentiment = 'neutral';
-        }
         $rows[] = [
             'question' => $question,
             'platform' => $platform,
             'answer' => $answer,
             'mention_brand' => $brandName !== '' && mb_stripos($answer, $brandName) !== false,
-            'sentiment' => $sentiment,
-            'keywords' => trim((string) ($keywords[$index] ?? '')),
             'sort_order' => count($rows) + 1,
         ];
     }
@@ -133,8 +276,8 @@ function geo_baseline_qa_save_for_diagnosis(PDO $db, string $diagnosisId, string
                 $row['platform'],
                 $row['answer'],
                 $row['mention_brand'] ? 'true' : 'false',
-                $row['sentiment'],
-                $row['keywords'],
+                'neutral',
+                '',
                 $row['sort_order'],
             ]);
             if ($customerId !== '') {

@@ -17,6 +17,7 @@ require_admin_login();
 $message = '';
 $error = '';
 $selectedId = trim((string) ($_GET['id'] ?? ''));
+$generatedBaselineRows = [];
 
 try {
     geo_diagnosis_ensure_schema($db);
@@ -44,6 +45,15 @@ try {
             $baselineCustomer = clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? ''));
             $savedCount = geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, $baselineCustomer, $baselineBrand, $_POST);
             $message = '问答基准线已保存 ' . $savedCount . ' 条，并同步为监测关键词';
+            $selectedId = $diagnosisId;
+        } elseif ($action === 'generate_baseline_qa') {
+            $diagnosisId = trim((string) ($_POST['diagnosis_id'] ?? ''));
+            $baselineBrand = clean_input($_POST['brand_name'] ?? '');
+            $baselineCustomer = clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? ''));
+            $baselineIndustry = clean_input($_POST['industry'] ?? '');
+            $generated = geo_baseline_qa_generate_from_chunks($db, $baselineCustomer, $baselineBrand, $baselineIndustry, 10);
+            $generatedBaselineRows = $generated['rows'] ?? [];
+            $message = (string) ($generated['message'] ?? '已生成首问样本。') . ' 请复制问题去真实AI平台提问，并把答案记录回来后保存。';
             $selectedId = $diagnosisId;
         } else {
             $diagnosisId = geo_diagnosis_create($db, [
@@ -239,55 +249,52 @@ require_once __DIR__ . '/includes/header.php';
                                     </button>
                                 </div>
                             </div>
-                            <div id="baseline-fullscreen-modal" class="fixed inset-0 z-[70] hidden bg-white">
+                            <div id="baseline-fullscreen-modal" class="fixed inset-0 z-[70] hidden bg-gray-50">
                                 <div class="flex h-full flex-col">
-                                    <div class="flex shrink-0 flex-col gap-3 border-b border-gray-200 bg-white px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
-                                        <div>
-                                            <h2 class="text-xl font-bold text-gray-900">首次 AI 问答基准线</h2>
-                                            <p class="mt-1 text-sm text-gray-500">你自己到 AI 平台手动提问，把问题和原始答案逐条粘贴到这里。完成后关闭面板，再生成雷达诊断。</p>
-                                        </div>
-                                        <div class="flex flex-wrap gap-2">
-                                            <button type="button" data-close-baseline-fullscreen class="inline-flex h-10 items-center rounded-md border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                                                完成填写
-                                            </button>
-                                            <button type="submit" class="inline-flex h-10 items-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700">
-                                                生成雷达诊断
-                                            </button>
+                                    <div class="shrink-0 border-b border-gray-200 bg-white px-6 py-4">
+                                        <div class="mx-auto flex max-w-[1440px] flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                                            <div>
+                                                <div class="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">S12 首问采样</div>
+                                                <h2 class="mt-3 text-2xl font-bold text-gray-900">首次 AI 问答基准线</h2>
+                                                <p class="mt-1 text-sm text-gray-500">把问题拿到真实 AI 平台提问，再把原始答案贴回这里。</p>
+                                            </div>
+                                            <div class="flex flex-wrap gap-2">
+                                                <button type="button" data-close-baseline-fullscreen class="inline-flex h-10 items-center rounded-md border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                                                    完成填写
+                                                </button>
+                                                <button type="submit" class="inline-flex h-10 items-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                                                    生成雷达诊断
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div class="min-h-0 flex-1 overflow-y-auto bg-gray-50 px-6 py-5">
-                                        <div class="mx-auto max-w-[1600px] overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-                                            <div class="hidden grid-cols-[3rem_minmax(220px,1fr)_9rem_minmax(360px,1.35fr)_8rem_minmax(180px,0.75fr)] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-500 xl:grid">
-                                                <div>#</div>
-                                                <div>问题</div>
-                                                <div>平台</div>
-                                                <div>首次答案</div>
-                                                <div>情绪</div>
-                                                <div>关键词</div>
-                                            </div>
-                                            <div class="divide-y divide-gray-100">
+                                    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+                                        <div class="mx-auto max-w-[1440px] space-y-3">
                                             <?php foreach ($defaultBaselineQuestions as $idx => $question): ?>
-                                                <div class="grid grid-cols-1 gap-3 px-4 py-4 xl:grid-cols-[3rem_minmax(220px,1fr)_9rem_minmax(360px,1.35fr)_8rem_minmax(180px,0.75fr)] xl:items-start">
-                                                    <div class="hidden pt-2 text-sm font-semibold text-gray-400 xl:block"><?php echo (int) $idx + 1; ?></div>
-                                                    <label class="block">
-                                                        <span class="mb-1 block text-xs font-semibold text-gray-500 xl:hidden">问题 <?php echo (int) $idx + 1; ?></span>
-                                                        <input name="baseline_question[]" type="text" data-baseline-index="<?php echo (int) $idx; ?>" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" value="<?php echo htmlspecialchars($question); ?>" placeholder="粘贴你手动问 AI 的问题">
-                                                    </label>
-                                                    <select name="baseline_platform[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                                                        <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
-                                                            <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo $platformKey === 'deepseek' ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
-                                                        <?php endforeach; ?>
-                                                    </select>
-                                                    <textarea name="baseline_answer[]" rows="4" class="block min-h-[112px] w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
-                                                    <select name="baseline_sentiment[]" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm">
-                                                        <option value="positive">正面</option>
-                                                        <option value="neutral" selected>中性</option>
-                                                        <option value="negative">负面</option>
-                                                    </select>
-                                                    <input name="baseline_keywords[]" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm" placeholder="优势、价格、案例">
+                                                <div class="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
+                                                    <div class="mb-3 flex items-center justify-between gap-3">
+                                                        <div class="flex items-center gap-3">
+                                                            <span class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-sm font-bold text-blue-700"><?php echo (int) $idx + 1; ?></span>
+                                                            <span class="text-sm font-semibold text-gray-900">首问样本</span>
+                                                        </div>
+                                                        <select name="baseline_platform[]" class="h-9 w-36 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                                            <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
+                                                                <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo $platformKey === 'deepseek' ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,0.95fr)_minmax(560px,1.45fr)]">
+                                                        <label class="block">
+                                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">问题</span>
+                                                            <textarea name="baseline_question[]" rows="3" data-baseline-index="<?php echo (int) $idx; ?>" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴你手动问 AI 的问题"><?php echo htmlspecialchars($question); ?></textarea>
+                                                        </label>
+                                                        <label class="block">
+                                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">首次答案</span>
+                                                            <textarea name="baseline_answer[]" rows="3" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
+                                                        </label>
+                                                    </div>
                                                 </div>
                                             <?php endforeach; ?>
-                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -517,7 +524,7 @@ require_once __DIR__ . '/includes/header.php';
 
             <?php if ($currentReport): ?>
                 <?php
-                $baselineEditRows = $currentBaselineRows;
+                $baselineEditRows = !empty($generatedBaselineRows) ? $generatedBaselineRows : $currentBaselineRows;
                 if (empty($baselineEditRows)) {
                     $questionsForCurrentBrand = array_fill(0, 10, '');
                     $baselineEditRows = array_map(static function ($question, $index) {
@@ -525,8 +532,6 @@ require_once __DIR__ . '/includes/header.php';
                             'question' => $question,
                             'platform' => 'deepseek',
                             'baseline_answer' => '',
-                            'sentiment' => 'neutral',
-                            'keywords' => '',
                             'sort_order' => $index + 1,
                         ];
                     }, $questionsForCurrentBrand, array_keys($questionsForCurrentBrand));
@@ -551,6 +556,27 @@ require_once __DIR__ . '/includes/header.php';
                                 <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="rounded-full bg-slate-900 px-3 py-1 text-white">去监测追踪</a>
                             </div>
                         </div>
+                        <form method="POST" class="mt-4 flex flex-col gap-3 rounded-lg border border-blue-100 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
+                            <div>
+                                <div class="text-sm font-semibold text-gray-900">从知识切片生成首问样本</div>
+                                <p class="mt-1 text-xs text-gray-500">读取已切割的知识库片段，整理出客户最可能拿去问AI的问题；答案由你去真实AI平台提问后手动记录。</p>
+                            </div>
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                            <input type="hidden" name="action" value="generate_baseline_qa">
+                            <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
+                            <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars((string) $currentReport['brand_name']); ?>">
+                            <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars((string) ($current_customer_context['customer_id'] ?? '')); ?>">
+                            <input type="hidden" name="industry" value="<?php echo htmlspecialchars((string) ($currentReport['industry'] ?? '')); ?>">
+                            <button type="submit" class="inline-flex shrink-0 items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                                <i data-lucide="wand-sparkles" class="mr-2 h-4 w-4"></i>
+                                生成首问样本
+                            </button>
+                        </form>
+                        <?php if (!empty($generatedBaselineRows)): ?>
+                            <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                已生成首问样本，但还没有保存。请先复制问题去真实AI平台提问，再把真实答案记录回来后保存。
+                            </div>
+                        <?php endif; ?>
                     </div>
                     <form method="POST" class="px-6 py-6">
                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
@@ -558,47 +584,32 @@ require_once __DIR__ . '/includes/header.php';
                         <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
                         <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars((string) $currentReport['brand_name']); ?>">
                         <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars((string) ($current_customer_context['customer_id'] ?? '')); ?>">
-                        <div class="overflow-x-auto rounded-lg border border-gray-200">
-                            <table class="min-w-[980px] w-full divide-y divide-gray-200 text-sm">
-                                <thead class="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                                    <tr>
-                                        <th class="px-4 py-3">问题</th>
-                                        <th class="px-4 py-3">平台</th>
-                                        <th class="px-4 py-3">首次答案</th>
-                                        <th class="px-4 py-3">情绪</th>
-                                        <th class="px-4 py-3">关键词</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-200 bg-white">
-                                    <?php foreach ($baselineEditRows as $row): ?>
-                                        <tr>
-                                            <td class="px-4 py-3 align-top">
-                                                <input name="baseline_question[]" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" value="<?php echo htmlspecialchars((string) ($row['question'] ?? '')); ?>">
-                                            </td>
-                                            <td class="px-4 py-3 align-top">
-                                                <select name="baseline_platform[]" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-                                                    <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
-                                                        <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo (string) ($row['platform'] ?? '') === $platformKey ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
-                                                    <?php endforeach; ?>
-                                                </select>
-                                            </td>
-                                            <td class="px-4 py-3 align-top">
-                                                <textarea name="baseline_answer[]" rows="3" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"><?php echo htmlspecialchars((string) ($row['baseline_answer'] ?? '')); ?></textarea>
-                                            </td>
-                                            <td class="px-4 py-3 align-top">
-                                                <select name="baseline_sentiment[]" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-                                                    <?php foreach (['positive' => '正面', 'neutral' => '中性', 'negative' => '负面'] as $sentimentKey => $sentimentLabel): ?>
-                                                        <option value="<?php echo htmlspecialchars($sentimentKey); ?>" <?php echo (string) ($row['sentiment'] ?? 'neutral') === $sentimentKey ? 'selected' : ''; ?>><?php echo htmlspecialchars($sentimentLabel); ?></option>
-                                                    <?php endforeach; ?>
-                                                </select>
-                                            </td>
-                                            <td class="px-4 py-3 align-top">
-                                                <input name="baseline_keywords[]" type="text" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm" value="<?php echo htmlspecialchars((string) ($row['keywords'] ?? '')); ?>">
-                                            </td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
+                        <div class="space-y-3">
+                            <?php foreach ($baselineEditRows as $idx => $row): ?>
+                                <div class="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
+                                    <div class="mb-3 flex items-center justify-between gap-3">
+                                        <div class="flex items-center gap-3">
+                                            <span class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-sm font-bold text-blue-700"><?php echo (int) $idx + 1; ?></span>
+                                            <span class="text-sm font-semibold text-gray-900">首问样本</span>
+                                        </div>
+                                        <select name="baseline_platform[]" class="h-9 w-36 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                            <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
+                                                <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo (string) ($row['platform'] ?? '') === $platformKey ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,0.95fr)_minmax(560px,1.45fr)]">
+                                        <label class="block">
+                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">问题</span>
+                                            <textarea name="baseline_question[]" rows="3" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴你手动问 AI 的问题"><?php echo htmlspecialchars((string) ($row['question'] ?? '')); ?></textarea>
+                                        </label>
+                                        <label class="block">
+                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">首次答案</span>
+                                            <textarea name="baseline_answer[]" rows="3" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"><?php echo htmlspecialchars((string) ($row['baseline_answer'] ?? '')); ?></textarea>
+                                        </label>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
                         </div>
                         <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <p class="text-sm text-gray-500">保存后，这些问题会作为客户监测关键词，监测页的“基准线追踪”会展示最新答案变化。</p>
