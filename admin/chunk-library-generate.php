@@ -485,8 +485,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
 
-            $batchKeywordCount = min(CHUNK_ASSET_BATCH_KEYWORDS, $remainingKeywords);
-            $batchTitleCount = min(CHUNK_ASSET_BATCH_TITLES, $remainingTitles);
+            // 多请求 3 个来抵消去重损耗
+            $batchKeywordCount = min(CHUNK_ASSET_BATCH_KEYWORDS + 3, $remainingKeywords + 3);
+            $batchTitleCount = min(CHUNK_ASSET_BATCH_TITLES + 3, $remainingTitles + 3);
             $batchContext = chunk_asset_context_from_chunks($contextPack['chunks'] ?? [], $batchIndex);
             if ($batchContext === '') {
                 throw new RuntimeException('没有可用于第 ' . ($batchIndex + 1) . ' 批生成的 chunk。');
@@ -536,7 +537,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $questionDirections = chunk_asset_merge_unique($questionDirections, $batchDirections, 12);
         }
 
-        if (count($keywords) < $keywordCount || count($titles) < $titleCount) {
+        // 补充批次：如果去重后数量不足，追加生成直到补齐（最多补 3 轮）
+        for ($retryRound = 0; $retryRound < 3; $retryRound++) {
+            $kwShort = max(0, $keywordCount - count($keywords));
+            $titleShort = max(0, $titleCount - count($titles));
+            if ($kwShort <= 0 && $titleShort <= 0) {
+                break;
+            }
+
+            $retryBatch = chunk_asset_context_from_chunks($contextPack['chunks'] ?? [], $retryRound);
+            if ($retryBatch === '') {
+                break;
+            }
+
+            $retryPrompt = chunk_asset_batch_prompt(
+                (string) $knowledgeBase['name'],
+                $intentInstruction,
+                $retryBatch,
+                $batchTotal + $retryRound + 1,
+                $batchTotal + 3,
+                $kwShort + 3,
+                $titleShort + 3,
+                $keywords,
+                $titles
+            );
+
+            try {
+                $retryMaxTokens = 1200 + (($kwShort + $titleShort + 6) * 80);
+                $retryRaw = chunk_asset_call_chat_model($db, $aiModel, $systemPrompt, $retryPrompt, $retryMaxTokens);
+                $retryDecoded = chunk_asset_decode_json_or_null($retryRaw);
+                if (is_array($retryDecoded)) {
+                    $retryKw = chunk_asset_normalize_list($retryDecoded['keywords'] ?? [], 'keyword', $kwShort + 3);
+                    $retryTt = chunk_asset_normalize_list($retryDecoded['titles'] ?? [], 'title', $titleShort + 3);
+                    $keywords = chunk_asset_merge_unique($keywords, $retryKw, $keywordCount);
+                    $titles = chunk_asset_merge_unique($titles, $retryTt, $titleCount);
+                }
+            } catch (Throwable $retryErr) {
+                // 补充失败不中断，后面统一检查
+            }
+        }
+
+        $kwShort = max(0, $keywordCount - count($keywords));
+        $titleShort = max(0, $titleCount - count($titles));
+        if ($kwShort > 0 || $titleShort > 0) {
             throw new RuntimeException('AI 分批生成完成但数量不足：关键词 ' . count($keywords) . ' / ' . $keywordCount . '，标题 ' . count($titles) . ' / ' . $titleCount . '。请减少数量或补充问题方向后重试。');
         }
 
