@@ -265,6 +265,198 @@ function extract_docx_content(string $filepath): string {
     return extract_docx_text_from_xml($xmlContent);
 }
 
+function extract_pptx_content(string $filepath): string {
+    if (!is_file($filepath) || !class_exists('ZipArchive')) {
+        return '';
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($filepath) !== true) {
+        return '';
+    }
+
+    $slideNames = [];
+    for ($index = 0; $index < $zip->numFiles; $index++) {
+        $name = (string) $zip->getNameIndex($index);
+        if (preg_match('#^ppt/slides/slide\d+\.xml$#', $name)) {
+            $slideNames[] = $name;
+        }
+    }
+    natsort($slideNames);
+
+    $slides = [];
+    foreach ($slideNames as $slideIndex => $slideName) {
+        $xmlContent = $zip->getFromName($slideName);
+        if ($xmlContent === false || $xmlContent === '') {
+            continue;
+        }
+
+        $dom = new DOMDocument();
+        $loaded = @$dom->loadXML($xmlContent, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        if (!$loaded) {
+            continue;
+        }
+
+        $xpath = new DOMXPath($dom);
+        $nodes = $xpath->query('//*[local-name()="t"]');
+        if ($nodes === false) {
+            continue;
+        }
+
+        $parts = [];
+        foreach ($nodes as $node) {
+            $text = normalize_knowledge_text($node->textContent ?? '');
+            if ($text !== '') {
+                $parts[] = $text;
+            }
+        }
+
+        if (!empty($parts)) {
+            $slides[] = '## 幻灯片 ' . ((int) $slideIndex + 1) . "\n\n" . implode("\n", $parts);
+        }
+    }
+
+    $zip->close();
+    return normalize_knowledge_text(implode("\n\n", $slides));
+}
+
+function decode_pdf_literal_string(string $value): string {
+    $value = preg_replace_callback('/\\\\([0-7]{1,3}|[nrtbf\\\\()])/', static function (array $matches): string {
+        $escape = $matches[1];
+        return match ($escape) {
+            'n' => "\n",
+            'r' => "\r",
+            't' => "\t",
+            'b' => "\b",
+            'f' => "\f",
+            '\\' => '\\',
+            '(' => '(',
+            ')' => ')',
+            default => chr(octdec($escape)),
+        };
+    }, $value) ?? $value;
+
+    return convert_uploaded_text_to_utf8($value);
+}
+
+function decode_pdf_hex_string(string $value): string {
+    $hex = preg_replace('/\s+/', '', $value) ?? '';
+    if ($hex === '') {
+        return '';
+    }
+    if (strlen($hex) % 2 === 1) {
+        $hex .= '0';
+    }
+
+    $binary = @hex2bin($hex);
+    if ($binary === false) {
+        return '';
+    }
+
+    if (str_starts_with($binary, "\xFE\xFF")) {
+        $converted = @mb_convert_encoding(substr($binary, 2), 'UTF-8', 'UTF-16BE');
+        return $converted === false ? '' : $converted;
+    }
+
+    if (str_starts_with($binary, "\xFF\xFE")) {
+        $converted = @mb_convert_encoding(substr($binary, 2), 'UTF-8', 'UTF-16LE');
+        return $converted === false ? '' : $converted;
+    }
+
+    return convert_uploaded_text_to_utf8($binary);
+}
+
+function extract_pdf_text_from_operator_source(string $source): string {
+    $parts = [];
+
+    if (preg_match_all('/\[((?:\\\\.|[^\]])*)\]\s*TJ/s', $source, $arrayMatches)) {
+        foreach ($arrayMatches[1] as $arrayContent) {
+            if (preg_match_all('/\((?:\\\\.|[^\\\\()])*\)|<([0-9A-Fa-f\s]+)>/s', $arrayContent, $items)) {
+                $line = '';
+                foreach ($items[0] as $item) {
+                    if (str_starts_with($item, '(') && str_ends_with($item, ')')) {
+                        $line .= decode_pdf_literal_string(substr($item, 1, -1));
+                    } elseif (str_starts_with($item, '<') && str_ends_with($item, '>')) {
+                        $line .= decode_pdf_hex_string(substr($item, 1, -1));
+                    }
+                }
+                $line = normalize_knowledge_text($line);
+                if ($line !== '') {
+                    $parts[] = $line;
+                }
+            }
+        }
+    }
+
+    if (preg_match_all('/\((?:\\\\.|[^\\\\()])*\)\s*(?:Tj|\'|")/s', $source, $literalMatches)) {
+        foreach ($literalMatches[0] as $match) {
+            if (preg_match('/^\((.*)\)\s*(?:Tj|\'|")/s', $match, $stringMatch)) {
+                $text = normalize_knowledge_text(decode_pdf_literal_string($stringMatch[1]));
+                if ($text !== '') {
+                    $parts[] = $text;
+                }
+            }
+        }
+    }
+
+    if (preg_match_all('/<([0-9A-Fa-f\s]+)>\s*(?:Tj|\'|")/s', $source, $hexMatches)) {
+        foreach ($hexMatches[1] as $hexValue) {
+            $text = normalize_knowledge_text(decode_pdf_hex_string($hexValue));
+            if ($text !== '') {
+                $parts[] = $text;
+            }
+        }
+    }
+
+    return normalize_knowledge_text(implode("\n", $parts));
+}
+
+function extract_pdf_content(string $filepath): string {
+    if (!is_file($filepath)) {
+        return '';
+    }
+
+    $binary = @file_get_contents($filepath);
+    if ($binary === false || $binary === '') {
+        return '';
+    }
+
+    $streams = [];
+    if (preg_match_all('/<<(.*?)>>\s*stream\r?\n?(.*?)\r?\n?endstream/s', $binary, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $match) {
+            $dictionary = $match[1] ?? '';
+            $stream = $match[2] ?? '';
+            if (str_contains($dictionary, '/FlateDecode')) {
+                $inflated = @gzuncompress($stream);
+                if ($inflated === false) {
+                    $inflated = @gzinflate($stream);
+                }
+                if ($inflated === false && function_exists('inflate_init') && function_exists('inflate_add')) {
+                    $context = @inflate_init(ZLIB_ENCODING_ZLIB);
+                    if ($context !== false) {
+                        $inflated = @inflate_add($context, $stream, ZLIB_FINISH);
+                    }
+                }
+                $stream = $inflated === false ? '' : $inflated;
+            }
+            if ($stream !== '') {
+                $streams[] = $stream;
+            }
+        }
+    }
+
+    $sources = empty($streams) ? [$binary] : $streams;
+    $blocks = [];
+    foreach ($sources as $source) {
+        $text = extract_pdf_text_from_operator_source($source);
+        if ($text !== '') {
+            $blocks[] = $text;
+        }
+    }
+
+    return normalize_knowledge_text(implode("\n\n", $blocks));
+}
+
 function parse_uploaded_knowledge_file(string $filepath, string $originalName, string $extension): array {
     $extension = strtolower(trim($extension));
 
@@ -297,8 +489,36 @@ function parse_uploaded_knowledge_file(string $filepath, string $originalName, s
         ];
     }
 
+    if ($extension === 'pdf') {
+        $content = extract_pdf_content($filepath);
+        if ($content === '') {
+            throw new RuntimeException('PDF 文本提取失败，请确认 PDF 包含可复制文字；扫描版 PDF 需要先 OCR 后再上传');
+        }
+
+        return [
+            'content' => $content,
+            'file_type' => 'pdf',
+        ];
+    }
+
+    if ($extension === 'pptx') {
+        $content = extract_pptx_content($filepath);
+        if ($content === '') {
+            throw new RuntimeException('PPTX 文本提取失败，请确认文件未损坏，且幻灯片中包含可读取文本');
+        }
+
+        return [
+            'content' => $content,
+            'file_type' => 'powerpoint',
+        ];
+    }
+
     if ($extension === 'doc') {
         throw new RuntimeException('暂不支持旧版 .doc 直接解析，请先另存为 .docx 后上传');
+    }
+
+    if ($extension === 'ppt') {
+        throw new RuntimeException('暂不支持旧版 .ppt 直接解析，请先另存为 .pptx 后上传');
     }
 
     throw new RuntimeException('不支持的文件格式');
@@ -315,8 +535,8 @@ function knowledge_base_parse_uploaded_files(array $files, array &$storedPaths):
         $originalName = (string) ($file['name'] ?? '');
         $relativeName = trim((string) ($file['relative_name'] ?? $originalName));
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-        if (!in_array($extension, ['txt', 'md', 'docx'], true)) {
-            throw new RuntimeException('不支持的文件格式，请上传 TXT、MD 或 DOCX 文件');
+        if (!in_array($extension, ['txt', 'md', 'docx', 'pdf', 'pptx', 'ppt'], true)) {
+            throw new RuntimeException('不支持的文件格式，请上传 TXT、MD、DOCX、PDF 或 PPTX 文件');
         }
 
         if ((int) ($file['size'] ?? 0) > 50 * 1024 * 1024) {
@@ -422,13 +642,13 @@ function knowledge_base_infer_name(array $uploadedFiles, string $manualContent):
 
 function knowledge_base_file_type_from_sources(string $requestedType, string $manualContent, array $parsedFiles): string {
     if (empty($parsedFiles)) {
-        return in_array($requestedType, ['markdown', 'word', 'text'], true) ? $requestedType : 'markdown';
+        return in_array($requestedType, ['markdown', 'word', 'text', 'pdf', 'powerpoint'], true) ? $requestedType : 'markdown';
     }
     if (trim($manualContent) !== '' || count($parsedFiles) > 1) {
         return 'markdown';
     }
     $fileType = (string) ($parsedFiles[0]['file_type'] ?? 'markdown');
-    return in_array($fileType, ['markdown', 'word', 'text'], true) ? $fileType : 'markdown';
+    return in_array($fileType, ['markdown', 'word', 'text', 'pdf', 'powerpoint'], true) ? $fileType : 'markdown';
 }
 
 function knowledge_base_encode_file_paths(array $storedPaths): string {

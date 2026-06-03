@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y nodejs npm \
 # 安装 PHP 内置服务器需要的 router
 WORKDIR /app
 
+# Align PHP upload limits with the knowledge-base import UI.
+COPY docker/php-upload.ini /usr/local/etc/php/conf.d/zz-geo-upload.ini
+
 # 复制项目文件
 COPY . .
 

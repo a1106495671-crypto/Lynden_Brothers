@@ -556,6 +556,8 @@ require_once __DIR__ . '/includes/header.php';
                                 <select name="file_type" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-orange-500 focus:border-orange-500 sm:text-sm">
                                     <option value="markdown">Markdown</option>
                                     <option value="text">纯文本</option>
+                                    <option value="pdf">PDF</option>
+                                    <option value="powerpoint">PowerPoint</option>
                                 </select>
                             </div>
                         </div>
@@ -570,14 +572,23 @@ require_once __DIR__ . '/includes/header.php';
                         <div>
                             <label class="block text-sm font-medium text-gray-700">上传文档</label>
                             <div id="knowledge-dropzone" class="mt-1 flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-orange-200 bg-orange-50/30 px-6 py-8 text-center transition hover:border-orange-300 hover:bg-orange-50">
-                                <input type="file" id="knowledge-files-input" name="knowledge_files[]" accept=".txt,.md,.docx" multiple webkitdirectory directory class="sr-only">
-                                <label for="knowledge-files-input" class="cursor-pointer">
+                                <input type="file" id="knowledge-files-input" name="knowledge_files[]" accept=".txt,.md,.docx,.pdf,.pptx,.ppt" multiple class="sr-only">
+                                <input type="file" id="knowledge-folder-input" name="knowledge_files[]" accept=".txt,.md,.docx,.pdf,.pptx,.ppt" multiple webkitdirectory directory class="sr-only">
+                                <div>
                                     <span class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white text-orange-600 shadow-sm ring-1 ring-orange-100">
                                         <i data-lucide="upload-cloud" class="h-6 w-6"></i>
                                     </span>
-                                    <span class="mt-4 block text-sm font-semibold text-gray-900">点击选择文件夹，或直接拖拽文件夹到这里</span>
-                                    <span class="mt-1 block text-sm text-gray-500">会读取文件夹内所有 TXT、MD、DOCX；最多 200 个文件，单文件 50MB</span>
-                                </label>
+                                    <span class="mt-4 block text-sm font-semibold text-gray-900">点击选择文件或文件夹，或直接拖拽文件/文件夹到这里</span>
+                                    <span class="mt-1 block text-sm text-gray-500">会读取 TXT、MD、DOCX、PDF、PPTX；文件夹会自动递归读取，最多 200 个文件，单文件 50MB，单次最多 512MB</span>
+                                    <div class="mt-4 flex flex-wrap items-center justify-center gap-3">
+                                        <label for="knowledge-files-input" class="inline-flex cursor-pointer items-center rounded-md border border-orange-200 bg-white px-3 py-2 text-sm font-medium text-orange-700 shadow-sm hover:bg-orange-50">
+                                            选择文件
+                                        </label>
+                                        <label for="knowledge-folder-input" class="inline-flex cursor-pointer items-center rounded-md border border-orange-200 bg-white px-3 py-2 text-sm font-medium text-orange-700 shadow-sm hover:bg-orange-50">
+                                            选择文件夹
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
                             <div id="knowledge-file-list" class="mt-3 hidden rounded-lg border border-gray-200 divide-y divide-gray-100"></div>
                         </div>
@@ -643,9 +654,11 @@ require_once __DIR__ . '/includes/header.php';
                         </div>
                         
                         <div>
-                            <label class="block text-sm font-medium text-gray-700">选择文件 *</label>
-                            <input type="file" name="knowledge_files[]" required accept=".txt,.md,.docx" multiple webkitdirectory directory
+                            <label class="block text-sm font-medium text-gray-700">选择文件或文件夹 *</label>
+                            <input type="file" name="knowledge_files[]" accept=".txt,.md,.docx,.pdf,.pptx,.ppt" multiple
                                    class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100">
+                            <input type="file" name="knowledge_files[]" accept=".txt,.md,.docx,.pdf,.pptx,.ppt" multiple webkitdirectory directory
+                                   class="mt-2 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100">
                         </div>
                         
                         <div class="text-sm text-gray-500">
@@ -654,7 +667,10 @@ require_once __DIR__ . '/includes/header.php';
                                 <li>TXT - 纯文本文件</li>
                                 <li>MD - Markdown文件</li>
                                 <li>DOCX - Word文档，支持自动提取正文</li>
+                                <li>PDF - 支持提取可复制文字，扫描件请先 OCR</li>
+                                <li>PPTX - PowerPoint 演示文稿，支持提取幻灯片文字</li>
                                 <li>DOC - 旧版 Word 文档，请先另存为 DOCX 后上传</li>
+                                <li>PPT - 旧版 PowerPoint 文档，请先另存为 PPTX 后上传</li>
                             </ul>
                         </div>
                     </div>
@@ -759,6 +775,7 @@ require_once __DIR__ . '/includes/header.php';
             }
 
             const fileInput = document.getElementById('knowledge-files-input');
+            const folderInput = document.getElementById('knowledge-folder-input');
             const dropzone = document.getElementById('knowledge-dropzone');
             const fileList = document.getElementById('knowledge-file-list');
             const contentInput = document.querySelector('#create-knowledge-form textarea[name="content"]');
@@ -766,11 +783,14 @@ require_once __DIR__ . '/includes/header.php';
             const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
                 '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
             }[char]));
-            const supportedKnowledgeFile = (file) => /\.(txt|md|docx)$/i.test(file.name || '');
+            const supportedKnowledgeFile = (file) => /\.(txt|md|docx|pdf|pptx|ppt)$/i.test(file.name || '');
 
             function renderFileList() {
                 if (!fileInput || !fileList) return;
-                const files = Array.from(fileInput.files || []);
+                const files = [
+                    ...Array.from(fileInput.files || []),
+                    ...Array.from(folderInput ? folderInput.files || [] : [])
+                ];
                 if (files.length === 0) {
                     fileList.classList.add('hidden');
                     fileList.innerHTML = '';
@@ -789,6 +809,9 @@ require_once __DIR__ . '/includes/header.php';
 
             if (fileInput) {
                 fileInput.addEventListener('change', renderFileList);
+            }
+            if (folderInput) {
+                folderInput.addEventListener('change', renderFileList);
             }
 
             if (dropzone && fileInput) {
