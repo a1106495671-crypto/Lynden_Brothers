@@ -274,14 +274,14 @@ $quick_start_steps = [
     ],
     [
         'no' => '2',
-        'title' => '配置素材库',
-        'desc' => '把真实、可靠的业务资料沉淀为素材库，任务生成时优先使用这些内容。',
+        'title' => '沉淀内容资产',
+        'desc' => '先切割知识库，根据 chunk 组织关键词提问 prompt，问模型后沉淀关键词库，再由关键词派生标题库。',
         'icon' => 'database',
         'link' => 'materials.php',
         'chips' => [
             ['label' => '知识库', 'link' => 'knowledge-bases.php', 'class' => 'border-orange-100 bg-orange-50 text-orange-700 hover:bg-orange-100'],
-            ['label' => '标题库', 'link' => 'chunk-library-generate.php?focus=titles', 'class' => 'border-green-100 bg-green-50 text-green-700 hover:bg-green-100'],
             ['label' => '关键词库', 'link' => 'chunk-library-generate.php?focus=keywords', 'class' => 'border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100'],
+            ['label' => '标题库', 'link' => 'chunk-library-generate.php?focus=titles', 'class' => 'border-green-100 bg-green-50 text-green-700 hover:bg-green-100'],
             ['label' => '图片库', 'link' => 'image-libraries.php', 'class' => 'border-purple-100 bg-purple-50 text-purple-700 hover:bg-purple-100'],
             ['label' => '作者', 'link' => 'authors.php', 'class' => 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'],
         ],
@@ -470,7 +470,7 @@ require_once __DIR__ . '/includes/header.php';
                         <p class="text-xs font-semibold uppercase text-blue-600">快速启动</p>
                         <h2 class="mt-2 text-xl font-semibold text-gray-900">只需三步，启动 GEO+AI 自动内容生产</h2>
                         <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-                            先接入可用模型，再准备知识库、标题、关键词和图片素材，最后创建任务，即可自动生成内容并按发布节奏上线。
+                            先接入可用模型，再按“知识库 → 关键词库 → 标题库”的顺序准备内容资产，最后创建任务，即可自动生成内容并按发布节奏上线。
                         </p>
                     </div>
                     <span class="inline-flex w-fit items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">

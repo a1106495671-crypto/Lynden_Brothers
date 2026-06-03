@@ -1166,8 +1166,8 @@ $stage_badge_classes = [
 
 <script>
     // ── 品牌知识库管理 ──────────────────────────────────────────────────────────
-    const _bfCustomerId = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
-    const _bfCsrf = <?php echo json_encode(generate_csrf_token()); ?>;
+    var _bfCustomerId = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
+    var _bfCsrf = <?php echo json_encode(generate_csrf_token()); ?>;
 
     function renderBrandFacts(facts) {
         const list = document.getElementById('bf-list');
@@ -1234,8 +1234,8 @@ $stage_badge_classes = [
     }
 
     // ── 监测关键词管理 ──────────────────────────────────────────────────────────
-    const _kwCustomerId = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
-    const _kwCsrf = <?php echo json_encode(generate_csrf_token()); ?>;
+    var _kwCustomerId = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
+    var _kwCsrf = <?php echo json_encode(generate_csrf_token()); ?>;
 
     function renderKeywords(keywords) {
         const list = document.getElementById('kw-list');
@@ -1287,8 +1287,8 @@ $stage_badge_classes = [
     }
 
     // ── 竞品名称管理 ─────────────────────────────────────────────────────────
-    const _cmpCsrf       = <?php echo json_encode(generate_csrf_token()); ?>;
-    const _cmpCustomerId = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
+    var _cmpCsrf       = <?php echo json_encode(generate_csrf_token()); ?>;
+    var _cmpCustomerId = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
 
     function renderCmp(list) {
         const el = document.getElementById('cmp-list');
@@ -1339,7 +1339,7 @@ $stage_badge_classes = [
     document.getElementById('cmp-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addCmp(); } });
 
     // ── 新建客户弹窗：竞品纯前端暂存（不调服务端，客户创建后再写库）──────────
-    const _newCmpList = [];
+    var _newCmpList = [];
     function renderNewCmp() {
         const el = document.getElementById('new-cmp-list');
         if (!el) return;
@@ -1419,9 +1419,9 @@ $stage_badge_classes = [
         }
 
         function applyFilters() {
-            const query = (searchInput.value || '').trim().toLowerCase();
-            const stage = stageFilter.value;
-            const status = statusFilter.value;
+            const query = (searchInput?.value || '').trim().toLowerCase();
+            const stage = stageFilter?.value || '';
+            const status = statusFilter?.value || '';
 
             rows.forEach((row) => {
                 const matchesQuery = !query || (row.dataset.search || '').toLowerCase().includes(query);
@@ -1448,8 +1448,8 @@ $stage_badge_classes = [
 </script>
 
 <script>
-const _contractCid  = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
-const _contractCsrf = <?php echo json_encode(generate_csrf_token()); ?>;
+var _contractCid  = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
+var _contractCsrf = <?php echo json_encode(generate_csrf_token()); ?>;
 function showContractEdit() {
     document.getElementById('contract-edit-row').classList.remove('hidden');
     document.getElementById('contract-edit-btn').classList.add('hidden');
