@@ -24,6 +24,46 @@ try {
     ")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $_mediaAccountError) {}
 
+$automationCustomers = [];
+try {
+    $automationCustomers = $db->query("
+        SELECT
+            c.customer_id,
+            c.name,
+            c.industry,
+            c.domain,
+            c.service_status,
+            COALESCE(
+                NULLIF((SELECT fact_value FROM geo_brand_facts WHERE customer_id = c.customer_id AND fact_key = 'core_services' ORDER BY updated_at DESC LIMIT 1), ''),
+                NULLIF((SELECT fact_value FROM geo_brand_facts WHERE customer_id = c.customer_id AND fact_key = 'core_service' ORDER BY updated_at DESC LIMIT 1), ''),
+                NULLIF((SELECT services FROM automation_workflows WHERE customer_id = c.customer_id AND COALESCE(services, '') <> '' ORDER BY created_at DESC LIMIT 1), ''),
+                ''
+            ) AS core_services,
+            COALESCE(
+                NULLIF((SELECT fact_value FROM geo_brand_facts WHERE customer_id = c.customer_id AND fact_key = 'positioning' ORDER BY updated_at DESC LIMIT 1), ''),
+                NULLIF((SELECT positioning FROM automation_workflows WHERE customer_id = c.customer_id AND COALESCE(positioning, '') <> '' ORDER BY created_at DESC LIMIT 1), ''),
+                ''
+            ) AS positioning,
+            COALESCE(
+                NULLIF((SELECT fact_value FROM geo_brand_facts WHERE customer_id = c.customer_id AND fact_key = 'master_sentence' ORDER BY updated_at DESC LIMIT 1), ''),
+                ''
+            ) AS master_sentence,
+            COALESCE(
+                NULLIF((SELECT fact_value FROM geo_brand_facts WHERE customer_id = c.customer_id AND fact_key = 'competitors' ORDER BY updated_at DESC LIMIT 1), ''),
+                NULLIF((SELECT string_agg(competitor, '，' ORDER BY competitor) FROM geo_customer_competitors WHERE customer_id = c.customer_id AND enabled = TRUE), ''),
+                NULLIF((SELECT competitors FROM automation_workflows WHERE customer_id = c.customer_id AND COALESCE(competitors, '') <> '' ORDER BY created_at DESC LIMIT 1), ''),
+                ''
+            ) AS competitors
+        FROM customers c
+        WHERE c.service_status <> 'archived'
+        ORDER BY
+            CASE WHEN c.customer_id LIKE 'cust_%' THEN 0 ELSE 1 END ASC,
+            c.updated_at DESC,
+            c.created_at DESC
+        LIMIT 100
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $_customerError) {}
+
 $page_title = '品牌入驻自动化';
 ?>
 <?php require_once __DIR__ . '/includes/header.php'; ?>
@@ -334,6 +374,26 @@ $page_title = '品牌入驻自动化';
             <!-- 弹窗内容 -->
             <div class="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
                 <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">已有客户</label>
+                    <select id="input-customer-id" onchange="selectAutomationCustomer()" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 focus:outline-none">
+                        <option value="">新客户 / 手动填写</option>
+                        <?php foreach ($automationCustomers as $customer): ?>
+                            <option
+                                value="<?php echo htmlspecialchars($customer['customer_id']); ?>"
+                                data-name="<?php echo htmlspecialchars($customer['name']); ?>"
+                                data-industry="<?php echo htmlspecialchars($customer['industry'] ?? ''); ?>"
+                                data-domain="<?php echo htmlspecialchars($customer['domain'] ?? ''); ?>"
+                                data-services="<?php echo htmlspecialchars($customer['core_services'] ?? ''); ?>"
+                                data-competitors="<?php echo htmlspecialchars($customer['competitors'] ?? ''); ?>"
+                                data-positioning="<?php echo htmlspecialchars(($customer['positioning'] ?? '') ?: ($customer['master_sentence'] ?? '')); ?>"
+                            >
+                                <?php echo htmlspecialchars($customer['name']); ?><?php echo !empty($customer['domain']) ? ' · ' . htmlspecialchars($customer['domain']) : ''; ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">选择已有客户后，系统会复用该客户已配置的资料、知识切片、任务和文章，能跳过的步骤会自动跳过。</p>
+                </div>
+                <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">品牌名称 <span class="text-red-500">*</span></label>
                     <input type="text" id="input-brand" placeholder="如：文韵爱阅读" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 focus:outline-none">
                 </div>
@@ -465,6 +525,23 @@ function closeStartModal() {
     document.getElementById('start-modal').classList.add('hidden');
 }
 
+function selectAutomationCustomer(customerId = '') {
+    const select = document.getElementById('input-customer-id');
+    if (!select) return;
+    if (customerId) {
+        select.value = customerId;
+    }
+    const option = select.options[select.selectedIndex];
+    if (!option || !option.value) return;
+
+    document.getElementById('input-brand').value = option.dataset.name || '';
+    document.getElementById('input-industry').value = option.dataset.industry || '';
+    document.getElementById('input-website').value = option.dataset.domain || '';
+    document.getElementById('input-services').value = option.dataset.services || '';
+    document.getElementById('input-competitors').value = option.dataset.competitors || '';
+    document.getElementById('input-positioning').value = option.dataset.positioning || '';
+}
+
 // ESC 关闭弹窗
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeStartModal();
@@ -486,6 +563,7 @@ async function startAutomation() {
     if (typeof lucide !== 'undefined') lucide.createIcons();
 
     const payload = {
+        customer_id: document.getElementById('input-customer-id')?.value || '',
         brand_name: brand,
         industry: industry,
         website: document.getElementById('input-website').value.trim(),
@@ -783,6 +861,20 @@ function updateStepUI(stepId, stepData) {
 
 function renderStepOutputSummary(stepId, output) {
     if (!output || typeof output !== 'object') return '';
+    if (output.skipped && output.reason) {
+        const labels = {
+            existing_brand_facts: '已复用品牌事实',
+            existing_customer: '已复用客户',
+            existing_keyword_library: '已复用关键词库',
+            existing_title_library: '已复用标题库',
+            existing_chunked_knowledge_base: '已复用已切割知识库',
+            existing_knowledge_graph: '已复用知识图谱',
+            existing_intent_questions: '已复用意图池',
+            existing_task: '已复用任务',
+            existing_articles: '已复用文章',
+        };
+        return labels[output.reason] || '已存在，跳过';
+    }
     if (stepId === 'diagnosis') {
         if (output.skipped) return '可选展示已跳过';
         const score = output.overall_score !== undefined && output.overall_score !== null ? `评分 ${output.overall_score}` : '';
@@ -1175,7 +1267,17 @@ function runDemo() {
     });
 }
 
-document.addEventListener('DOMContentLoaded', resumeLatestWorkflow);
+document.addEventListener('DOMContentLoaded', function() {
+    const params = new URLSearchParams(window.location.search);
+    const customerId = params.get('customer_id') || '';
+    if (customerId) {
+        selectAutomationCustomer(customerId);
+    }
+    if (params.get('start') === '1') {
+        openStartModal();
+    }
+    resumeLatestWorkflow();
+});
 </script>
 JS;
 

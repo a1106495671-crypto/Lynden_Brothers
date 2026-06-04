@@ -37,7 +37,9 @@ $stats = [
     'vectorized_chunks' => $db->query("SELECT COUNT(*) as count FROM knowledge_chunks WHERE embedding_model_id IS NOT NULL AND embedding_model_id > 0 AND embedding_dimensions > 0")->fetch()['count'] ?? 0,
     'knowledge_usage_count' => $db->query("SELECT COUNT(*) as count FROM tasks WHERE knowledge_base_id IS NOT NULL")->fetch()['count'] ?? 0,
     'latest_knowledge_updated_at' => $db->query("SELECT MAX(updated_at) as latest FROM knowledge_bases")->fetch()['latest'] ?? '',
-    'authors' => $db->query("SELECT COUNT(*) as count FROM authors")->fetch()['count'] ?? 0
+    'authors' => $db->query("SELECT COUNT(*) as count FROM authors")->fetch()['count'] ?? 0,
+    'content_prompts' => $db->query("SELECT COUNT(*) as count FROM prompts WHERE type = 'content'")->fetch()['count'] ?? 0,
+    'special_prompts' => $db->query("SELECT COUNT(*) as count FROM prompts WHERE type IN ('keyword', 'description')")->fetch()['count'] ?? 0,
 ];
 $stats['unvectorized_chunks'] = max(0, (int) $stats['knowledge_chunks'] - (int) $stats['vectorized_chunks']);
 $stats['chunk_strategy'] = get_setting('knowledge_chunk_strategy', 'rule');
@@ -63,12 +65,20 @@ $page_header = '
 <div class="flex items-center justify-between">
     <div>
         <h1 class="text-2xl font-bold text-gray-900">素材管理</h1>
-        <p class="mt-1 text-sm text-gray-600">管理关键词库、标题库、图片库和AI知识库</p>
+        <p class="mt-1 text-sm text-gray-600">管理关键词库、标题库、图片库、AI知识库和提示词模板</p>
     </div>
     <div class="flex space-x-3">
         <a href="authors.php" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
             <i data-lucide="users" class="w-4 h-4 mr-2"></i>
             作者管理
+        </a>
+        <a href="ai-prompts.php" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+            <i data-lucide="message-square-text" class="w-4 h-4 mr-2"></i>
+            正文提示词
+        </a>
+        <a href="ai-special-prompts.php" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+            <i data-lucide="sparkles" class="w-4 h-4 mr-2"></i>
+            特殊提示词
         </a>
     </div>
 </div>
@@ -217,7 +227,7 @@ require_once __DIR__ . '/includes/header.php';
         </section>
 
         <!-- 统计卡片 -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
             <div class="bg-white overflow-hidden shadow rounded-lg">
                 <div class="p-5">
                     <div class="flex items-center">
@@ -280,6 +290,23 @@ require_once __DIR__ . '/includes/header.php';
                                 <dt class="text-sm font-medium text-gray-500 truncate">AI知识库</dt>
                                 <dd class="text-lg font-medium text-gray-900"><?php echo $stats['knowledge_bases']; ?> 个库</dd>
                                 <dd class="text-sm text-gray-500"><?php echo $stats['authors']; ?> 位作者</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white overflow-hidden shadow rounded-lg">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0">
+                            <i data-lucide="message-square-text" class="h-6 w-6 text-emerald-600"></i>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">提示词模板</dt>
+                                <dd class="text-lg font-medium text-gray-900"><?php echo (int) $stats['content_prompts']; ?> 个正文</dd>
+                                <dd class="text-sm text-gray-500"><?php echo (int) $stats['special_prompts']; ?> 个特殊</dd>
                             </dl>
                         </div>
                     </div>
@@ -418,6 +445,70 @@ require_once __DIR__ . '/includes/header.php';
                     </div>
                 </div>
             </div>
+
+            <!-- 正文提示词 -->
+            <div class="bg-white shadow rounded-lg">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium text-gray-900 flex items-center">
+                            <i data-lucide="message-square-text" class="w-5 h-5 text-emerald-600 mr-2"></i>
+                            正文提示词管理
+                        </h3>
+                        <a href="ai-prompts.php" class="text-sm text-emerald-600 hover:text-emerald-800">查看全部</a>
+                    </div>
+                </div>
+                <div class="px-6 py-6">
+                    <p class="text-gray-600 mb-4">管理任务中心正文生成直接引用的 content 提示词模板</p>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-500">正文提示词数量</span>
+                            <span class="text-sm font-medium"><?php echo (int) $stats['content_prompts']; ?> 个</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-500">已导入 GEOFlow 模板</span>
+                            <span class="text-sm font-medium">4 个</span>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <a href="ai-prompts.php" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-emerald-600 hover:bg-emerald-700">
+                            <i data-lucide="settings" class="w-4 h-4 mr-2"></i>
+                            管理正文提示词
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 特殊提示词 -->
+            <div class="bg-white shadow rounded-lg">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-medium text-gray-900 flex items-center">
+                            <i data-lucide="sparkles" class="w-5 h-5 text-purple-600 mr-2"></i>
+                            特殊提示词管理
+                        </h3>
+                        <a href="ai-special-prompts.php" class="text-sm text-purple-600 hover:text-purple-800">查看全部</a>
+                    </div>
+                </div>
+                <div class="px-6 py-6">
+                    <p class="text-gray-600 mb-4">管理关键词生成和文章描述生成的特殊提示词</p>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-500">特殊提示词数量</span>
+                            <span class="text-sm font-medium"><?php echo (int) $stats['special_prompts']; ?> 个</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm text-gray-500">覆盖类型</span>
+                            <span class="text-sm font-medium">关键词 / 描述</span>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <a href="ai-special-prompts.php" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700">
+                            <i data-lucide="settings" class="w-4 h-4 mr-2"></i>
+                            管理特殊提示词
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- 快速操作 -->
@@ -456,6 +547,22 @@ require_once __DIR__ . '/includes/header.php';
                         <div>
                             <h4 class="font-medium text-gray-900">AI知识库</h4>
                             <p class="text-sm text-gray-500">管理知识</p>
+                        </div>
+                    </a>
+
+                    <a href="ai-prompts.php" class="flex items-center p-4 border border-emerald-200 rounded-lg bg-emerald-50 hover:bg-emerald-100 transition-colors">
+                        <i data-lucide="message-square-text" class="w-8 h-8 text-emerald-600 mr-3"></i>
+                        <div>
+                            <h4 class="font-medium text-gray-900">正文提示词</h4>
+                            <p class="text-sm text-gray-500">管理正文生成模板</p>
+                        </div>
+                    </a>
+
+                    <a href="ai-special-prompts.php" class="flex items-center p-4 border border-purple-200 rounded-lg bg-purple-50 hover:bg-purple-100 transition-colors">
+                        <i data-lucide="sparkles" class="w-8 h-8 text-purple-600 mr-3"></i>
+                        <div>
+                            <h4 class="font-medium text-gray-900">特殊提示词</h4>
+                            <p class="text-sm text-gray-500">管理关键词和描述模板</p>
                         </div>
                     </a>
 

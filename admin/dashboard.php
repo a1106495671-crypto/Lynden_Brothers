@@ -262,6 +262,85 @@ try {
     ")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $_mediaAccountError) {}
 
+$automationReadiness = [
+    'chat_models' => 0,
+    'embedding_models' => 0,
+    'knowledge_bases' => 0,
+    'knowledge_chunks' => 0,
+    'embedded_chunks' => 0,
+    'keyword_libraries' => 0,
+    'title_libraries' => 0,
+    'knowledge_facts' => 0,
+    'intent_questions' => 0,
+    'tasks' => 0,
+    'articles' => 0,
+    'distribution_jobs' => 0,
+    'monitor_keywords' => 0,
+    'panorama_reports' => 0,
+    'baseline_qa' => 0,
+    'diagnoses' => 0,
+];
+try {
+    $automationReadiness['chat_models'] = (int) $db->query("
+        SELECT COUNT(*)
+        FROM ai_models
+        WHERE status = 'active'
+          AND COALESCE(NULLIF(model_type, ''), 'chat') = 'chat'
+          AND COALESCE(api_key, '') <> ''
+          AND COALESCE(model_id, '') <> ''
+    ")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['embedding_models'] = (int) $db->query("
+        SELECT COUNT(*)
+        FROM ai_models
+        WHERE status = 'active'
+          AND model_type = 'embedding'
+          AND COALESCE(api_key, '') <> ''
+          AND COALESCE(model_id, '') <> ''
+    ")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['knowledge_bases'] = (int) $db->query("SELECT COUNT(*) FROM knowledge_bases")->fetchColumn();
+    $automationReadiness['knowledge_chunks'] = (int) $db->query("SELECT COUNT(*) FROM knowledge_chunks")->fetchColumn();
+    $automationReadiness['embedded_chunks'] = (int) $db->query("SELECT COUNT(*) FROM knowledge_chunks WHERE COALESCE(embedding_json, '') <> ''")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['keyword_libraries'] = (int) $db->query("SELECT COUNT(*) FROM keyword_libraries WHERE keyword_count > 0")->fetchColumn();
+    $automationReadiness['title_libraries'] = (int) $db->query("SELECT COUNT(*) FROM title_libraries WHERE title_count > 0")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['knowledge_facts'] = (int) $db->query("SELECT COUNT(*) FROM geo_brand_knowledge")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['intent_questions'] = (int) $db->query("SELECT COUNT(*) FROM geo_intent_questions")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['tasks'] = (int) $db->query("SELECT COUNT(*) FROM tasks WHERE geo_mode = TRUE OR COALESCE(geo_customer_id, '') <> ''")->fetchColumn();
+    $automationReadiness['articles'] = (int) $db->query("
+        SELECT COUNT(*)
+        FROM articles a
+        JOIN tasks t ON t.id = a.task_id
+        WHERE a.deleted_at IS NULL
+          AND (t.geo_mode = TRUE OR COALESCE(t.geo_customer_id, '') <> '')
+    ")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['distribution_jobs'] = (int) $db->query("SELECT COUNT(*) FROM media_publish_jobs")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['monitor_keywords'] = (int) $db->query("SELECT COUNT(*) FROM geo_monitor_keywords")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['panorama_reports'] = (int) $db->query("SELECT COUNT(*) FROM geo_panorama_reports")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['baseline_qa'] = (int) $db->query("SELECT COUNT(*) FROM geo_baseline_qa")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+try {
+    $automationReadiness['diagnoses'] = (int) $db->query("SELECT COUNT(*) FROM geo_diagnosis_runs")->fetchColumn();
+} catch (Throwable $_readinessError) {}
+
 $quick_start_steps = [
     [
         'no' => '1',
@@ -281,7 +360,7 @@ $quick_start_steps = [
         'chips' => [
             ['label' => '知识库', 'link' => 'knowledge-bases.php', 'class' => 'border-orange-100 bg-orange-50 text-orange-700 hover:bg-orange-100'],
             ['label' => '关键词库', 'link' => 'chunk-library-generate.php?focus=keywords', 'class' => 'border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100'],
-            ['label' => '标题库', 'link' => 'chunk-library-generate.php?focus=titles', 'class' => 'border-green-100 bg-green-50 text-green-700 hover:bg-green-100'],
+            ['label' => '标题库', 'link' => 'title-libraries.php', 'class' => 'border-green-100 bg-green-50 text-green-700 hover:bg-green-100'],
             ['label' => '图片库', 'link' => 'image-libraries.php', 'class' => 'border-purple-100 bg-purple-50 text-purple-700 hover:bg-purple-100'],
             ['label' => '作者', 'link' => 'authors.php', 'class' => 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'],
         ],
@@ -304,8 +383,8 @@ $automation_nodes = [
         'desc' => '先配置可用 Chat 模型和 Embedding 模型',
         'icon' => 'cpu',
         'link' => 'ai-configurator.php',
-        'status' => 'attention',
-        'meta' => '人工配置',
+        'status' => $automationReadiness['chat_models'] > 0 ? 'ready' : 'attention',
+        'meta' => $automationReadiness['chat_models'] > 0 ? ($automationReadiness['chat_models'] . ' 个 Chat API') : '待配置 API',
         'tone' => 'orange',
     ],
     [
@@ -313,8 +392,8 @@ $automation_nodes = [
         'desc' => '上传业务资料、案例、FAQ、产品文档和素材',
         'icon' => 'folder-up',
         'link' => 'materials.php',
-        'status' => 'attention',
-        'meta' => '素材入库',
+        'status' => $automationReadiness['knowledge_bases'] > 0 ? 'ready' : 'pending',
+        'meta' => $automationReadiness['knowledge_bases'] > 0 ? ($automationReadiness['knowledge_bases'] . ' 个知识库') : '待上传',
         'tone' => 'orange',
     ],
     [
@@ -322,8 +401,8 @@ $automation_nodes = [
         'desc' => '按结构化规则切片，并写入 Embedding 向量',
         'icon' => 'scissors',
         'link' => 'materials.php',
-        'status' => 'attention',
-        'meta' => '知识库中枢',
+        'status' => $automationReadiness['knowledge_chunks'] > 0 ? 'ready' : 'attention',
+        'meta' => $automationReadiness['knowledge_chunks'] > 0 ? ($automationReadiness['embedded_chunks'] . '/' . $automationReadiness['knowledge_chunks'] . ' 已向量化') : '待切割',
         'tone' => 'orange',
     ],
     [
@@ -331,8 +410,8 @@ $automation_nodes = [
         'desc' => '准备关键词库、标题库、图片库和作者资料',
         'icon' => 'library',
         'link' => 'materials.php',
-        'status' => 'attention',
-        'meta' => '人工校准',
+        'status' => ($automationReadiness['keyword_libraries'] > 0 && $automationReadiness['title_libraries'] > 0) ? 'ready' : 'pending',
+        'meta' => $automationReadiness['keyword_libraries'] . ' 关键词库 / ' . $automationReadiness['title_libraries'] . ' 标题库',
         'tone' => 'orange',
     ],
     [
@@ -340,8 +419,8 @@ $automation_nodes = [
         'desc' => '从已向量化知识库中抽取可引用事实条目',
         'icon' => 'network',
         'link' => 'materials.php',
-        'status' => 'ready',
-        'meta' => '事实条目',
+        'status' => $automationReadiness['knowledge_facts'] > 0 ? 'ready' : 'pending',
+        'meta' => $automationReadiness['knowledge_facts'] > 0 ? ($automationReadiness['knowledge_facts'] . ' 条事实') : '待生成',
         'tone' => 'emerald',
     ],
     [
@@ -349,8 +428,8 @@ $automation_nodes = [
         'desc' => '基于客户资料和知识库发现真实问题空白',
         'icon' => 'crosshair',
         'link' => 'geo-diagnosis.php',
-        'status' => 'ready',
-        'meta' => '问题空白',
+        'status' => $automationReadiness['intent_questions'] > 0 ? 'ready' : 'pending',
+        'meta' => $automationReadiness['intent_questions'] > 0 ? ($automationReadiness['intent_questions'] . ' 个问题') : '待挖掘',
         'tone' => 'violet',
     ],
     [
@@ -358,8 +437,8 @@ $automation_nodes = [
         'desc' => '选择知识库、标题库、模型、数量和发布范围',
         'icon' => 'zap',
         'link' => 'tasks.php',
-        'status' => $doing_customers > 0 ? 'running' : 'ready',
-        'meta' => $doing_customers . ' 个交付中',
+        'status' => $doing_customers > 0 ? 'running' : ($automationReadiness['tasks'] > 0 ? 'ready' : 'pending'),
+        'meta' => $doing_customers > 0 ? ($doing_customers . ' 个交付中') : ($automationReadiness['tasks'] > 0 ? ($automationReadiness['tasks'] . ' 个任务') : '待创建'),
         'tone' => 'emerald',
     ],
     [
@@ -367,8 +446,8 @@ $automation_nodes = [
         'desc' => '使用向量召回资料生成首篇内容，剩余后台继续',
         'icon' => 'file-text',
         'link' => 'articles.php',
-        'status' => $stage_counts['execute'] > 0 ? 'running' : 'ready',
-        'meta' => '内容生产',
+        'status' => $stage_counts['execute'] > 0 ? 'running' : ($automationReadiness['articles'] > 0 ? 'ready' : 'pending'),
+        'meta' => $automationReadiness['articles'] > 0 ? ($automationReadiness['articles'] . ' 篇文章') : '待生成',
         'tone' => 'emerald',
     ],
     [
@@ -376,8 +455,8 @@ $automation_nodes = [
         'desc' => '按渠道配置发布文章，自动发布或生成待办',
         'icon' => 'send',
         'link' => 'distribution.php',
-        'status' => 'ready',
-        'meta' => '媒体分发',
+        'status' => $automationReadiness['distribution_jobs'] > 0 ? 'ready' : 'pending',
+        'meta' => $automationReadiness['distribution_jobs'] > 0 ? ($automationReadiness['distribution_jobs'] . ' 个分发任务') : '待分发',
         'tone' => 'orange',
     ],
     [
@@ -385,8 +464,8 @@ $automation_nodes = [
         'desc' => '发布后添加监测关键词，持续跟踪引用变化',
         'icon' => 'activity',
         'link' => 'geo-monitor.php',
-        'status' => $total_alerts > 0 ? 'attention' : 'running',
-        'meta' => $total_alerts . ' 个告警',
+        'status' => $total_alerts > 0 ? 'attention' : ($automationReadiness['monitor_keywords'] > 0 ? 'ready' : 'pending'),
+        'meta' => $total_alerts > 0 ? ($total_alerts . ' 个告警') : ($automationReadiness['monitor_keywords'] > 0 ? ($automationReadiness['monitor_keywords'] . ' 个监测词') : '待启动'),
         'tone' => 'orange',
     ],
     [
@@ -394,8 +473,8 @@ $automation_nodes = [
         'desc' => '汇总内容、分发和监测结果形成复盘，不引用雷达评分',
         'icon' => 'scan-search',
         'link' => 'geo-panorama.php',
-        'status' => 'ready',
-        'meta' => '全景档案',
+        'status' => $automationReadiness['panorama_reports'] > 0 ? 'ready' : 'pending',
+        'meta' => $automationReadiness['panorama_reports'] > 0 ? ($automationReadiness['panorama_reports'] . ' 份档案') : '待生成',
         'tone' => 'slate',
     ],
     [
@@ -403,8 +482,8 @@ $automation_nodes = [
         'desc' => '可选补录首次 AI 问答采样，仅用于客户展示材料',
         'icon' => 'message-square-text',
         'link' => 'geo-diagnosis.php',
-        'status' => 'ready',
-        'meta' => '展示补充',
+        'status' => $automationReadiness['baseline_qa'] > 0 ? 'ready' : 'pending',
+        'meta' => $automationReadiness['baseline_qa'] > 0 ? ($automationReadiness['baseline_qa'] . ' 条问答') : '待填写',
         'tone' => 'violet',
     ],
     [
@@ -412,14 +491,15 @@ $automation_nodes = [
         'desc' => '最后生成客户可看的雷达报告，不影响文章生成和自动化依据',
         'icon' => 'radar',
         'link' => 'geo-diagnosis.php',
-        'status' => $geo_tool_stats['total_diagnoses'] > 0 ? 'ready' : 'attention',
-        'meta' => ($geo_tool_stats['total_diagnoses'] ?: '待跑') . ' 次诊断',
+        'status' => $automationReadiness['diagnoses'] > 0 ? 'ready' : 'pending',
+        'meta' => $automationReadiness['diagnoses'] > 0 ? ($automationReadiness['diagnoses'] . ' 次诊断') : '待生成',
         'tone' => 'violet',
     ],
 ];
 
 $automation_running_count = count(array_filter($automation_nodes, fn($node) => ($node['status'] ?? '') === 'running'));
 $automation_attention_count = count(array_filter($automation_nodes, fn($node) => ($node['status'] ?? '') === 'attention'));
+$automation_pending_count = count(array_filter($automation_nodes, fn($node) => ($node['status'] ?? '') === 'pending'));
 
 $tone_classes = [
     'blue' => 'bg-blue-50 text-blue-700 border-blue-100',
@@ -433,12 +513,14 @@ $status_classes = [
     'ready' => 'bg-emerald-100 text-emerald-700',
     'running' => 'bg-blue-100 text-blue-700',
     'attention' => 'bg-orange-100 text-orange-700',
+    'pending' => 'bg-slate-100 text-slate-600',
 ];
 
 $status_labels = [
-    'ready' => '可用',
+    'ready' => '已就绪',
     'running' => '运行中',
     'attention' => '需关注',
+    'pending' => '待执行',
 ];
 
 // 包含统一头部
@@ -518,18 +600,28 @@ require_once __DIR__ . '/includes/header.php';
                     <div>
                         <h2 class="text-xl font-semibold text-gray-900">品牌入驻自动化</h2>
                         <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-500">
-                            先完成 API、素材上传、知识切割向量化这些准备项，再进入任务、内容、分发、监测和复盘自动化；雷达诊断最后生成，仅作为客户展示材料。
+                            进入自动化后选择客户一键自动跑；API、知识切割、关键词库、标题库、任务和文章如果已经存在，系统会按客户自动跳过，继续往分发、监测和复盘做。
                         </p>
                     </div>
-                    <div class="flex flex-wrap gap-2">
-                        <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
-                            <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
-                            <?php echo $automation_running_count; ?> 个节点运行中
-                        </span>
-                        <span class="inline-flex items-center rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
-                            <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
-                            <?php echo $automation_attention_count; ?> 项需要关注
-                        </span>
+                    <div class="flex flex-col gap-2 sm:items-end">
+                        <div class="flex flex-wrap gap-2">
+                            <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
+                                <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                                <?php echo $automation_running_count; ?> 个节点运行中
+                            </span>
+                            <span class="inline-flex items-center rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
+                                <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                                <?php echo $automation_attention_count; ?> 项需要关注
+                            </span>
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                                <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                                <?php echo $automation_pending_count; ?> 项待执行
+                            </span>
+                        </div>
+                        <a href="<?php echo htmlspecialchars(admin_url('automation-workflow.php?start=1')); ?>" class="inline-flex h-10 w-fit items-center rounded-lg bg-violet-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-violet-700">
+                            <i data-lucide="play" class="mr-2 h-4 w-4"></i>
+                            启动自动化
+                        </a>
                     </div>
                 </div>
                 <div class="p-5">

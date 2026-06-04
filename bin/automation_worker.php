@@ -319,6 +319,276 @@ function wf_get_usable_chat_model(PDO $db): ?array {
     return null;
 }
 
+function wf_count_rows(PDO $db, string $sql, array $params = []): int {
+    try {
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        return (int) $stmt->fetchColumn();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+function wf_find_latest_customer_task(PDO $db, string $customerId): ?array {
+    if ($customerId === '') {
+        return null;
+    }
+
+    $stmt = $db->prepare("
+        SELECT *
+        FROM tasks
+        WHERE geo_customer_id = ?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$customerId]);
+    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+function wf_find_named_keyword_library(PDO $db, string $brandName): ?array {
+    $stmt = $db->prepare("
+        SELECT id, name, keyword_count
+        FROM keyword_libraries
+        WHERE name ILIKE ?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+    ");
+    $stmt->execute(['%' . $brandName . '%']);
+    $library = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if (!$library) {
+        return null;
+    }
+    $count = wf_count_rows($db, "SELECT COUNT(*) FROM keywords WHERE library_id = ?", [(int) $library['id']]);
+    return $count > 0 ? array_merge($library, ['keyword_count' => $count]) : null;
+}
+
+function wf_find_named_title_library(PDO $db, string $brandName): ?array {
+    $stmt = $db->prepare("
+        SELECT id, name, title_count, keyword_library_id
+        FROM title_libraries
+        WHERE name ILIKE ?
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+    ");
+    $stmt->execute(['%' . $brandName . '%']);
+    $library = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if (!$library) {
+        return null;
+    }
+    $count = wf_count_rows($db, "SELECT COUNT(*) FROM titles WHERE library_id = ?", [(int) $library['id']]);
+    return $count > 0 ? array_merge($library, ['title_count' => $count]) : null;
+}
+
+function wf_find_named_chunked_knowledge_base(PDO $db, string $brandName): ?array {
+    $stmt = $db->prepare("
+        SELECT kb.id, kb.name,
+               COUNT(kc.id) AS chunk_count,
+               SUM(CASE WHEN COALESCE(kc.embedding_json, '') <> '' THEN 1 ELSE 0 END) AS embedded_count
+        FROM knowledge_bases kb
+        LEFT JOIN knowledge_chunks kc ON kc.knowledge_base_id = kb.id
+        WHERE kb.name ILIKE ?
+        GROUP BY kb.id, kb.name, kb.updated_at
+        HAVING COUNT(kc.id) > 0
+        ORDER BY kb.updated_at DESC, kb.id DESC
+        LIMIT 1
+    ");
+    $stmt->execute(['%' . $brandName . '%']);
+    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+function wf_auto_skip_step(PDO $db, array $wf, string $stepId): ?array {
+    $workflowId = (string) ($wf['workflow_id'] ?? '');
+    $customerId = trim((string) ($wf['customer_id'] ?? ''));
+    $brandName = trim((string) ($wf['brand_name'] ?? ''));
+    $task = wf_find_latest_customer_task($db, $customerId);
+
+    switch ($stepId) {
+        case 'collect':
+            if ($customerId !== '' && wf_count_rows($db, "SELECT COUNT(*) FROM geo_brand_facts WHERE customer_id = ?", [$customerId]) >= 3) {
+                return [
+                    'reason' => '客户品牌事实已存在，跳过品牌资料搜集',
+                    'fields' => [],
+                    'output' => ['skipped' => true, 'reason' => 'existing_brand_facts', 'customer_id' => $customerId],
+                ];
+            }
+            break;
+
+        case 'customer':
+            if ($customerId !== '' && wf_count_rows($db, "SELECT COUNT(*) FROM customers WHERE customer_id = ?", [$customerId]) > 0) {
+                $factCount = wf_seed_geo_brand_facts($db, $customerId, $wf);
+                $competitorCount = wf_sync_customer_competitors($db, $customerId, wf_parse_competitors((string) ($wf['competitors'] ?? '')));
+                return [
+                    'reason' => "已选择客户 {$customerId}，跳过创建客户",
+                    'fields' => ['customer_id' => $customerId],
+                    'output' => [
+                        'skipped' => true,
+                        'reason' => 'existing_customer',
+                        'customer_id' => $customerId,
+                        'geo_brand_fact_count' => $factCount,
+                        'competitor_count' => $competitorCount,
+                    ],
+                ];
+            }
+            break;
+
+        case 'keywords':
+            $library = null;
+            if (!empty($wf['keyword_library_id'])) {
+                $count = wf_count_rows($db, "SELECT COUNT(*) FROM keywords WHERE library_id = ?", [(int) $wf['keyword_library_id']]);
+                if ($count > 0) {
+                    $library = ['id' => (int) $wf['keyword_library_id'], 'keyword_count' => $count];
+                }
+            }
+            if (!$library && $task && !empty($task['title_library_id'])) {
+                $stmt = $db->prepare("
+                    SELECT kl.id, COUNT(k.id) AS keyword_count
+                    FROM title_libraries tl
+                    JOIN keyword_libraries kl ON kl.id = tl.keyword_library_id
+                    LEFT JOIN keywords k ON k.library_id = kl.id
+                    WHERE tl.id = ?
+                    GROUP BY kl.id
+                    LIMIT 1
+                ");
+                $stmt->execute([(int) $task['title_library_id']]);
+                $library = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+            if (!$library && $brandName !== '') {
+                $library = wf_find_named_keyword_library($db, $brandName);
+            }
+            if ($library && (int) ($library['keyword_count'] ?? 0) > 0) {
+                return [
+                    'reason' => '关键词库已存在，跳过生成关键词库',
+                    'fields' => ['keyword_library_id' => (int) $library['id']],
+                    'output' => ['skipped' => true, 'reason' => 'existing_keyword_library', 'library_id' => (int) $library['id'], 'keyword_count' => (int) $library['keyword_count']],
+                ];
+            }
+            break;
+
+        case 'titles':
+            $library = null;
+            if (!empty($wf['title_library_id'])) {
+                $count = wf_count_rows($db, "SELECT COUNT(*) FROM titles WHERE library_id = ?", [(int) $wf['title_library_id']]);
+                if ($count > 0) {
+                    $library = ['id' => (int) $wf['title_library_id'], 'title_count' => $count, 'keyword_library_id' => $wf['keyword_library_id'] ?? null];
+                }
+            }
+            if (!$library && $task && !empty($task['title_library_id'])) {
+                $stmt = $db->prepare("
+                    SELECT tl.id, tl.keyword_library_id, COUNT(t.id) AS title_count
+                    FROM title_libraries tl
+                    LEFT JOIN titles t ON t.library_id = tl.id
+                    WHERE tl.id = ?
+                    GROUP BY tl.id, tl.keyword_library_id
+                    LIMIT 1
+                ");
+                $stmt->execute([(int) $task['title_library_id']]);
+                $library = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+            if (!$library && $brandName !== '') {
+                $library = wf_find_named_title_library($db, $brandName);
+            }
+            if ($library && (int) ($library['title_count'] ?? 0) > 0) {
+                $fields = ['title_library_id' => (int) $library['id']];
+                if (!empty($library['keyword_library_id'])) {
+                    $fields['keyword_library_id'] = (int) $library['keyword_library_id'];
+                }
+                return [
+                    'reason' => '标题库已存在，跳过生成标题库',
+                    'fields' => $fields,
+                    'output' => ['skipped' => true, 'reason' => 'existing_title_library', 'library_id' => (int) $library['id'], 'title_count' => (int) $library['title_count']],
+                ];
+            }
+            break;
+
+        case 'knowledge':
+            $kb = null;
+            if (!empty($wf['knowledge_base_id'])) {
+                $chunks = wf_count_rows($db, "SELECT COUNT(*) FROM knowledge_chunks WHERE knowledge_base_id = ?", [(int) $wf['knowledge_base_id']]);
+                if ($chunks > 0) {
+                    $kb = ['id' => (int) $wf['knowledge_base_id'], 'chunk_count' => $chunks];
+                }
+            }
+            if (!$kb && $task && !empty($task['knowledge_base_id'])) {
+                $chunks = wf_count_rows($db, "SELECT COUNT(*) FROM knowledge_chunks WHERE knowledge_base_id = ?", [(int) $task['knowledge_base_id']]);
+                if ($chunks > 0) {
+                    $kb = ['id' => (int) $task['knowledge_base_id'], 'chunk_count' => $chunks];
+                }
+            }
+            if (!$kb && $brandName !== '') {
+                $kb = wf_find_named_chunked_knowledge_base($db, $brandName);
+            }
+            if ($kb && (int) ($kb['chunk_count'] ?? 0) > 0) {
+                return [
+                    'reason' => '知识库已切割，跳过生成知识库',
+                    'fields' => ['knowledge_base_id' => (int) $kb['id']],
+                    'output' => [
+                        'skipped' => true,
+                        'reason' => 'existing_chunked_knowledge_base',
+                        'knowledge_base_id' => (int) $kb['id'],
+                        'chunk_count' => (int) $kb['chunk_count'],
+                        'embedded_count' => (int) ($kb['embedded_count'] ?? 0),
+                    ],
+                ];
+            }
+            break;
+
+        case 'knowledge_graph':
+            if ($customerId !== '') {
+                $count = wf_count_rows($db, "SELECT COUNT(*) FROM geo_brand_knowledge WHERE customer_id = ?", [$customerId]);
+                if ($count >= 5) {
+                    return [
+                        'reason' => '知识图谱已有事实条目，跳过抽取',
+                        'fields' => [],
+                        'output' => ['skipped' => true, 'reason' => 'existing_knowledge_graph', 'total_inserted' => $count],
+                    ];
+                }
+            }
+            break;
+
+        case 'intent_mining':
+            if ($customerId !== '') {
+                $count = wf_count_rows($db, "SELECT COUNT(*) FROM geo_intent_questions WHERE customer_id = ?", [$customerId]);
+                if ($count >= 10) {
+                    return [
+                        'reason' => '意图问题池已存在，跳过意图挖掘',
+                        'fields' => [],
+                        'output' => ['skipped' => true, 'reason' => 'existing_intent_questions', 'total_questions' => $count],
+                    ];
+                }
+            }
+            break;
+
+        case 'task':
+            if ($task && !empty($task['id']) && !empty($task['title_library_id'])) {
+                return [
+                    'reason' => '客户已有 GEO 自动化任务，跳过创建任务',
+                    'fields' => [
+                        'task_id' => (int) $task['id'],
+                        'title_library_id' => (int) $task['title_library_id'],
+                        'knowledge_base_id' => !empty($task['knowledge_base_id']) ? (int) $task['knowledge_base_id'] : null,
+                    ],
+                    'output' => ['skipped' => true, 'reason' => 'existing_task', 'task_id' => (int) $task['id'], 'status' => $task['status'] ?? ''],
+                ];
+            }
+            break;
+
+        case 'generate':
+            if (!empty($wf['task_id'])) {
+                $count = wf_count_rows($db, "SELECT COUNT(*) FROM articles WHERE task_id = ? AND deleted_at IS NULL", [(int) $wf['task_id']]);
+                if ($count >= 1) {
+                    return [
+                        'reason' => '客户任务已有文章，跳过首篇等待',
+                        'fields' => [],
+                        'output' => ['skipped' => true, 'reason' => 'existing_articles', 'article_count' => $count, 'target' => (int) ($wf['article_count'] ?? 0)],
+                    ];
+                }
+            }
+            break;
+    }
+
+    return null;
+}
+
 function wf_get_latest_job_error(PDO $db, int $taskId): string {
     $stmt = $db->prepare("
         SELECT status, error_message
@@ -1655,6 +1925,17 @@ function wf_run(PDO $db, string $workflowId): void {
         try {
             // 重新加载 workflow（因为前面的步骤可能更新了 ID 字段）
             $wf = wf_get_workflow($db, $workflowId);
+            $skip = wf_auto_skip_step($db, $wf, $stepId);
+            if ($skip !== null) {
+                if (!empty($skip['fields']) && is_array($skip['fields'])) {
+                    wf_update_workflow($db, $workflowId, $skip['fields']);
+                }
+                $output = json_encode($skip['output'] ?? ['skipped' => true], JSON_UNESCAPED_UNICODE);
+                wf_update_step($db, $workflowId, $stepId, 'completed', null, $output);
+                wf_log($workflowId, "↷ 步骤 {$stepId} 跳过: " . ($skip['reason'] ?? '已有可复用数据'));
+                continue;
+            }
+
             $result = wf_execute_step($db, $wf, $stepId);
 
             if ($result['success']) {
