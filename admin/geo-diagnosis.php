@@ -14,6 +14,12 @@ require_once __DIR__ . '/../includes/geo_baseline_qa_service.php';
 
 require_admin_login();
 
+$current_customer_context = is_array($_SESSION['current_customer'] ?? null) ? $_SESSION['current_customer'] : [];
+$currentCustomerId = (string) ($current_customer_context['customer_id'] ?? $current_customer_context['id'] ?? '');
+$currentCustomerName = (string) ($current_customer_context['name'] ?? '');
+$currentCustomerDomain = (string) ($current_customer_context['domain'] ?? '');
+$currentCustomerIndustry = (string) ($current_customer_context['industry'] ?? '');
+
 $message = '';
 $error = '';
 $selectedId = trim((string) ($_GET['id'] ?? ''));
@@ -28,12 +34,7 @@ try {
         }
 
         $action = (string) ($_POST['action'] ?? 'create_diagnosis');
-        if ($action === 'save_data_source') {
-            if (!geo_diagnosis_save_data_source_config($_POST)) {
-                throw new RuntimeException('雷达数据源配置保存失败');
-            }
-            $message = '雷达数据源配置已保存';
-        } elseif ($action === 'update_weights') {
+        if ($action === 'update_weights') {
             $diagnosisId = trim((string) ($_POST['diagnosis_id'] ?? ''));
             $weights = is_array($_POST['weights'] ?? null) ? $_POST['weights'] : [];
             $scores = is_array($_POST['scores'] ?? null) ? $_POST['scores'] : [];
@@ -42,14 +43,14 @@ try {
         } elseif ($action === 'save_baseline_qa') {
             $diagnosisId = trim((string) ($_POST['diagnosis_id'] ?? ''));
             $baselineBrand = clean_input($_POST['brand_name'] ?? '');
-            $baselineCustomer = clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? ''));
+            $baselineCustomer = clean_input($_POST['customer_id'] ?? $currentCustomerId);
             $savedCount = geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, $baselineCustomer, $baselineBrand, $_POST);
             $message = '问答基准线已保存 ' . $savedCount . ' 条，并同步为监测关键词';
             $selectedId = $diagnosisId;
         } elseif ($action === 'generate_baseline_qa') {
             $diagnosisId = trim((string) ($_POST['diagnosis_id'] ?? ''));
             $baselineBrand = clean_input($_POST['brand_name'] ?? '');
-            $baselineCustomer = clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? ''));
+            $baselineCustomer = clean_input($_POST['customer_id'] ?? $currentCustomerId);
             $baselineIndustry = clean_input($_POST['industry'] ?? '');
             $generated = geo_baseline_qa_generate_from_chunks($db, $baselineCustomer, $baselineBrand, $baselineIndustry, 10);
             $generatedBaselineRows = $generated['rows'] ?? [];
@@ -73,9 +74,8 @@ try {
                 'industry'    => clean_input($_POST['industry'] ?? ''),
                 'email'       => clean_input($_POST['email'] ?? ''),
                 'evidence'    => trim((string) ($_POST['evidence'] ?? '')),
-                'customer_id' => clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? '')),
+                'customer_id' => clean_input($_POST['customer_id'] ?? $currentCustomerId),
             ]);
-            geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, clean_input($_POST['customer_id'] ?? ($current_customer_context['customer_id'] ?? '')), clean_input($_POST['brand_name'] ?? ''), $_POST);
             admin_redirect('geo-diagnosis.php?id=' . urlencode($diagnosisId));
         }
     }
@@ -86,20 +86,22 @@ try {
 $summary = geo_diagnosis_summary($db);
 $dataSourceConfig = geo_diagnosis_data_source_config();
 $currentReport = geo_diagnosis_latest($db, $selectedId);
+if ($selectedId === '' && ($currentCustomerName !== '' || $currentCustomerDomain !== '')) {
+    $customerReport = geo_diagnosis_latest_for_brand($db, $currentCustomerName, $currentCustomerDomain);
+    if ($customerReport) {
+        $currentReport = $customerReport;
+    }
+}
 $recentReports = geo_diagnosis_recent($db);
 $industries = geo_diagnosis_industries();
 $baselinePlatforms = geo_baseline_qa_platforms();
+$showCreatePanel = !$currentReport || isset($_GET['new']) || ($error !== '' && ($_POST['action'] ?? '') === 'create_diagnosis');
+if ($currentReport && $currentCustomerId !== '') {
+    geo_baseline_qa_attach_customer($db, (string) $currentReport['id'], $currentCustomerId, (string) ($currentReport['brand_name'] ?? $currentCustomerName));
+}
 $currentBaselineRows = $currentReport ? geo_baseline_qa_for_diagnosis($db, (string) $currentReport['id']) : [];
 $defaultBaselineQuestions = array_fill(0, 10, '');
 $page_title = '雷达诊断';
-
-// 拉取当前客户的真实监测缺口数据
-$monitorGapData = [];
-$currentCustomerId = $current_customer_context['customer_id'] ?? '';
-if ($currentCustomerId !== '') {
-    $brandForGap = $current_customer_context['name'] ?? ($currentReport['brand_name'] ?? '');
-    $monitorGapData = geo_diagnosis_monitor_data($db, $currentCustomerId, $brandForGap);
-}
 
 $scoresForChart = [];
 $benchmarkForChart = [];
@@ -134,14 +136,14 @@ if ($currentReport) {
                 'key' => 'site_crawl_estimate',
                 'label' => '官网抓取估算',
                 'class' => 'bg-amber-100 text-amber-800',
-                'note' => '未配置搜索 API；已抓取官网估算结构、事实密度和站点身份，但第三方声量仍不可验证。',
+                'note' => '已抓取官网估算结构、事实密度和站点身份，但第三方声量仍不可验证。',
             ];
         } elseif ($dataSource === 'estimated' && $diagnosisSource['key'] === 'unknown') {
             $diagnosisSource = [
                 'key' => 'estimated',
                 'label' => '本地估算',
                 'class' => 'bg-red-100 text-red-700',
-                'note' => '未配置搜索 API，当前分数只基于输入资料和规则估算，不能代表真实全网声量。',
+                'note' => '当前分数只基于输入资料和规则估算，不能代表真实全网声量。',
             ];
         }
         $scoresForChart[] = [
@@ -150,6 +152,26 @@ if ($currentReport) {
             'score' => round((float) $score['score'], 1),
         ];
         $benchmarkForChart[] = round((float) ($score['benchmark_score'] ?? ($currentReport['industry_benchmark'] ?? 70)), 1);
+    }
+}
+
+$searchProviderLabels = [
+    'disabled' => '未启用',
+    'bing' => 'Bing Search API',
+    'serpapi' => 'SerpAPI',
+    'google_cse' => 'Google Custom Search',
+    'bocha' => '博查 AI',
+];
+$searchProviderEnabled = ($dataSourceConfig['provider'] ?? 'disabled') !== 'disabled'
+    && !empty($dataSourceConfig['api_key_configured'])
+    && (($dataSourceConfig['provider'] ?? '') !== 'google_cse' || trim((string) ($dataSourceConfig['google_cse_id'] ?? '')) !== '');
+$searchProviderName = $searchProviderLabels[(string) ($dataSourceConfig['provider'] ?? 'disabled')] ?? (string) ($dataSourceConfig['provider'] ?? 'disabled');
+$diagnosisWarning = '';
+if ($currentReport && in_array($diagnosisSource['key'], ['estimated', 'site_crawl_estimate'], true)) {
+    if ($searchProviderEnabled) {
+        $diagnosisWarning = '当前报告仍是旧的估算结果；搜索数据源已启用（' . $searchProviderName . '），点击“重新诊断”后会用搜索 API 重新扫描第三方提及、UGC 覆盖和权威来源。';
+    } else {
+        $diagnosisWarning = '当前报告基于本地资料和官网抓取估算，第三方声量不可验证。要做真实全网雷达，请先到首页工作台的“雷达数据源配置”启用搜索服务商并保存 API Key。';
     }
 }
 
@@ -162,9 +184,9 @@ require_once __DIR__ . '/includes/header.php';
                         <p class="mt-1 text-sm text-gray-600">品牌 GEO 权威性六维评分与短板诊断</p>
                     </div>
                     <div class="flex items-center gap-3">
-                        <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php')); ?>" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
-                            <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
-                            新建诊断
+                        <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php?new=1')); ?>" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+                            <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
+                            重新诊断
                         </a>
                         <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
                             <i data-lucide="activity" class="mr-2 h-4 w-4"></i>
@@ -205,28 +227,43 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-6 xl:grid-cols-5">
+            <div class="grid grid-cols-1 gap-6 <?php echo $showCreatePanel ? 'xl:grid-cols-5' : 'xl:grid-cols-1'; ?>">
+                <?php if ($showCreatePanel): ?>
                 <section class="rounded-lg border border-gray-200 bg-white shadow-sm xl:col-span-2">
                     <div class="border-b border-gray-200 px-6 py-4">
-                        <h2 class="text-lg font-semibold text-gray-900">新建诊断</h2>
+                        <h2 class="text-lg font-semibold text-gray-900"><?php echo $currentReport ? '重新生成诊断' : '生成第一份诊断'; ?></h2>
+                        <?php if ($currentReport): ?>
+                            <p class="mt-1 text-sm text-gray-500">使用当前客户资料重新跑一版报告，旧报告会保留在历史记录里。</p>
+                        <?php endif; ?>
                     </div>
                     <form method="POST" class="space-y-5 px-6 py-6" id="diagnosis-create-form">
                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
                         <input type="hidden" name="action" value="create_diagnosis">
-                        <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars((string) ($current_customer_context['customer_id'] ?? '')); ?>">
+                        <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars($currentCustomerId); ?>">
                         <div>
                             <label class="mb-2 block text-sm font-medium text-gray-700" for="brand-name">品牌名称</label>
-                            <input id="brand-name" name="brand_name" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="董逻辑">
+                            <input id="brand-name" name="brand_name" type="text" value="<?php echo htmlspecialchars($currentCustomerName !== '' ? $currentCustomerName : (string) ($currentReport['brand_name'] ?? '')); ?>" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="董逻辑">
                         </div>
                         <div>
                             <label class="mb-2 block text-sm font-medium text-gray-700" for="brand-domain">官网域名</label>
-                            <input id="brand-domain" name="domain" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="example.com">
+                            <input id="brand-domain" name="domain" type="text" value="<?php echo htmlspecialchars($currentCustomerDomain !== '' ? $currentCustomerDomain : (string) ($currentReport['domain'] ?? '')); ?>" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="example.com">
                         </div>
                         <div>
                             <label class="mb-2 block text-sm font-medium text-gray-700" for="brand-industry">行业</label>
                             <select id="brand-industry" name="industry" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <?php
+                                $selectedIndustryForForm = $currentCustomerIndustry !== '' ? $currentCustomerIndustry : (string) ($currentReport['industry'] ?? '');
+                                if (!in_array($selectedIndustryForForm, $industries, true)) {
+                                    foreach ($industries as $candidateIndustry) {
+                                        if (mb_stripos($selectedIndustryForForm, $candidateIndustry) !== false || mb_stripos($candidateIndustry, $selectedIndustryForForm) !== false) {
+                                            $selectedIndustryForForm = $candidateIndustry;
+                                            break;
+                                        }
+                                    }
+                                }
+                                ?>
                                 <?php foreach ($industries as $industry): ?>
-                                    <option value="<?php echo htmlspecialchars($industry); ?>"><?php echo htmlspecialchars($industry); ?></option>
+                                    <option value="<?php echo htmlspecialchars($industry); ?>" <?php echo $industry === $selectedIndustryForForm ? 'selected' : ''; ?>><?php echo htmlspecialchars($industry); ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
@@ -238,87 +275,15 @@ require_once __DIR__ . '/includes/header.php';
                             <label class="mb-2 block text-sm font-medium text-gray-700" for="evidence">已知资料</label>
                             <textarea id="evidence" name="evidence" rows="5" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="可粘贴官网简介、媒体报道、平台账号、客户案例、数据点、备案/联系方式等。资料越完整，诊断越接近真实状态。"></textarea>
                         </div>
-                        <details class="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-4" open>
-                            <summary class="cursor-pointer list-none">
-                                <div class="flex items-center justify-between gap-3">
-                                    <div>
-                                        <div class="text-sm font-semibold text-gray-900">首次 AI 问答基准线</div>
-                                        <div class="mt-1 text-xs text-gray-500">手动向大模型提问后，把问题和原始答案粘贴到这里。保存后会自动进入 GEO 监测复测队列。</div>
-                                    </div>
-                                    <span class="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-blue-700">建议 10 条</span>
-                                </div>
-                            </summary>
-                            <div class="mt-4 rounded-lg border border-blue-100 bg-white p-4">
-                                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <div>
-                                        <div class="text-sm font-semibold text-gray-900">手动采样录入区</div>
-                                        <p class="mt-1 text-xs leading-5 text-gray-500">这里不再塞表格。点击进入全屏页面后，逐条粘贴你手动跑出来的问题和原始答案。</p>
-                                    </div>
-                                    <button type="button" data-open-baseline-fullscreen class="inline-flex h-10 shrink-0 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                                        <i data-lucide="expand" class="mr-2 h-4 w-4"></i>
-                                        全屏填写
-                                    </button>
-                                </div>
-                            </div>
-                            <div id="baseline-fullscreen-modal" class="fixed inset-0 z-[70] hidden bg-gray-50">
-                                <div class="flex h-full flex-col">
-                                    <div class="shrink-0 border-b border-gray-200 bg-white px-6 py-4">
-                                        <div class="mx-auto flex max-w-[1440px] flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                                            <div>
-                                                <div class="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">S12 首问采样</div>
-                                                <h2 class="mt-3 text-2xl font-bold text-gray-900">首次 AI 问答基准线</h2>
-                                                <p class="mt-1 text-sm text-gray-500">把问题拿到真实 AI 平台提问，再把原始答案贴回这里。</p>
-                                            </div>
-                                            <div class="flex flex-wrap gap-2">
-                                                <button type="button" data-close-baseline-fullscreen class="inline-flex h-10 items-center rounded-md border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-                                                    完成填写
-                                                </button>
-                                                <button type="submit" class="inline-flex h-10 items-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                                                    生成雷达诊断
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-                                        <div class="mx-auto max-w-[1440px] space-y-3">
-                                            <?php foreach ($defaultBaselineQuestions as $idx => $question): ?>
-                                                <div class="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
-                                                    <div class="mb-3 flex items-center justify-between gap-3">
-                                                        <div class="flex items-center gap-3">
-                                                            <span class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-sm font-bold text-blue-700"><?php echo (int) $idx + 1; ?></span>
-                                                            <span class="text-sm font-semibold text-gray-900">首问样本</span>
-                                                        </div>
-                                                        <select name="baseline_platform[]" class="h-9 w-36 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                                                            <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
-                                                                <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo $platformKey === 'deepseek' ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
-                                                            <?php endforeach; ?>
-                                                        </select>
-                                                    </div>
-                                                    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,0.95fr)_minmax(560px,1.45fr)]">
-                                                        <label class="block">
-                                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">问题</span>
-                                                            <textarea name="baseline_question[]" rows="3" data-baseline-index="<?php echo (int) $idx; ?>" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴你手动问 AI 的问题"><?php echo htmlspecialchars($question); ?></textarea>
-                                                        </label>
-                                                        <label class="block">
-                                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">首次答案</span>
-                                                            <textarea name="baseline_answer[]" rows="3" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"></textarea>
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                            <?php endforeach; ?>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </details>
                         <button type="submit" class="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
                             <i data-lucide="radar" class="mr-2 h-4 w-4"></i>
-                            生成雷达诊断
+                            <?php echo $currentReport ? '重新生成雷达诊断' : '生成雷达诊断'; ?>
                         </button>
                     </form>
                 </section>
+                <?php endif; ?>
 
-                <section class="rounded-lg border border-gray-200 bg-white shadow-sm xl:col-span-3">
+                <section class="rounded-lg border border-gray-200 bg-white shadow-sm <?php echo $showCreatePanel ? 'xl:col-span-3' : ''; ?>">
                     <div class="flex flex-col gap-2 border-b border-gray-200 px-6 py-4 md:flex-row md:items-center md:justify-between">
                         <div>
                             <h2 class="text-lg font-semibold text-gray-900">诊断报告</h2>
@@ -350,9 +315,9 @@ require_once __DIR__ . '/includes/header.php';
                             </div>
                         </div>
                     <?php else: ?>
-                        <?php if ($diagnosisSource['key'] !== 'real_search'): ?>
+                        <?php if ($diagnosisWarning !== ''): ?>
                             <div class="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">
-                                <?php echo htmlspecialchars($diagnosisSource['note']); ?> 要判断喜茶这类知名品牌的真实 AI 权威度，请在下方“雷达数据源配置”接入 Bing、SerpAPI、Google CSE 或博查搜索 API 后重新生成诊断。
+                                <?php echo htmlspecialchars($diagnosisWarning); ?>
                             </div>
                         <?php endif; ?>
 	                        <div class="grid grid-cols-1 gap-8 px-6 py-6 xl:grid-cols-2">
@@ -576,7 +541,7 @@ require_once __DIR__ . '/includes/header.php';
                             <input type="hidden" name="action" value="generate_baseline_qa">
                             <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
                             <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars((string) $currentReport['brand_name']); ?>">
-                            <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars((string) ($current_customer_context['customer_id'] ?? '')); ?>">
+                            <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars($currentCustomerId); ?>">
                             <input type="hidden" name="industry" value="<?php echo htmlspecialchars((string) ($currentReport['industry'] ?? '')); ?>">
                             <button type="submit" class="inline-flex shrink-0 items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
                                 <i data-lucide="wand-sparkles" class="mr-2 h-4 w-4"></i>
@@ -589,7 +554,7 @@ require_once __DIR__ . '/includes/header.php';
                         <input type="hidden" name="action" value="save_baseline_qa">
                         <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
                         <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars((string) $currentReport['brand_name']); ?>">
-                        <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars((string) ($current_customer_context['customer_id'] ?? '')); ?>">
+                        <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars($currentCustomerId); ?>">
                         <div class="space-y-3">
                             <?php foreach ($baselineEditRows as $idx => $row): ?>
                                 <div class="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
@@ -628,70 +593,6 @@ require_once __DIR__ . '/includes/header.php';
                 </section>
             <?php endif; ?>
 
-            <?php if (!empty($monitorGapData)): ?>
-                <section class="mt-6 rounded-lg border border-blue-200 bg-white shadow-sm">
-                    <div class="border-b border-blue-100 bg-blue-50 px-6 py-4">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <h2 class="text-lg font-semibold text-gray-900">真实 AI 引用缺口分析</h2>
-                                <p class="mt-0.5 text-sm text-gray-500">基于 <?php echo (int) $monitorGapData['total_records']; ?> 条真实 AI 平台查询记录 · 非品牌词查询 <?php echo (int) $monitorGapData['non_branded_total']; ?> 次</p>
-                            </div>
-                            <div class="text-right">
-                                <div class="text-3xl font-bold <?php echo (float) $monitorGapData['non_branded_rate'] >= 30 ? 'text-green-600' : ((float) $monitorGapData['non_branded_rate'] >= 10 ? 'text-amber-500' : 'text-red-500'); ?>">
-                                    <?php echo $monitorGapData['non_branded_rate']; ?>%
-                                </div>
-                                <div class="text-xs text-gray-500">非品牌词实际引用率</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-1 gap-6 px-6 py-6 md:grid-cols-2">
-                        <?php if (!empty($monitorGapData['gap_keywords'])): ?>
-                        <div>
-                            <h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-red-700">
-                                <span class="inline-block h-2 w-2 rounded-full bg-red-500"></span>
-                                待突破关键词（引用率 0%）
-                            </h3>
-                            <div class="space-y-2">
-                                <?php foreach ($monitorGapData['gap_keywords'] as $gapKw): ?>
-                                    <div class="flex items-center justify-between rounded-md border border-red-100 bg-red-50 px-3 py-2">
-                                        <span class="text-sm text-gray-800"><?php echo htmlspecialchars($gapKw); ?></span>
-                                        <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600">0%</span>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                            <p class="mt-3 text-xs text-gray-500">这些关键词是你最需要写内容突破的方向，针对每个问题写一篇直接回答的知乎文章。</p>
-                        </div>
-                        <?php endif; ?>
-                        <?php if (!empty($monitorGapData['win_keywords'])): ?>
-                        <div>
-                            <h3 class="mb-3 flex items-center gap-2 text-sm font-semibold text-green-700">
-                                <span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
-                                已赢得引用的关键词
-                            </h3>
-                            <div class="space-y-2">
-                                <?php foreach ($monitorGapData['win_keywords'] as $winKw): ?>
-                                    <?php
-                                    $qd = $monitorGapData['by_query'][$winKw] ?? [];
-                                    $winRate = $qd['rate'] ?? 0;
-                                    ?>
-                                    <div class="flex items-center justify-between rounded-md border border-green-100 bg-green-50 px-3 py-2">
-                                        <span class="text-sm text-gray-800"><?php echo htmlspecialchars($winKw); ?></span>
-                                        <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700"><?php echo (int) $winRate; ?>%</span>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                            <p class="mt-3 text-xs text-gray-500">分析这些内容的格式和发布平台，复制到待突破关键词上。</p>
-                        </div>
-                        <?php endif; ?>
-                        <?php if (empty($monitorGapData['gap_keywords']) && empty($monitorGapData['win_keywords'])): ?>
-                        <div class="col-span-2 rounded-md bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
-                            当前监测关键词均为品牌词，建议添加通用 GEO 关键词（如"GEO公司推荐"、"AI搜索引擎优化"）后重新监测。
-                        </div>
-                        <?php endif; ?>
-                    </div>
-                </section>
-            <?php endif; ?>
-
             <?php if ($currentReport): ?>
                 <section class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
                     <div class="border-b border-gray-200 px-6 py-4">
@@ -723,64 +624,6 @@ require_once __DIR__ . '/includes/header.php';
                     </div>
                 </section>
             <?php endif; ?>
-
-            <section class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
-                <div class="border-b border-gray-200 px-6 py-4">
-	                    <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-	                        <div>
-	                            <h2 class="text-lg font-semibold text-gray-900">雷达数据源配置</h2>
-	                        </div>
-	                    </div>
-                </div>
-                <form method="POST" class="px-6 py-6">
-                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
-                    <input type="hidden" name="action" value="save_data_source">
-                    <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-                        <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700" for="search-provider">搜索服务商</label>
-                            <select id="search-provider" name="provider" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <?php foreach (['disabled' => '未启用', 'bing' => 'Bing Search API', 'serpapi' => 'SerpAPI', 'google_cse' => 'Google Custom Search', 'bocha' => '博查AI (Bocha)'] as $value => $label): ?>
-                                    <option value="<?php echo htmlspecialchars($value); ?>" <?php echo $dataSourceConfig['provider'] === $value ? 'selected' : ''; ?>><?php echo htmlspecialchars($label); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700" for="search-api-key">API Key</label>
-                            <input id="search-api-key" name="api_key" type="password" autocomplete="off" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="<?php echo $dataSourceConfig['api_key_configured'] ? '已保存，留空则不修改' : '粘贴搜索 API Key'; ?>">
-                            <?php if ($dataSourceConfig['api_key_configured']): ?>
-                                <label class="mt-2 inline-flex items-center text-xs text-gray-500">
-                                    <input type="checkbox" name="clear_api_key" value="1" class="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                    清除已保存的 API Key
-                                </label>
-                            <?php endif; ?>
-                        </div>
-                        <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700" for="google-cse-id">Google CSE ID</label>
-                            <input id="google-cse-id" name="google_cse_id" type="text" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" value="<?php echo htmlspecialchars($dataSourceConfig['google_cse_id']); ?>" placeholder="仅 Google Custom Search 需要">
-                        </div>
-                        <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700" for="result-limit">每次搜索结果数</label>
-                            <input id="result-limit" name="result_limit" type="number" min="5" max="50" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" value="<?php echo (int) $dataSourceConfig['result_limit']; ?>">
-                        </div>
-                        <div>
-                            <label class="mb-2 block text-sm font-medium text-gray-700" for="timeout-seconds">请求超时秒数</label>
-                            <input id="timeout-seconds" name="timeout_seconds" type="number" min="3" max="60" class="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" value="<?php echo (int) $dataSourceConfig['timeout_seconds']; ?>">
-                        </div>
-                        <div class="flex items-end">
-                            <label class="inline-flex h-10 items-center rounded-md border border-gray-300 px-3 text-sm text-gray-700">
-                                <input type="checkbox" name="enable_site_crawl" value="1" class="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500" <?php echo $dataSourceConfig['enable_site_crawl'] ? 'checked' : ''; ?>>
-                                启用官网抓取
-                            </label>
-                        </div>
-                    </div>
-                    <div class="mt-5 flex justify-end">
-                        <button type="submit" class="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
-                            <i data-lucide="save" class="mr-2 h-4 w-4"></i>
-                            保存数据源配置
-                        </button>
-                    </div>
-                </form>
-            </section>
 
             <section class="mt-6 rounded-lg border border-gray-200 bg-white shadow-sm">
                 <div class="border-b border-gray-200 px-6 py-4">
@@ -1003,33 +846,6 @@ require_once __DIR__ . '/includes/header.php';
 	                    })();
 	                </script>
             <?php endif; ?>
-            <script>
-                (() => {
-                    const modal = document.getElementById('baseline-fullscreen-modal');
-                    const openButton = document.querySelector('[data-open-baseline-fullscreen]');
-                    const closeButtons = document.querySelectorAll('[data-close-baseline-fullscreen]');
-                    if (!modal || !openButton) return;
-
-                    const openModal = () => {
-                        modal.classList.remove('hidden');
-                        document.documentElement.classList.add('overflow-hidden');
-                        document.body.classList.add('overflow-hidden');
-                    };
-                    const closeModal = () => {
-                        modal.classList.add('hidden');
-                        document.documentElement.classList.remove('overflow-hidden');
-                        document.body.classList.remove('overflow-hidden');
-                    };
-
-                    openButton.addEventListener('click', openModal);
-                    closeButtons.forEach((button) => button.addEventListener('click', closeModal));
-                    document.addEventListener('keydown', (event) => {
-                        if (event.key === 'Escape' && !modal.classList.contains('hidden')) {
-                            closeModal();
-                        }
-                    });
-                })();
-            </script>
 <?php
 require_once __DIR__ . '/includes/footer.php';
 ?>

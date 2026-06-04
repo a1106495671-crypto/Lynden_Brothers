@@ -19,12 +19,13 @@ $brandName = $currentCustomer['name'] ?? '湖南文韵爱阅读';
 $industry = $currentCustomer['industry'] ?? '教培 / 知识付费';
 $competitorsFromCustomer = $currentCustomer['competitors'] ?? ['心田花开', '楚才教育', '麦田格'];
 $contractEndAt = $currentCustomer['contract_end_at'] ?? '2026-06-30';
+$customerId = (string) ($currentCustomer['customer_id'] ?? $currentCustomer['id'] ?? 'default');
 
 // 从数据库读取真实合同到期日，计算续费倒计时
 $renewalLabel = 'T-?';
 try {
     $stmtContract = $db->prepare("SELECT contract_end_date FROM customers WHERE customer_id = ?");
-    $stmtContract->execute([$currentCustomer['id'] ?? '']);
+    $stmtContract->execute([$customerId]);
     $dbContractEnd = $stmtContract->fetchColumn();
     if ($dbContractEnd) {
         $daysLeft = (int) ceil((strtotime($dbContractEnd) - time()) / 86400);
@@ -50,7 +51,6 @@ $page_header = '
 </div>';
 
 // --- 从 geo_monitor_records 读真实数据 ---
-$customerId  = $currentCustomer['id'] ?? 'default';
 $customerSeed = abs(crc32($customerId));
 $baselineTracking = geo_baseline_qa_tracking($db, $customerId);
 $baselineRows = $baselineTracking['rows'];
@@ -738,10 +738,10 @@ require_once __DIR__ . '/includes/header.php';
                     <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white text-blue-600">
                         <i data-lucide="radar" class="h-6 w-6"></i>
                     </div>
-                    <h3 class="mt-4 text-lg font-bold text-gray-900">还没有问答基准线</h3>
-                    <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-gray-600">先到雷达诊断录入第一次手动问大模型得到的问题和答案，系统会把这些问题同步到监测队列。</p>
+                    <h3 class="mt-4 text-lg font-bold text-gray-900">还没有可追踪的问答基准线</h3>
+                    <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-gray-600">到雷达诊断的“首次 AI 问答基准线”里维护首问样本，保存后会同步到这里追踪。</p>
                     <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php')); ?>" class="mt-5 inline-flex items-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
-                        <i data-lucide="plus" class="mr-2 h-4 w-4"></i>建立基准线
+                        <i data-lucide="edit-3" class="mr-2 h-4 w-4"></i>维护基准线
                     </a>
                 </div>
             <?php else: ?>

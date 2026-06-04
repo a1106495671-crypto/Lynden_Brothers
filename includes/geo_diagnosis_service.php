@@ -856,6 +856,39 @@ function geo_diagnosis_latest(PDO $db, ?string $id = null): ?array {
     return $run;
 }
 
+function geo_diagnosis_latest_for_brand(PDO $db, string $brandName, string $domain = ''): ?array {
+    geo_diagnosis_ensure_schema($db);
+    $brandName = trim($brandName);
+    $domain = geo_diagnosis_normalize_domain($domain);
+    if ($brandName === '' && $domain === '') {
+        return null;
+    }
+
+    $where = [];
+    $params = [];
+    if ($brandName !== '') {
+        $where[] = 'b.name = ?';
+        $params[] = $brandName;
+    }
+    if ($domain !== '') {
+        $where[] = 'b.domain = ?';
+        $params[] = $domain;
+    }
+
+    $stmt = $db->prepare("
+        SELECT r.id
+        FROM geo_diagnosis_runs r
+        JOIN geo_diagnosis_brands b ON b.id = r.brand_id
+        WHERE " . implode(' OR ', $where) . "
+        ORDER BY r.created_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute($params);
+    $id = $stmt->fetchColumn();
+
+    return $id ? geo_diagnosis_latest($db, (string) $id) : null;
+}
+
 function geo_diagnosis_summary(PDO $db): array {
     geo_diagnosis_ensure_schema($db);
     $row = $db->query("

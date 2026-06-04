@@ -621,7 +621,7 @@ $stage_badge_classes = [
             <p class="mt-2 text-gray-600">把客户档案、交付进度、告警处理和运营复盘收进同一个工作台。</p>
         </div>
         <div class="flex flex-wrap gap-3">
-            <button type="button" data-open-customer-modal class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+            <button type="button" data-open-customer-modal onclick="openCustomerModal()" class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                 <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
                 添加客户
             </button>
@@ -1069,7 +1069,7 @@ $stage_badge_classes = [
                 <h2 class="text-2xl font-bold text-gray-900">新建客户</h2>
                 <p class="mt-1 text-sm text-gray-500">保存后会初始化首月 SOP 与监测批次。</p>
             </div>
-            <button type="button" data-close-customer-modal class="rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900" aria-label="关闭">
+            <button type="button" data-close-customer-modal onclick="closeCustomerModal()" class="rounded-md p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900" aria-label="关闭">
                 <i data-lucide="x" class="h-5 w-5"></i>
             </button>
         </div>
@@ -1165,6 +1165,25 @@ $stage_badge_classes = [
 </div>
 
 <script>
+    function openCustomerModal() {
+        const modal = document.getElementById('customer-modal');
+        if (!modal) return;
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('overflow-hidden');
+        modal.querySelector('input[name="name"]')?.focus();
+    }
+
+    function closeCustomerModal() {
+        const modal = document.getElementById('customer-modal');
+        if (!modal) return;
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('overflow-hidden');
+    }
+
     // ── 品牌知识库管理 ──────────────────────────────────────────────────────────
     var _bfCustomerId = <?php echo json_encode($selected_customer['id'] ?? ''); ?>;
     var _bfCsrf = <?php echo json_encode(generate_csrf_token()); ?>;
@@ -1401,22 +1420,6 @@ $stage_badge_classes = [
         const statusFilter = document.getElementById('status-filter');
         const rows = Array.from(document.querySelectorAll('.customer-row'));
         const modal = document.getElementById('customer-modal');
-        const openButtons = Array.from(document.querySelectorAll('[data-open-customer-modal]'));
-        const closeButtons = Array.from(document.querySelectorAll('[data-close-customer-modal]'));
-
-        function openModal() {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            modal.setAttribute('aria-hidden', 'false');
-            document.body.classList.add('overflow-hidden');
-        }
-
-        function closeModal() {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-            modal.setAttribute('aria-hidden', 'true');
-            document.body.classList.remove('overflow-hidden');
-        }
 
         function applyFilters() {
             const query = (searchInput?.value || '').trim().toLowerCase();
@@ -1432,16 +1435,24 @@ $stage_badge_classes = [
         }
 
         [searchInput, stageFilter, statusFilter].forEach((el) => el && el.addEventListener('input', applyFilters));
-        openButtons.forEach((button) => button.addEventListener('click', openModal));
-        closeButtons.forEach((button) => button.addEventListener('click', closeModal));
+        document.addEventListener('click', (event) => {
+            if (event.target.closest('[data-open-customer-modal]')) {
+                event.preventDefault();
+                openCustomerModal();
+            }
+            if (event.target.closest('[data-close-customer-modal]')) {
+                event.preventDefault();
+                closeCustomerModal();
+            }
+        });
         modal && modal.addEventListener('click', (event) => {
             if (event.target === modal) {
-                closeModal();
+                closeCustomerModal();
             }
         });
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
-                closeModal();
+                closeCustomerModal();
             }
         });
     })();

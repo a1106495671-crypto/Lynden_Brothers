@@ -9,9 +9,35 @@ session_start();
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
+require_once __DIR__ . '/../includes/geo_diagnosis_service.php';
 
 // 检查管理员登录
 require_admin_login();
+
+$message = '';
+$error = '';
+
+try {
+    geo_diagnosis_ensure_schema($db);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_radar_data_source') {
+        if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+            throw new RuntimeException('CSRF验证失败');
+        }
+        if (!geo_diagnosis_save_data_source_config($_POST)) {
+            throw new RuntimeException('雷达数据源配置保存失败');
+        }
+        admin_redirect('dashboard.php?radar_config_saved=1#radar-data-source-config');
+    }
+
+    if (isset($_GET['radar_config_saved'])) {
+        $message = '雷达数据源配置已保存';
+    }
+} catch (Throwable $e) {
+    $error = $e->getMessage();
+}
+
+$dashboardCsrfToken = generate_csrf_token();
 
 // 立即释放session锁，允许其他页面并发访问
 session_write_close();
@@ -341,6 +367,19 @@ try {
     $automationReadiness['diagnoses'] = (int) $db->query("SELECT COUNT(*) FROM geo_diagnosis_runs")->fetchColumn();
 } catch (Throwable $_readinessError) {}
 
+$dataSourceConfig = geo_diagnosis_data_source_config();
+$searchProviderLabels = [
+    'disabled' => '未启用',
+    'bing' => 'Bing Search API',
+    'serpapi' => 'SerpAPI',
+    'google_cse' => 'Google Custom Search',
+    'bocha' => '博查 AI',
+];
+$searchProviderEnabled = ($dataSourceConfig['provider'] ?? 'disabled') !== 'disabled'
+    && !empty($dataSourceConfig['api_key_configured'])
+    && (($dataSourceConfig['provider'] ?? '') !== 'google_cse' || trim((string) ($dataSourceConfig['google_cse_id'] ?? '')) !== '');
+$searchProviderName = $searchProviderLabels[(string) ($dataSourceConfig['provider'] ?? 'disabled')] ?? (string) ($dataSourceConfig['provider'] ?? 'disabled');
+
 $quick_start_steps = [
     [
         'no' => '1',
@@ -560,8 +599,8 @@ require_once __DIR__ . '/includes/header.php';
                         自动化能力可用
                     </span>
                 </div>
-                <div class="grid grid-cols-1 divide-y divide-gray-100 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
-                    <?php foreach ($quick_start_steps as $step): ?>
+	                <div class="grid grid-cols-1 divide-y divide-gray-100 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+	                    <?php foreach ($quick_start_steps as $step): ?>
                         <?php $tone = $tone_classes[$step['tone']] ?? $tone_classes['slate']; ?>
                         <div class="p-6">
                             <div class="flex items-start gap-4">
@@ -591,9 +630,75 @@ require_once __DIR__ . '/includes/header.php';
                                 </div>
                             </div>
                         </div>
-                    <?php endforeach; ?>
-                </div>
-            </section>
+	                    <?php endforeach; ?>
+	                </div>
+                    <div id="radar-data-source-config" class="border-t border-gray-100 bg-gray-50/50 px-6 py-5 scroll-mt-24">
+                        <div class="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                                <h3 class="text-base font-semibold text-gray-900">雷达数据源配置</h3>
+                                <p class="mt-1 text-sm <?php echo $searchProviderEnabled ? 'text-green-700' : 'text-gray-500'; ?>">
+                                    <?php if ($searchProviderEnabled): ?>
+                                        当前已启用 <?php echo htmlspecialchars($searchProviderName); ?>，API Key 已保存。重新诊断会使用搜索 API。
+                                    <?php else: ?>
+                                        当前未启用可用搜索源，雷达诊断会回退为本地资料和官网估算。
+                                    <?php endif; ?>
+                                </p>
+                            </div>
+                            <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php?new=1')); ?>" class="inline-flex h-9 w-fit items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                                <i data-lucide="radar" class="mr-2 h-4 w-4"></i>
+                                去重新诊断
+                            </a>
+                        </div>
+                        <form method="POST" class="rounded-lg border border-gray-200 bg-white p-4">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($dashboardCsrfToken); ?>">
+                            <input type="hidden" name="action" value="save_radar_data_source">
+                            <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                                <div>
+                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-search-provider">搜索服务商</label>
+                                    <select id="dashboard-search-provider" name="provider" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                        <?php foreach (['disabled' => '未启用', 'bing' => 'Bing Search API', 'serpapi' => 'SerpAPI', 'google_cse' => 'Google Custom Search', 'bocha' => '博查AI (Bocha)'] as $value => $label): ?>
+                                            <option value="<?php echo htmlspecialchars($value); ?>" <?php echo $dataSourceConfig['provider'] === $value ? 'selected' : ''; ?>><?php echo htmlspecialchars($label); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-search-api-key">API Key</label>
+                                    <input id="dashboard-search-api-key" name="api_key" type="password" autocomplete="off" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="<?php echo $dataSourceConfig['api_key_configured'] ? '已保存，留空则不修改' : '粘贴搜索 API Key'; ?>">
+                                    <?php if ($dataSourceConfig['api_key_configured']): ?>
+                                        <label class="mt-2 inline-flex items-center text-xs text-gray-500">
+                                            <input type="checkbox" name="clear_api_key" value="1" class="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                            清除已保存的 API Key
+                                        </label>
+                                    <?php endif; ?>
+                                </div>
+                                <div>
+                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-google-cse-id">Google CSE ID</label>
+                                    <input id="dashboard-google-cse-id" name="google_cse_id" type="text" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" value="<?php echo htmlspecialchars($dataSourceConfig['google_cse_id']); ?>" placeholder="仅 Google Custom Search 需要">
+                                </div>
+                                <div>
+                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-result-limit">每次搜索结果数</label>
+                                    <input id="dashboard-result-limit" name="result_limit" type="number" min="5" max="50" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" value="<?php echo (int) $dataSourceConfig['result_limit']; ?>">
+                                </div>
+                                <div>
+                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-timeout-seconds">请求超时秒数</label>
+                                    <input id="dashboard-timeout-seconds" name="timeout_seconds" type="number" min="3" max="60" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" value="<?php echo (int) $dataSourceConfig['timeout_seconds']; ?>">
+                                </div>
+                                <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between lg:block">
+                                    <label class="inline-flex h-10 w-fit items-center rounded-md border border-gray-300 px-3 text-sm text-gray-700">
+                                        <input type="checkbox" name="enable_site_crawl" value="1" class="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500" <?php echo $dataSourceConfig['enable_site_crawl'] ? 'checked' : ''; ?>>
+                                        启用官网抓取
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex justify-end">
+                                <button type="submit" class="inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                                    <i data-lucide="save" class="mr-2 h-4 w-4"></i>
+                                    保存数据源配置
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+	            </section>
 
             <section id="automation-flow" class="mb-8 scroll-mt-24 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
                 <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">

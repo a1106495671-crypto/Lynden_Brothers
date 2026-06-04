@@ -38,6 +38,50 @@ function knowledge_base_has_default_embedding_model(PDO $db): bool {
     }
 }
 
+function knowledge_base_ensure_chunk_job_schema(PDO $db): void {
+    $db->exec("ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS chunk_job_status VARCHAR(20) DEFAULT ''");
+    $db->exec("ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS chunk_job_error TEXT DEFAULT ''");
+    $db->exec("ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS chunk_job_started_at TIMESTAMP DEFAULT NULL");
+    $db->exec("ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS chunk_job_finished_at TIMESTAMP DEFAULT NULL");
+}
+
+function knowledge_base_enqueue_chunk_job(PDO $db, int $knowledgeBaseId, bool $requireRealEmbedding = true): void {
+    if ($knowledgeBaseId <= 0) {
+        return;
+    }
+
+    knowledge_base_ensure_chunk_job_schema($db);
+    $stmt = $db->prepare("
+        UPDATE knowledge_bases
+        SET chunk_job_status = 'queued',
+            chunk_job_error = '',
+            chunk_job_started_at = NULL,
+            chunk_job_finished_at = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    ");
+    $stmt->execute([$knowledgeBaseId]);
+
+    $script = dirname(__DIR__) . '/bin/knowledge_chunk_worker.php';
+    $log = dirname(__DIR__) . '/data/logs/knowledge-chunks.log';
+    $php = PHP_BINARY ?: 'php';
+    $command = sprintf(
+        'nohup %s %s %d %d >> %s 2>&1 &',
+        escapeshellarg($php),
+        escapeshellarg($script),
+        $knowledgeBaseId,
+        $requireRealEmbedding ? 1 : 0,
+        escapeshellarg($log)
+    );
+    exec($command);
+}
+
+try {
+    knowledge_base_ensure_chunk_job_schema($db);
+} catch (Throwable $e) {
+    // 状态字段仅用于后台进度提示，不影响知识库基础功能。
+}
+
 // 处理POST请求
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -66,25 +110,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new RuntimeException('知识库内容不能为空');
                     }
 
-                    $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content, true);
-                    $vectorStmt = $db->prepare("
-                        SELECT COUNT(*)
-                        FROM knowledge_chunks
-                        WHERE knowledge_base_id = ?
-                          AND embedding_model_id IS NOT NULL
-                          AND embedding_model_id > 0
-                          AND embedding_dimensions > 0
-                    ");
-                    $vectorStmt->execute([$knowledge_id]);
-                    $vectorized_count = (int) $vectorStmt->fetchColumn();
-
-                    if ($chunk_count > 0 && $vectorized_count < $chunk_count) {
-                        $error = '切片已更新，但真实向量未完整写入：已向量化 ' . $vectorized_count . ' / ' . $chunk_count;
-                    } else {
-                        $message = '知识切片已更新，已向量化 ' . $vectorized_count . ' / ' . $chunk_count;
-                    }
+                    knowledge_base_enqueue_chunk_job($db, $knowledge_id, true);
+                    $message = '已提交后台切片/向量化任务，页面可继续操作，稍后刷新查看进度。';
                 } catch (Throwable $e) {
-                    $error = '更新切片失败: ' . $e->getMessage();
+                    $error = '提交切片任务失败: ' . $e->getMessage();
                 }
                 break;
 
@@ -134,12 +163,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (($_POST['import_action'] ?? 'save_and_chunk') === 'save') {
                             $message = '知识库已保存，尚未生成知识片段';
                         } else {
-                            try {
-                                $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content);
-                                $message = '知识库创建成功，已生成 ' . $chunk_count . ' 个知识片段';
-                            } catch (Throwable $syncError) {
-                                $error = '知识库已保存，但切片/向量化失败: ' . $syncError->getMessage();
-                            }
+                            knowledge_base_enqueue_chunk_job($db, $knowledge_id, true);
+                            $message = '知识库创建成功，已提交后台切片/向量化任务。';
                         }
                     } else {
                         foreach ($stored_paths as $path) {
@@ -245,12 +270,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($stmt->execute($values)) {
                         $created = true;
                         $knowledge_id = db_last_insert_id($db, 'knowledge_bases');
-                        try {
-                            $chunk_count = knowledge_retrieval_sync_chunks($db, $knowledge_id, $content);
-                            $message = '知识库文件上传成功，已生成 ' . $chunk_count . ' 个知识片段';
-                        } catch (Throwable $syncError) {
-                            $error = '知识库文件已保存，但切片/向量化失败: ' . $syncError->getMessage();
-                        }
+                        knowledge_base_enqueue_chunk_job($db, $knowledge_id, true);
+                        $message = '知识库文件上传成功，已提交后台切片/向量化任务。';
                     } else {
                         foreach ($stored_paths as $path) {
                             cleanup_knowledge_file($path);
@@ -468,6 +489,27 @@ require_once __DIR__ . '/includes/header.php';
                                         <?php if ((int) ($knowledge['chunk_count'] ?? 0) > 0): ?>
                                             <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
                                                 已向量化 <?php echo (int) ($knowledge['vectorized_chunk_count'] ?? 0); ?> / <?php echo (int) ($knowledge['chunk_count'] ?? 0); ?>
+                                            </span>
+                                        <?php endif; ?>
+                                        <?php
+                                            $chunkJobStatus = (string) ($knowledge['chunk_job_status'] ?? '');
+                                            $chunkJobClasses = [
+                                                'queued' => 'bg-amber-50 text-amber-700',
+                                                'running' => 'bg-indigo-50 text-indigo-700',
+                                                'completed' => 'bg-emerald-50 text-emerald-700',
+                                                'failed' => 'bg-red-50 text-red-700',
+                                            ];
+                                            $chunkJobLabels = [
+                                                'queued' => '切片排队中',
+                                                'running' => '切片处理中',
+                                                'completed' => '切片完成',
+                                                'failed' => '切片失败',
+                                            ];
+                                        ?>
+                                        <?php if (isset($chunkJobLabels[$chunkJobStatus])): ?>
+                                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium <?php echo $chunkJobClasses[$chunkJobStatus]; ?>"
+                                                  title="<?php echo htmlspecialchars((string) ($knowledge['chunk_job_error'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>">
+                                                <?php echo htmlspecialchars($chunkJobLabels[$chunkJobStatus], ENT_QUOTES, 'UTF-8'); ?>
                                             </span>
                                         <?php endif; ?>
                                     </div>

@@ -597,7 +597,7 @@ $stats['pending_review'] = (int)$stmt->fetchColumn();
                             管理文章
                         </a>
                         
-                        <a href="task-execute.php?id=<?php echo $task_id; ?>" class="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
+                        <a href="task-execute.php?id=<?php echo $task_id; ?>" target="_blank" rel="noopener" class="w-full inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
                             <i data-lucide="play" class="w-4 h-4 mr-2"></i>
                             测试执行
                         </a>

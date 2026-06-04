@@ -430,6 +430,48 @@ function geo_baseline_qa_for_diagnosis(PDO $db, string $diagnosisId): array {
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
+function geo_baseline_qa_attach_customer(PDO $db, string $diagnosisId, string $customerId, string $brandName = ''): int {
+    geo_baseline_qa_ensure_schema($db);
+    $diagnosisId = trim($diagnosisId);
+    $customerId = trim($customerId);
+    if ($diagnosisId === '' || $customerId === '') {
+        return 0;
+    }
+
+    $update = $db->prepare("
+        UPDATE geo_baseline_qa
+        SET customer_id = ?,
+            brand_name = CASE WHEN brand_name = '' THEN ? ELSE brand_name END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE diagnosis_id = ?
+          AND status = 'active'
+          AND COALESCE(customer_id, '') = ''
+    ");
+    $update->execute([$customerId, $brandName, $diagnosisId]);
+    $updated = $update->rowCount();
+
+    $select = $db->prepare("
+        SELECT question
+        FROM geo_baseline_qa
+        WHERE diagnosis_id = ?
+          AND customer_id = ?
+          AND status = 'active'
+          AND question <> ''
+    ");
+    $select->execute([$diagnosisId, $customerId]);
+
+    $kwInsert = $db->prepare("
+        INSERT INTO geo_monitor_keywords (customer_id, keyword, enabled)
+        VALUES (?, ?, TRUE)
+        ON CONFLICT (customer_id, keyword) DO UPDATE SET enabled = TRUE
+    ");
+    foreach ($select->fetchAll(PDO::FETCH_COLUMN) as $question) {
+        $kwInsert->execute([$customerId, $question]);
+    }
+
+    return $updated;
+}
+
 function geo_baseline_qa_tracking(PDO $db, string $customerId): array {
     geo_baseline_qa_ensure_schema($db);
     if ($customerId === '') {

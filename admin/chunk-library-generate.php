@@ -268,6 +268,7 @@ function chunk_asset_merge_unique(array $base, array $items, int $limit): array 
 function chunk_asset_keyword_batch_prompt(
     string $knowledgeBaseName,
     string $intentInstruction,
+    string $customerRequirementInstruction,
     string $context,
     int $batchNumber,
     int $batchTotal,
@@ -280,6 +281,7 @@ function chunk_asset_keyword_batch_prompt(
 知识库名称：{$knowledgeBaseName}
 批次：{$batchNumber} / {$batchTotal}
 {$intentInstruction}
+{$customerRequirementInstruction}
 
 下面是本批次召回的 chunk。请只基于这些 chunk 生成本批次素材：
 {$context}
@@ -301,8 +303,10 @@ function chunk_asset_keyword_batch_prompt(
 1. 本批次 keywords 生成 {$keywordCount} 条。
 2. 每条都必须能追溯到本批次 chunk，不要写知识片段里没有依据的事实。
 3. 关键词要包含短词、长尾词和问句式关键词，优先模拟客户真实会问 AI 的表达。
-4. 如果本批次是第 1 批，请归纳 3-5 个 question_directions；后续批次可以返回空数组。
-5. 不要 reason、source、intent 等额外字段，不要 Markdown，不要解释，只返回 JSON。
+4. 必须遵守“客户需求/生成要求”。例如客户要求英文，就输出英文关键词/问法；客户要求某种语气、行业角度、禁用词或标题方向，也要贯彻。
+5. 如果客户需求与知识片段事实冲突，以知识片段事实为准；客户需求只约束语言、风格、角度、格式和选题侧重，不能用来编造事实。
+6. 如果本批次是第 1 批，请归纳 3-5 个 question_directions；后续批次可以返回空数组。
+7. 不要 reason、source、intent 等额外字段，不要 Markdown，不要解释，只返回 JSON。
 PROMPT;
 }
 
@@ -310,13 +314,15 @@ function chunk_asset_title_batch_prompt(
     string $knowledgeBaseName,
     array $keywords,
     int $titleCount,
-    array $existingTitles
+    array $existingTitles,
+    string $customerRequirementInstruction
 ): string {
     $keywordList = implode("\n", array_map(fn($keyword) => '- ' . $keyword, $keywords));
     $avoidTitles = empty($existingTitles) ? '无' : implode("\n", array_map(fn($title) => '- ' . $title, array_slice($existingTitles, -20)));
 
     return <<<PROMPT
 知识库名称：{$knowledgeBaseName}
+{$customerRequirementInstruction}
 
 下面是已经从知识库 chunk 中提炼出的关键词库。标题库只能从这些关键词派生，不要重新发散新的客户意图：
 {$keywordList}
@@ -335,7 +341,9 @@ function chunk_asset_title_batch_prompt(
 1. 本批次生成 {$titleCount} 条标题。
 2. 每个标题必须覆盖或改写上方关键词库中的某个关键词，不要引入关键词库之外的新需求。
 3. 标题要像客户真实问题、解决方案说明、购买决策或风险消除型内容资产，不要标题党。
-4. 不要 question_directions、keywords、reason 等额外字段，不要 Markdown，不要解释，只返回 JSON。
+4. 必须遵守“客户需求/生成要求”。例如客户要求全部英文标题，则 titles 数组里的每条标题都必须是英文；客户要求某种语气、长度、禁用表达、必须包含/排除的词，也必须遵守。
+5. 如果客户需求与关键词或知识事实冲突，以关键词和知识事实为准；客户需求只约束语言、风格、角度、格式和选题侧重，不能用来编造事实。
+6. 不要 question_directions、keywords、reason 等额外字段，不要 Markdown，不要解释，只返回 JSON。
 PROMPT;
 }
 
@@ -474,7 +482,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $knowledgeBaseId = (int) ($_POST['knowledge_base_id'] ?? 0);
         $aiModelId = (int) ($_POST['ai_model_id'] ?? 0);
-        $intent = trim((string) ($_POST['intent'] ?? ''));
+        $customerRequirements = trim((string) ($_POST['customer_requirements'] ?? ($_POST['intent'] ?? '')));
         $keywordCount = max(10, min(80, (int) ($_POST['keyword_count'] ?? 40)));
         $titleCount = max(10, min(80, (int) ($_POST['title_count'] ?? 40)));
 
@@ -498,18 +506,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('请选择可用 Chat 模型。');
         }
 
-        $contextPack = chunk_asset_fetch_context($db, $knowledgeBaseId, $intent, CHUNK_ASSET_CONTEXT_LIMIT);
+        $contextPack = chunk_asset_fetch_context($db, $knowledgeBaseId, $customerRequirements, CHUNK_ASSET_CONTEXT_LIMIT);
         $context = trim((string) ($contextPack['context'] ?? ''));
         if ($context === '') {
             throw new RuntimeException('这个知识库还没有可用 chunk，请先在知识库里更新切片/向量化。');
         }
 
-        $intentInstruction = $intent !== ''
-            ? "用户补充的问题方向：{$intent}\n请以这个方向为优先，但仍然必须受知识片段约束。"
-            : "用户没有提供问题方向。请你先根据这些知识片段自动判断：目标客户最可能关心什么、会怎么问、购买前会比较什么、会担心什么。";
+        $intentInstruction = $customerRequirements !== ''
+            ? "客户已补充需求。请结合客户需求识别问题方向，但仍然必须受知识片段约束。"
+            : "客户没有补充需求。请你先根据这些知识片段自动判断：目标客户最可能关心什么、会怎么问、购买前会比较什么、会担心什么。";
+        $customerRequirementInstruction = $customerRequirements !== ''
+            ? "客户需求/生成要求：\n{$customerRequirements}\n请在关键词、问法和标题中持续遵守这些要求。"
+            : "客户需求/生成要求：无。";
 
-        $keywordSystemPrompt = '你是 GEO+AI 客户问题挖掘师。你只能基于给定知识片段生成客户真实会问的关键词，不得编造资料。输出必须是严格 JSON。';
-        $titleSystemPrompt = '你是 GEO+AI 内容资产标题规划师。你只能基于给定关键词库生成标题，不得重新发散需求或编造资料。输出必须是严格 JSON。';
+        $keywordSystemPrompt = '你是 GEO+AI 客户问题挖掘师。你只能基于给定知识片段生成客户真实会问的关键词，不得编造资料。必须遵守客户需求/生成要求。输出必须是严格 JSON。';
+        $titleSystemPrompt = '你是 GEO+AI 内容资产标题规划师。你只能基于给定关键词库生成标题，不得重新发散需求或编造资料。必须遵守客户需求/生成要求，尤其是语言、风格、禁用词、格式和选题侧重。输出必须是严格 JSON。';
         $keywords = [];
         $titles = [];
         $questionDirections = [];
@@ -533,6 +544,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $userPrompt = chunk_asset_keyword_batch_prompt(
                 (string) $knowledgeBase['name'],
                 $intentInstruction,
+                $customerRequirementInstruction,
                 $batchContext,
                 $batchIndex + 1,
                 $keywordBatchTotal,
@@ -582,6 +594,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $retryPrompt = chunk_asset_keyword_batch_prompt(
                 (string) $knowledgeBase['name'],
                 $intentInstruction,
+                $customerRequirementInstruction,
                 $retryBatch,
                 $keywordBatchTotal + $retryRound + 1,
                 $keywordBatchTotal + 3,
@@ -619,7 +632,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $keywordSlice = $keywords;
             }
 
-            $titlePrompt = chunk_asset_title_batch_prompt((string) $knowledgeBase['name'], $keywordSlice, $batchTitleCount, $titles);
+            $titlePrompt = chunk_asset_title_batch_prompt((string) $knowledgeBase['name'], $keywordSlice, $batchTitleCount, $titles, $customerRequirementInstruction);
             try {
                 $titleMaxTokens = 1000 + ($batchTitleCount * 90);
                 $raw = chunk_asset_call_chat_model($db, $aiModel, $titleSystemPrompt, $titlePrompt, $titleMaxTokens);
@@ -654,7 +667,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $keywordSlice = $keywords;
             }
 
-            $retryPrompt = chunk_asset_title_batch_prompt((string) $knowledgeBase['name'], $keywordSlice, $titleShort + 3, $titles);
+            $retryPrompt = chunk_asset_title_batch_prompt((string) $knowledgeBase['name'], $keywordSlice, $titleShort + 3, $titles, $customerRequirementInstruction);
             try {
                 $retryRaw = chunk_asset_call_chat_model($db, $aiModel, $titleSystemPrompt, $retryPrompt, 1000 + (($titleShort + 3) * 90));
                 $retryDecoded = chunk_asset_decode_json_or_null($retryRaw);
@@ -713,8 +726,8 @@ require_once __DIR__ . '/includes/header.php';
 
     <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
         <div class="border-b border-gray-100 px-6 py-5">
-            <h2 class="text-xl font-semibold text-gray-900">知识 Chunk → 关键词 Prompt → 关键词库</h2>
-            <p class="mt-2 text-sm leading-6 text-gray-500">这里不是让模型凭空造关键词，而是先把最相关的知识 chunk 整理成可追问的 prompt，再用 prompt 问模型，得到更贴近客户真实问题的关键词库。</p>
+            <h2 class="text-xl font-semibold text-gray-900">知识 Chunk → 客户需求 Prompt → 关键词库</h2>
+            <p class="mt-2 text-sm leading-6 text-gray-500">这里不是让模型凭空造关键词，而是把最相关的知识 chunk 和客户生成要求一起整理进 prompt，再沉淀关键词库与标题库。</p>
         </div>
         <form method="post" class="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_320px]" data-chunk-asset-form>
             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
@@ -746,8 +759,9 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
 
                 <div>
-                    <label class="mb-1 block text-sm font-semibold text-gray-700">问题方向补充（可选）</label>
-                    <textarea name="intent" rows="4" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="可以不填。留空时，系统会根据最相关 chunk 自动判断客户最可能问什么。"><?php echo htmlspecialchars((string) ($_POST['intent'] ?? '')); ?></textarea>
+                    <label class="mb-1 block text-sm font-semibold text-gray-700">客户需求 / 生成要求（可选）</label>
+                    <textarea name="customer_requirements" rows="4" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="可以不填。例如：标题全部用英文；避免夸张营销词；更偏购买决策；突出适合海外客户；标题控制在 12 个英文词以内。"><?php echo htmlspecialchars((string) ($_POST['customer_requirements'] ?? ($_POST['intent'] ?? ''))); ?></textarea>
+                    <p class="mt-1 text-xs leading-5 text-gray-500">这里会写入关键词和标题生成 prompt，用来约束语言、风格、角度、禁用词、必须包含/排除的表达等。</p>
                 </div>
 
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -767,7 +781,7 @@ require_once __DIR__ . '/includes/header.php';
                     <i data-lucide="wand-sparkles" class="h-5 w-5"></i>
                 </div>
                 <h3 class="mt-4 text-base font-semibold text-gray-900">生成逻辑</h3>
-                <p class="mt-2 text-sm leading-6 text-gray-600">系统会先召回最相关 chunk，再把证据片段组织成关键词提问 prompt；模型只回答这份 prompt，关键词补齐后再派生标题库。</p>
+                <p class="mt-2 text-sm leading-6 text-gray-600">系统会先召回最相关 chunk，再把证据片段和客户需求组织成 prompt；模型会按这份要求生成关键词，并继续按同一要求派生标题库。</p>
                 <button type="submit" class="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700" data-chunk-asset-submit>
                     <i data-lucide="sparkles" class="mr-2 h-4 w-4"></i>
                     <span data-chunk-asset-submit-label>构建 Prompt 并沉淀关键词</span>
@@ -780,7 +794,7 @@ require_once __DIR__ . '/includes/header.php';
                     <div class="mt-2 h-2 overflow-hidden rounded-full bg-blue-100">
                         <div class="h-full rounded-full bg-blue-600 transition-all duration-500 ease-out" style="width: 8%;" data-chunk-asset-progress-bar></div>
                     </div>
-                    <p class="mt-2 text-xs leading-5 text-blue-700">关键词阶段每批最多用 5 个 chunk 组织 prompt；标题阶段只读取已沉淀关键词。如果任一批失败，系统会保留失败信息，不会创建素材库。</p>
+                    <p class="mt-2 text-xs leading-5 text-blue-700">关键词阶段每批最多用 5 个 chunk 组织 prompt；标题阶段只读取已沉淀关键词，并继续遵守客户需求。如果任一批失败，系统会保留失败信息，不会创建素材库。</p>
                 </div>
             </aside>
         </form>
