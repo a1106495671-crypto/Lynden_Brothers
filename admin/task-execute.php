@@ -873,7 +873,7 @@ $recent_runs = $recentRunsStmt->fetchAll(PDO::FETCH_ASSOC);
                     setRunningState();
 
                     try {
-                        const response = await fetch(form.action || window.location.href, {
+                        const response = await fetch(window.location.href, {
                             method: 'POST',
                             headers: {
                                 'Accept': 'application/json',
