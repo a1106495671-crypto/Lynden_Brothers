@@ -703,10 +703,10 @@ require_once __DIR__ . '/includes/header.php';
     ];
     ?>
 
-    <section class=”rounded-xl border border-gray-200 bg-white shadow-sm”>
-        <div class=”flex flex-col gap-4 border-b border-gray-200 px-6 py-5 xl:flex-row xl:items-center xl:justify-between”>
+    <section class="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div class="flex flex-col gap-4 border-b border-gray-200 px-6 py-5 xl:flex-row xl:items-center xl:justify-between">
             <div>
-                <h2 class=”text-xl font-bold text-gray-900”>监测视图</h2>
+                <h2 class="text-xl font-bold text-gray-900">监测视图</h2>
             </div>
             <div class="flex flex-wrap gap-2" role="tablist" aria-label="GEO监测视图">
                 <?php
@@ -724,7 +724,7 @@ require_once __DIR__ . '/includes/header.php';
                     $isActive = $key === 'baseline';
                 ?>
                     <button type="button" data-monitor-tab="<?php echo htmlspecialchars($key, ENT_QUOTES, 'UTF-8'); ?>"
-                        class="monitor-tab rounded-lg px-4 py-2.5 text-left <?php echo $isActive ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-100'; ?>">
+                        class="monitor-tab cursor-pointer rounded-lg px-4 py-2.5 text-left <?php echo $isActive ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-100'; ?>">
                         <div class="text-sm font-semibold"><?php echo $tab['label']; ?></div>
                         <div class="mt-0.5 text-xs <?php echo $isActive ? 'text-slate-300' : 'text-gray-400'; ?>"><?php echo $tab['desc']; ?></div>
                     </button>
@@ -1520,10 +1520,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (target === 'competitors') renderRadarChart(0);
     }
 
-    tabs.forEach((tab) => tab.addEventListener('click', () => activateTab(tab.dataset.monitorTab)));
-    document.querySelectorAll('[data-open-monitor-tab]').forEach((button) => {
-        button.addEventListener('click', () => activateTab(button.dataset.openMonitorTab));
-    });
+    document.addEventListener('click', (event) => {
+        const tabButton = event.target.closest('[data-monitor-tab]');
+        if (tabButton) {
+            event.preventDefault();
+            activateTab(tabButton.dataset.monitorTab);
+            return;
+        }
+
+        const opener = event.target.closest('[data-open-monitor-tab]');
+        if (opener) {
+            event.preventDefault();
+            activateTab(opener.dataset.openMonitorTab);
+        }
+    }, true);
 
     function renderTrendChart() {
         const svg = document.getElementById('trend-chart');
@@ -1674,20 +1684,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const rows = document.querySelectorAll('#conversation-table-body tr');
 
     function filterConversations() {
+        if (!platformFilter || !competitorFilter || !dateFilter) return;
         const platform = platformFilter.value;
         const competitor = competitorFilter.value;
         const date = dateFilter.value;
         rows.forEach((row) => {
             const matchPlatform = !platform || row.dataset.platform === platform;
-            const matchCompetitor = !competitor || row.dataset.competitors.includes(competitor);
+            const matchCompetitor = !competitor || (row.dataset.competitors || '').includes(competitor);
             const matchDate = !date || row.dataset.date === date;
             row.classList.toggle('hidden', !(matchPlatform && matchCompetitor && matchDate));
         });
     }
 
-    [platformFilter, competitorFilter, dateFilter].forEach((input) => input.addEventListener('change', filterConversations));
+    [platformFilter, competitorFilter, dateFilter].forEach((input) => {
+        if (input) input.addEventListener('change', filterConversations);
+    });
     document.querySelectorAll('[data-competitor-tag]').forEach((tag) => {
         tag.addEventListener('click', () => {
+            if (!competitorFilter) return;
             competitorFilter.value = tag.dataset.competitorTag;
             activateTab('conversations');
             filterConversations();
@@ -1722,7 +1736,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function openConversation(id) {
         const item = conversations.find((conversation) => conversation.id === id);
-        if (!item) return;
+        if (!item || !modal || !modalMeta || !modalQuestion || !modalAnswer || !modalCitations) return;
         modalMeta.textContent = `${item.date} · ${item.platform} · ${item.type} · 热度 ${item.heat}`;
         modalQuestion.textContent = item.question;
         modalAnswer.innerHTML = highlightTerms(item);
@@ -1734,18 +1748,20 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('[data-open-conversation]').forEach((button) => {
         button.addEventListener('click', () => openConversation(button.dataset.openConversation));
     });
-    document.getElementById('close-conversation-modal').addEventListener('click', () => {
-        modal.classList.add('hidden');
-        modal.classList.remove('flex');
+    document.getElementById('close-conversation-modal')?.addEventListener('click', () => {
+        if (modal) {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
     });
-    modal.addEventListener('click', (event) => {
+    modal?.addEventListener('click', (event) => {
         if (event.target === modal) {
             modal.classList.add('hidden');
             modal.classList.remove('flex');
         }
     });
 
-    document.getElementById('export-conversations').addEventListener('click', () => {
+    document.getElementById('export-conversations')?.addEventListener('click', () => {
         const header = ['对话时间', 'AI问题', '问题类型', '热度值', '对话平台', '覆盖品牌词', '提及次数', '覆盖竞品词', '引用来源数'];
         const lines = conversations.map((item) => [
             item.date,

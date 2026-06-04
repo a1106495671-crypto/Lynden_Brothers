@@ -53,7 +53,18 @@ try {
             $baselineIndustry = clean_input($_POST['industry'] ?? '');
             $generated = geo_baseline_qa_generate_from_chunks($db, $baselineCustomer, $baselineBrand, $baselineIndustry, 10);
             $generatedBaselineRows = $generated['rows'] ?? [];
-            $message = (string) ($generated['message'] ?? '已生成首问样本。') . ' 请复制问题去真实AI平台提问，并把答案记录回来后保存。';
+            if (!empty($generatedBaselineRows)) {
+                $saveInput = [
+                    'baseline_question' => array_map(static fn (array $row): string => (string) ($row['question'] ?? ''), $generatedBaselineRows),
+                    'baseline_answer' => array_fill(0, count($generatedBaselineRows), ''),
+                    'baseline_platform' => array_map(static fn (array $row): string => (string) ($row['platform'] ?? 'deepseek'), $generatedBaselineRows),
+                ];
+                $savedCount = geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, $baselineCustomer, $baselineBrand, $saveInput);
+                $message = (string) ($generated['message'] ?? '已生成首问样本。') . ' 已写入问题栏 ' . $savedCount . ' 条，答案留空，请复制问题去真实AI平台提问后再补充保存。';
+                $generatedBaselineRows = [];
+            } else {
+                $message = (string) ($generated['message'] ?? '未生成首问样本。');
+            }
             $selectedId = $diagnosisId;
         } else {
             $diagnosisId = geo_diagnosis_create($db, [
@@ -548,7 +559,7 @@ require_once __DIR__ . '/includes/header.php';
                         <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                             <div>
                                 <h2 class="text-lg font-semibold text-gray-900">首次 AI 问答基准线</h2>
-                                <p class="mt-1 text-sm text-gray-600">这组问题会同步到 GEO 监测，后续复测直接和首次答案对比。</p>
+                                <p class="mt-1 text-sm text-gray-600">这组问题会同步到 GEO 监测，用来观察 AI 在品类推荐、排名和竞品比较里是否自然提到我们。</p>
                             </div>
                             <div class="flex flex-wrap gap-2 text-xs font-semibold">
                                 <span class="rounded-full bg-white px-3 py-1 text-blue-700">已保存 <?php echo count($currentBaselineRows); ?> 条</span>
@@ -558,8 +569,8 @@ require_once __DIR__ . '/includes/header.php';
                         </div>
                         <form method="POST" class="mt-4 flex flex-col gap-3 rounded-lg border border-blue-100 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
                             <div>
-                                <div class="text-sm font-semibold text-gray-900">从知识切片生成首问样本</div>
-                                <p class="mt-1 text-xs text-gray-500">读取已切割的知识库片段，整理出客户最可能拿去问AI的问题；答案由你去真实AI平台提问后手动记录。</p>
+                                <div class="text-sm font-semibold text-gray-900">从知识切片生成雷达首问</div>
+                                <p class="mt-1 text-xs text-gray-500">读取已切割的知识库片段，整理出客户做品类推荐、排名和竞品比较时最可能拿去问AI的问题；答案由你去真实AI平台提问后手动记录。</p>
                             </div>
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
                             <input type="hidden" name="action" value="generate_baseline_qa">
@@ -572,11 +583,6 @@ require_once __DIR__ . '/includes/header.php';
                                 生成首问样本
                             </button>
                         </form>
-                        <?php if (!empty($generatedBaselineRows)): ?>
-                            <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                                已生成首问样本，但还没有保存。请先复制问题去真实AI平台提问，再把真实答案记录回来后保存。
-                            </div>
-                        <?php endif; ?>
                     </div>
                     <form method="POST" class="px-6 py-6">
                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
