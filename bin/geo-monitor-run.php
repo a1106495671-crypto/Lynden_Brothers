@@ -101,6 +101,12 @@ foreach (['kimi', 'deepseek', 'tongyi', 'wenxin', 'doubao', 'yuanbao'] as $pkey)
     $providers[$pkey] = $pcfg;
 }
 
+foreach (gm_monitor_providers_from_ai_models($db) as $pkey => $pcfg) {
+    if (!isset($providers[$pkey])) {
+        $providers[$pkey] = $pcfg;
+    }
+}
+
 if (empty($providers)) {
     $fallbackAi = function_exists('get_active_ai_config') ? get_active_ai_config() : [];
     if (!empty($fallbackAi['api_key']) && !empty($fallbackAi['api_url']) && !empty($fallbackAi['model_id'])) {
@@ -135,6 +141,66 @@ $today = date('Y-m-d');
 
 // ── 主循环 ────────────────────────────────────────────────────────────────
 $totalInserted = 0;
+
+function gm_monitor_provider_key_from_model(array $model): string {
+    $text = mb_strtolower(
+        (string) ($model['name'] ?? '') . ' ' .
+        (string) ($model['model_id'] ?? '') . ' ' .
+        (string) ($model['api_url'] ?? '')
+    );
+
+    if (str_contains($text, 'deepseek')) return 'deepseek';
+    if (str_contains($text, 'doubao') || str_contains($text, 'volces') || str_contains($text, 'ark.cn')) return 'doubao';
+    if (str_contains($text, 'qwen') || str_contains($text, 'tongyi') || str_contains($text, 'dashscope') || str_contains($text, '千问')) return 'tongyi';
+    if (str_contains($text, 'hunyuan') || str_contains($text, 'yuanbao') || str_contains($text, '腾讯') || str_contains($text, '混元')) return 'yuanbao';
+    if (str_contains($text, 'moonshot') || str_contains($text, 'kimi')) return 'kimi';
+    if (str_contains($text, 'mimo') || str_contains($text, 'xiaomi')) return 'mimo-v2.5-pro';
+
+    return preg_replace('/[^a-z0-9_\-]+/', '-', trim((string) ($model['model_id'] ?? ''))) ?: '';
+}
+
+function gm_monitor_providers_from_ai_models(PDO $db): array {
+    $providers = [];
+    try {
+        $stmt = $db->query("
+            SELECT *
+            FROM ai_models
+            WHERE status = 'active'
+              AND (model_type = 'chat' OR model_type IS NULL OR model_type = '')
+              AND COALESCE(api_key, '') <> ''
+              AND COALESCE(model_id, '') <> ''
+            ORDER BY priority ASC NULLS LAST, id ASC
+        ");
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $model) {
+            $apiKey = trim(function_exists('decrypt_ai_api_key') ? decrypt_ai_api_key((string) ($model['api_key'] ?? '')) : (string) ($model['api_key'] ?? ''));
+            $apiUrl = rtrim(trim((string) ($model['api_url'] ?? '')), '/');
+            $modelId = trim((string) ($model['model_id'] ?? ''));
+            if ($apiKey === '' || $apiUrl === '' || $modelId === '') {
+                continue;
+            }
+
+            $pkey = gm_monitor_provider_key_from_model($model);
+            if ($pkey === '' || isset($providers[$pkey])) {
+                continue;
+            }
+
+            $providers[$pkey] = [
+                'label' => (string) ($model['name'] ?? $modelId),
+                'name' => (string) ($model['name'] ?? $modelId),
+                'api_key' => $apiKey,
+                'api_url' => $apiUrl,
+                'model_id' => $modelId,
+                'configured' => true,
+                'op_status' => 'normal',
+                'source' => 'ai_models',
+            ];
+        }
+    } catch (Throwable $e) {
+        gm_log('从 ai_models 读取监测模型失败：' . $e->getMessage());
+    }
+
+    return $providers;
+}
 
 foreach ($customers as $customer) {
     $cid         = $customer['id'];
@@ -1037,6 +1103,7 @@ function gm_verify_accuracy(PDO $db, string $cid, string $cname, string $kw,
     if ($accuracyScore < 98 && $issueCount > 0) {
         $level  = $accuracyScore < 70 ? 'high' : ($accuracyScore < 85 ? 'medium' : 'low');
         $detail = "{$cname} 在「{$kw}」/{$pkey} 上语义准确度 {$accuracyScore}分，发现{$issueCount}处偏差：" . implode('；', array_slice($issues, 0, 3));
+        $alertedAt = date('Y-m-d');
         try {
             $stmtAccAlert = $db->prepare("
                 INSERT INTO geo_monitor_alerts
@@ -1046,7 +1113,7 @@ function gm_verify_accuracy(PDO $db, string $cid, string $cname, string $kw,
                 ON CONFLICT (customer_id, alert_type, keyword, competitor_name, alerted_at)
                 DO UPDATE SET brand_rate=EXCLUDED.brand_rate, detail=EXCLUDED.detail
             ");
-            $stmtAccAlert->execute([$cid, $level, $kw, $pkey, $accuracyScore, $detail, $today]);
+            $stmtAccAlert->execute([$cid, $level, $kw, $pkey, $accuracyScore, $detail, $alertedAt]);
             gm_log("  [准确度告警] 已写入 level={$level}");
         } catch (Throwable $e) {
             gm_log("  [准确度告警写入失败] " . $e->getMessage());

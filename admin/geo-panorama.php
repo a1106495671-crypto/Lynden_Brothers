@@ -79,6 +79,35 @@ try {
   .report-prose strong { color:#111827; font-weight:600; }
   .report-prose code { background:#f1f5f9; padding:.125rem .375rem; border-radius:.25rem; font-size:.8125rem; color:#0f172a; }
   .report-prose blockquote { border-left:3px solid #6366f1; padding:.5rem 1rem; margin:.75rem 0; background:#f5f3ff; border-radius:0 .375rem .375rem 0; color:#4338ca; }
+  .report-prose { background:#f8fafc; margin:-1.5rem; padding:1.5rem; }
+  .diagnosis-hero { border:1px solid #e5e7eb; border-radius:1rem; background:linear-gradient(135deg,#ffffff 0%,#f8fafc 55%,#eef2ff 100%); padding:1.25rem; margin-bottom:1rem; }
+  .diagnosis-hero__eyebrow { display:flex; align-items:center; gap:.5rem; font-size:.75rem; font-weight:700; color:#4f46e5; margin-bottom:.5rem; }
+  .diagnosis-hero__title { font-size:1.25rem; line-height:1.4; font-weight:800; color:#0f172a; margin-bottom:.6rem; }
+  .diagnosis-hero__copy { color:#475569; line-height:1.8; font-size:.95rem; max-width:68rem; }
+  .insight-grid { display:grid; grid-template-columns:repeat(1,minmax(0,1fr)); gap:.75rem; margin:1rem 0; }
+  @media (min-width:768px) { .insight-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+  .insight-card { border:1px solid #e5e7eb; border-radius:.85rem; background:white; padding:1rem; }
+  .insight-card__label { color:#64748b; font-size:.75rem; font-weight:600; margin-bottom:.35rem; }
+  .insight-card__value { color:#0f172a; font-size:1.35rem; line-height:1; font-weight:800; }
+  .insight-card__hint { color:#94a3b8; font-size:.75rem; margin-top:.45rem; }
+  .section-card { border:1px solid #e5e7eb; border-radius:1rem; background:white; overflow:hidden; margin-top:1rem; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+  .section-card__head { display:flex; align-items:center; gap:.75rem; padding:1rem 1.1rem; border-bottom:1px solid #eef2f7; background:#fff; }
+  .section-card__icon { width:2rem; height:2rem; border-radius:.65rem; display:inline-flex; align-items:center; justify-content:center; background:#eef2ff; color:#4f46e5; flex:none; }
+  .section-card__title { font-weight:800; color:#111827; font-size:1rem; }
+  .section-card__body { padding:1rem 1.1rem; }
+  .section-card__body p { color:#334155; line-height:1.85; margin:.6rem 0; }
+  .section-card__body ul { margin:.75rem 0; padding-left:0; list-style:none; display:grid; gap:.45rem; }
+  .section-card__body li { position:relative; padding:.55rem .75rem .55rem 2rem; margin:0; border-radius:.7rem; background:#f8fafc; color:#334155; line-height:1.65; }
+  .section-card__body li:before { content:""; position:absolute; left:.85rem; top:1.12rem; width:.35rem; height:.35rem; border-radius:999px; background:#6366f1; }
+  .action-list { display:grid; gap:.6rem; margin-top:.75rem; }
+  .action-item { display:flex; gap:.75rem; align-items:flex-start; border:1px solid #fde68a; background:#fffbeb; border-radius:.85rem; padding:.8rem .9rem; color:#78350f; line-height:1.65; }
+  .action-item__num { width:1.35rem; height:1.35rem; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:#f59e0b; color:white; font-size:.75rem; font-weight:800; flex:none; margin-top:.15rem; }
+  .signal-list { display:grid; grid-template-columns:repeat(1,minmax(0,1fr)); gap:.55rem; margin-top:.75rem; }
+  @media (min-width:768px) { .signal-list { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  .signal-row { display:flex; justify-content:space-between; align-items:center; gap:.75rem; border:1px solid #e5e7eb; border-radius:.75rem; padding:.7rem .8rem; background:white; }
+  .signal-score { font-weight:800; font-size:.9rem; }
+  .alert-stack { display:grid; gap:.55rem; margin-top:.75rem; }
+  .alert-card { border:1px solid #fecaca; background:#fef2f2; color:#7f1d1d; border-radius:.85rem; padding:.8rem .9rem; line-height:1.65; }
   /* Prompt toggle handled by JS */
   /* Stat ring */
   .stat-ring { position:relative; width:80px; height:80px; }
@@ -535,13 +564,205 @@ function renderResult(data) {
     $('reportBrand').textContent = data.brand_name;
     var reportTime = data.created_at ? formatDateTime(data.created_at) : new Date().toLocaleString('zh-CN');
     $('reportMeta').textContent = reportTime + ' · ' + (data.model_used || 'AI') + ' 分析 · ' + data.total_records + ' 条监测数据';
-    $('reportBody').innerHTML = md2html(data.report_md);
+    $('reportBody').innerHTML = renderReadableReport(data, {
+        overallRate: overallRate,
+        grade: grade,
+        gradeColor: gradeColor,
+        totalHit: totalHit,
+        totalAll: totalAll,
+        compSum: compSum
+    });
 
     // Prompt preview
     $('promptPreview').textContent = _lastPrompt;
 
     $('resultArea').style.display = 'block';
     if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function renderReadableReport(data, metrics) {
+    var sections = splitReportSections(data.report_md || '');
+    var firstSection = sections.length ? sections[0] : {title:'AI 可见性总评', body:data.report_md || ''};
+    var summary = firstParagraph(firstSection.body) || '暂无摘要。';
+    var weakestKeywords = lowKeywordList(data.kw_stats || {}, 8);
+    var topCompetitors = topCompetitorList(data.comp_overall || {}, 6);
+    var actions = extractActions(data.report_md || '', weakestKeywords);
+
+    var html = '<div class="diagnosis-hero">' +
+      '<div class="diagnosis-hero__eyebrow"><i data-lucide="radar" class="w-4 h-4"></i> 全景诊断摘要</div>' +
+      '<div class="diagnosis-hero__title">' + escapeHtml(data.brand_name || '当前品牌') + '：AI 可见度评级 ' +
+        '<span style="color:' + metrics.gradeColor + '">' + metrics.grade + '</span></div>' +
+      '<div class="diagnosis-hero__copy">' + inlineMd(summary) + '</div>' +
+    '</div>';
+
+    html += '<div class="insight-grid">' +
+      metricTile('整体提及率', Number(metrics.overallRate || 0).toFixed(1) + '%', metrics.totalHit + '/' + metrics.totalAll + ' 次命中') +
+      metricTile('监测样本', Number(data.total_records || 0) + ' 条', '近 30 天 AI 回答') +
+      metricTile('竞品出现', Number(metrics.compSum || 0) + ' 次', topCompetitors.length ? topCompetitors.slice(0, 3).map(function(x){ return x.name; }).join('、') : '暂无竞品记录') +
+    '</div>';
+
+    if ((data.alerts || []).length) {
+        html += '<div class="section-card">' +
+          sectionHead('alert-triangle', '高优先级风险') +
+          '<div class="section-card__body"><div class="alert-stack">' +
+          (data.alerts || []).slice(0, 5).map(function(alert) {
+              return '<div class="alert-card"><strong>' + escapeHtml(alert.keyword || alert.alert_type || '风险项') + '</strong><br>' + escapeHtml(alert.detail || '') + '</div>';
+          }).join('') +
+          '</div></div></div>';
+    }
+
+    if ((data.signals || []).length) {
+        html += '<div class="section-card">' +
+          sectionHead('activity', '基础信号体检') +
+          '<div class="section-card__body"><div class="signal-list">' +
+          (data.signals || []).map(function(signal) {
+              var score = Number(signal.score || 0);
+              var color = score >= 70 ? '#059669' : (score >= 40 ? '#d97706' : '#dc2626');
+              return '<div class="signal-row"><span class="text-sm font-semibold text-gray-700">' + escapeHtml(signal.name || signal.signal_key || '') + '</span>' +
+                '<span class="signal-score" style="color:' + color + '">' + score.toFixed(1) + '</span></div>';
+          }).join('') +
+          '</div></div></div>';
+    }
+
+    if (weakestKeywords.length || topCompetitors.length) {
+        html += '<div class="section-card">' +
+          sectionHead('target', '关键词与竞品焦点') +
+          '<div class="section-card__body">' +
+          (weakestKeywords.length ? '<p><strong>低提及关键词：</strong>' + weakestKeywords.map(function(x){ return '「' + escapeHtml(x.kw) + '」'; }).join('、') + '</p>' : '') +
+          (topCompetitors.length ? '<p><strong>高频竞品/品类：</strong>' + topCompetitors.map(function(x){ return escapeHtml(x.name) + '（' + x.count + '次）'; }).join('、') + '</p>' : '') +
+          '</div></div>';
+    }
+
+    if (actions.length) {
+        html += '<div class="section-card">' +
+          sectionHead('list-checks', '建议先做这几件事') +
+          '<div class="section-card__body"><div class="action-list">' +
+          actions.slice(0, 6).map(function(action, index) {
+              return '<div class="action-item"><span class="action-item__num">' + (index + 1) + '</span><div>' + inlineMd(action) + '</div></div>';
+          }).join('') +
+          '</div></div></div>';
+    }
+
+    sections.forEach(function(section, index) {
+        var title = normalizeSectionTitle(section.title);
+        var body = section.body || '';
+        if (index === 0 && body.indexOf(summary) >= 0) {
+            body = body.replace(summary, '').trim();
+        }
+        if (!body) return;
+        html += '<div class="section-card">' +
+          sectionHead(sectionIcon(title), title) +
+          '<div class="section-card__body">' + md2html(body) + '</div>' +
+        '</div>';
+    });
+
+    return html;
+}
+
+function metricTile(label, value, hint) {
+    return '<div class="insight-card"><div class="insight-card__label">' + escapeHtml(label) + '</div>' +
+      '<div class="insight-card__value">' + escapeHtml(value) + '</div>' +
+      '<div class="insight-card__hint">' + escapeHtml(hint) + '</div></div>';
+}
+
+function sectionHead(icon, title) {
+    return '<div class="section-card__head"><span class="section-card__icon"><i data-lucide="' + icon + '" class="w-4 h-4"></i></span>' +
+      '<div class="section-card__title">' + escapeHtml(title) + '</div></div>';
+}
+
+function splitReportSections(md) {
+    var text = String(md || '').replace(/\r\n/g, '\n').trim();
+    if (!text) return [];
+    var parts = [];
+    var re = /^##\s+(.+)$/gm;
+    var match, lastIndex = 0, lastTitle = '';
+    while ((match = re.exec(text)) !== null) {
+        if (lastTitle) {
+            parts.push({ title:lastTitle, body:text.slice(lastIndex, match.index).trim() });
+        }
+        lastTitle = match[1].trim();
+        lastIndex = re.lastIndex;
+    }
+    if (lastTitle) {
+        parts.push({ title:lastTitle, body:text.slice(lastIndex).trim() });
+    }
+    if (!parts.length) {
+        parts.push({ title:'诊断正文', body:text });
+    }
+    return parts;
+}
+
+function normalizeSectionTitle(title) {
+    return String(title || '').replace(/^[一二三四五六七八九十]+[、.．]\s*/, '').trim() || '诊断正文';
+}
+
+function sectionIcon(title) {
+    if (title.indexOf('竞品') >= 0) return 'swords';
+    if (title.indexOf('关键词') >= 0) return 'key';
+    if (title.indexOf('机会') >= 0 || title.indexOf('建议') >= 0) return 'lightbulb';
+    if (title.indexOf('内容') >= 0) return 'file-text';
+    if (title.indexOf('可见') >= 0 || title.indexOf('总评') >= 0) return 'eye';
+    return 'panel-top';
+}
+
+function firstParagraph(text) {
+    var lines = String(text || '').split(/\n+/).map(function(line) {
+        return line.replace(/^[-*]\s+/, '').trim();
+    }).filter(function(line) {
+        return line && !/^#+\s/.test(line) && !/^\*\*.+\*\*:?\s*$/.test(line);
+    });
+    return lines[0] || '';
+}
+
+function cleanKeywordName(name) {
+    return String(name || '').replace(/（chunk #[^)]+）/g, '').trim();
+}
+
+function lowKeywordList(kwStats, limit) {
+    var list = [];
+    for (var kw in kwStats) {
+        var item = kwStats[kw] || {};
+        var total = Number(item.total || 0);
+        var hit = Number(item.hit || 0);
+        var rate = total > 0 ? hit / total : 0;
+        if (rate < 0.2) list.push({kw:cleanKeywordName(kw), rate:rate, total:total});
+    }
+    list.sort(function(a, b) { return a.rate - b.rate || b.total - a.total; });
+    return list.slice(0, limit || 8);
+}
+
+function topCompetitorList(compOverall, limit) {
+    var list = [];
+    for (var name in compOverall) list.push({name:name, count:Number(compOverall[name] || 0)});
+    list.sort(function(a, b) { return b.count - a.count; });
+    return list.slice(0, limit || 6);
+}
+
+function extractActions(md, fallbackKeywords) {
+    var lines = String(md || '').split(/\n+/).map(function(line) {
+        return line.replace(/^[-*]\s+/, '').replace(/^\d+[.、]\s*/, '').trim();
+    }).filter(Boolean);
+    var actions = lines.filter(function(line) {
+        return /(建议|优先|需要|应当|应该|补齐|创建|优化|发布|建立)/.test(line) && line.length >= 18;
+    });
+    var seen = {};
+    actions = actions.filter(function(line) {
+        var key = line.slice(0, 40);
+        if (seen[key]) return false;
+        seen[key] = true;
+        return true;
+    });
+    if (!actions.length && fallbackKeywords.length) {
+        actions.push('优先为 ' + fallbackKeywords.slice(0, 5).map(function(x){ return '「' + x.kw + '」'; }).join('、') + ' 建立问答、清单和对比型内容。');
+        actions.push('把品牌事实、产地、检测、功效边界和选购标准整理成结构化页面，提升 AI 可引用性。');
+    }
+    return actions;
+}
+
+function inlineMd(value) {
+    return escapeHtml(value)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
 }
 
 /* ── Markdown → HTML ── */

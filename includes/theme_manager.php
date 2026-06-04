@@ -31,6 +31,7 @@ function theme_file(string $page): string {
 }
 
 function theme_render(string $page): void {
+    extract($GLOBALS, EXTR_SKIP);
     require theme_file($page);
 }
 

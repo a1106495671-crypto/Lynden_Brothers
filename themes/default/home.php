@@ -84,11 +84,71 @@
             </div>
         <?php endif; ?>
 
+        <?php if (empty($search) && $category_id === 0): ?>
+            <div class="article-shell p-5 mb-6">
+                <form method="get" action="/" class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <div class="text-sm font-semibold text-gray-900">客户文章备份</div>
+                        <div class="text-sm text-gray-500 mt-1">所有 AI 生成文章按客户归档展示</div>
+                    </div>
+                    <label class="flex items-center gap-2 text-sm text-gray-600">
+                        <span>客户</span>
+                        <select name="customer" class="h-10 min-w-52 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900" onchange="this.form.submit()">
+                            <option value="">全部客户</option>
+                            <?php foreach (($customer_options ?? []) as $option): ?>
+                                <option value="<?php echo htmlspecialchars($option['customer_id']); ?>" <?php echo (($customer_filter ?? '') === ($option['customer_id'] ?? '')) ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($option['customer_name']); ?>（<?php echo intval($option['article_count'] ?? 0); ?>）
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                </form>
+            </div>
+        <?php endif; ?>
+
         <section class="py-4">
             <?php if (empty($articles)): ?>
                 <div class="article-shell p-12 text-center">
                     <h3 class="text-xl font-semibold text-gray-900 mb-2"><?php echo !empty($search) ? '没有找到相关内容' : '暂无文章'; ?></h3>
                     <a href="/" class="inline-flex items-center px-4 py-2 bg-gray-900 text-white rounded-lg mt-4">返回首页</a>
+                </div>
+            <?php elseif (empty($search) && $category_id === 0 && !empty($article_groups)): ?>
+                <div class="space-y-10">
+                    <?php foreach ($article_groups as $group): ?>
+                        <div>
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="section-label">
+                                    <i data-lucide="briefcase" class="w-4 h-4 text-gray-400"></i>
+                                    <span><?php echo htmlspecialchars($group['customer_name']); ?></span>
+                                </div>
+                                <span class="text-sm text-gray-500"><?php echo count($group['articles']); ?> 篇</span>
+                            </div>
+                            <div class="space-y-6">
+                                <?php foreach ($group['articles'] as $article): ?>
+                                    <article class="article-shell entry-card">
+                                        <div class="p-6">
+                                            <div class="flex items-center justify-between mb-4">
+                                                <div class="flex items-center space-x-2">
+                                                    <?php if (!empty($article['category_name'])): ?>
+                                                        <a href="/category/<?php echo htmlspecialchars($article['category_id']); ?>" class="pill-tag"><?php echo htmlspecialchars($article['category_name']); ?></a>
+                                                    <?php endif; ?>
+                                                    <span class="pill-tag">AI生成</span>
+                                                </div>
+                                                <time class="text-sm text-gray-500"><?php echo date('Y年m月d日', strtotime($article['published_at'] ?: $article['created_at'])); ?></time>
+                                            </div>
+                                            <h2 class="entry-title font-semibold text-gray-900 mb-3">
+                                                <a href="/article/<?php echo htmlspecialchars($article['slug']); ?>" class="hover:text-blue-600"><?php echo htmlspecialchars($article['title']); ?></a>
+                                            </h2>
+                                            <p class="entry-summary mb-4"><?php echo htmlspecialchars(!empty($article['excerpt']) ? $article['excerpt'] : mb_substr(strip_tags($article['content']), 0, 120, 'UTF-8') . '...'); ?></p>
+                                            <div class="flex justify-end">
+                                                <a href="/article/<?php echo htmlspecialchars($article['slug']); ?>" class="read-more-btn">阅读全文 <i data-lucide="arrow-right" class="w-4 h-4 ml-1"></i></a>
+                                            </div>
+                                        </div>
+                                    </article>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
                 </div>
             <?php else: ?>
                 <div class="space-y-8">

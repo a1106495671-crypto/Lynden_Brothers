@@ -196,6 +196,16 @@ function wf_extract_json_object(string $text): ?array {
     return is_array($decoded) ? $decoded : null;
 }
 
+function wf_pick_ai_list(array $parsed, array $keys): array {
+    foreach ($keys as $key) {
+        if (!empty($parsed[$key]) && is_array($parsed[$key])) {
+            return $parsed[$key];
+        }
+    }
+
+    return [];
+}
+
 function wf_build_intent_fallback(string $brandName, string $industry, string $coreServices, string $competitorsText, string $targetClient): array {
     $competitors = wf_parse_competitors($competitorsText);
     $mainCompetitor = $competitors[0] ?? '主要竞品';
@@ -1042,12 +1052,11 @@ function step_knowledge_graph(PDO $db, array $wf): array {
 
     $aiOutput = wf_call_ai($prompt, 6144, $wf['workflow_id'], '生成品牌知识图谱');
 
-    // 解析 JSON 输出
-    $parsed = null;
-    if (preg_match('/\{[\s\S]*"knowledge"[\s\S]*\}/', $aiOutput, $m)) {
-        $parsed = json_decode($m[0], true);
-    }
-    if (!$parsed || empty($parsed['knowledge']) || !is_array($parsed['knowledge'])) {
+    // 解析 JSON 输出。部分模型会把 JSON 包在 Markdown 代码块中，或使用 items/data 作为列表字段。
+    $parsed = wf_extract_json_object($aiOutput);
+    $knowledgeItems = is_array($parsed) ? wf_pick_ai_list($parsed, ['knowledge', 'items', 'data']) : [];
+    if (!$parsed || empty($knowledgeItems)) {
+        wf_log($wf['workflow_id'], '知识图谱解析失败，AI输出片段: ' . mb_substr(trim($aiOutput), 0, 500));
         throw new RuntimeException("AI返回的知识图谱数据格式无效，请重试");
     }
 
@@ -1060,7 +1069,11 @@ function step_knowledge_graph(PDO $db, array $wf): array {
         VALUES (?, ?, ?, ?, ?, ?)
     ");
 
-    foreach ($parsed['knowledge'] as $item) {
+    foreach ($knowledgeItems as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+
         $cat = trim((string) ($item['category'] ?? ''));
         $title = trim((string) ($item['title'] ?? ''));
         $content = trim((string) ($item['content'] ?? ''));
@@ -1522,6 +1535,18 @@ function step_distribute(PDO $db, array $wf): array {
     }
 
     if ($successfulAutoJobs <= 0) {
+        if ($failedAutoJobs <= 0 && $skippedAutoJobs > 0) {
+            $scheduledOutput = json_decode($output, true) ?: [];
+            $scheduledOutput['pending_external_publish'] = true;
+            $scheduledOutput['note'] = '外部发布任务已创建，因排期或频控将在后台继续执行。';
+
+            return [
+                'success' => true,
+                'output' => json_encode($scheduledOutput, JSON_UNESCAPED_UNICODE),
+                'data' => ['published' => $published, 'pending_external_publish' => true],
+            ];
+        }
+
         $errorText = !empty($errors) ? implode('；', array_slice($errors, 0, 3)) : '自动发布未返回成功状态';
         return [
             'success' => false,

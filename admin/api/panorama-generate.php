@@ -5,24 +5,33 @@
  * Body: { "customer_id": "xxx" }
  */
 define('FEISHU_TREASURE', true);
-set_time_limit(300);
-session_start();
+$isCli = PHP_SAPI === 'cli';
+set_time_limit($isCli ? 900 : 300);
+if (!$isCli) {
+    session_start();
+}
 
 require_once __DIR__ . '/../../includes/config.php';
 require_once __DIR__ . '/../../includes/functions.php';
 require_once __DIR__ . '/../../includes/database_admin.php';
 
-header('Content-Type: application/json; charset=utf-8');
+if (!$isCli) {
+    header('Content-Type: application/json; charset=utf-8');
+}
 
-if (empty($_SESSION['admin_id']) && empty($_SESSION['admin_username'])) {
+if (!$isCli && empty($_SESSION['admin_id']) && empty($_SESSION['admin_username'])) {
     http_response_code(401);
     echo json_encode(['success' => false, 'error' => '请先登录']);
     exit;
 }
 
-session_write_close();
+if (!$isCli) {
+    session_write_close();
+}
 
-$customerId = trim($_POST['customer_id'] ?? $_GET['customer_id'] ?? '');
+$customerId = $isCli
+    ? trim((string) ($argv[1] ?? ''))
+    : trim($_POST['customer_id'] ?? $_GET['customer_id'] ?? '');
 if ($customerId === '') {
     http_response_code(400);
     echo json_encode(['success' => false, 'error' => '请选择客户']);

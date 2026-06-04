@@ -465,6 +465,92 @@ function get_featured_articles($limit = 6) {
     }
 }
 
+function get_front_article_customer_options() {
+    global $db;
+    try {
+        $stmt = $db->query("
+            SELECT
+                COALESCE(NULLIF(t.geo_customer_id, ''), '__unassigned') AS customer_id,
+                COALESCE(c.name, NULLIF(t.geo_brand_name, ''), '未归属客户') AS customer_name,
+                COUNT(*) AS article_count
+            FROM articles a
+            LEFT JOIN tasks t ON t.id = a.task_id
+            LEFT JOIN customers c ON c.customer_id = t.geo_customer_id
+            WHERE a.status = 'published'
+              AND a.deleted_at IS NULL
+              AND a.is_ai_generated = 1
+            GROUP BY COALESCE(NULLIF(t.geo_customer_id, ''), '__unassigned'), COALESCE(c.name, NULLIF(t.geo_brand_name, ''), '未归属客户')
+            ORDER BY customer_name ASC
+        ");
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+function get_front_generated_articles($customer_id = '', $limit = 500) {
+    global $db;
+    try {
+        $where = "
+            a.status = 'published'
+            AND a.deleted_at IS NULL
+            AND a.is_ai_generated = 1
+        ";
+        $params = [];
+        $customer_id = trim((string) $customer_id);
+        if ($customer_id !== '') {
+            if ($customer_id === '__unassigned') {
+                $where .= " AND (t.geo_customer_id IS NULL OR t.geo_customer_id = '')";
+            } else {
+                $where .= " AND t.geo_customer_id = ?";
+                $params[] = $customer_id;
+            }
+        }
+
+        $stmt = $db->prepare("
+            SELECT
+                a.*,
+                cat.name AS category_name,
+                au.name AS author_name,
+                COALESCE(NULLIF(t.geo_customer_id, ''), '__unassigned') AS customer_id,
+                COALESCE(c.name, NULLIF(t.geo_brand_name, ''), '未归属客户') AS customer_name
+            FROM articles a
+            LEFT JOIN categories cat ON a.category_id = cat.id
+            LEFT JOIN authors au ON a.author_id = au.id
+            LEFT JOIN tasks t ON t.id = a.task_id
+            LEFT JOIN customers c ON c.customer_id = t.geo_customer_id
+            WHERE {$where}
+            ORDER BY customer_name ASC, a.published_at DESC, a.created_at DESC
+            LIMIT ?
+        ");
+        foreach ($params as $index => $value) {
+            $stmt->bindValue($index + 1, $value);
+        }
+        $stmt->bindValue(count($params) + 1, max(1, (int) $limit), PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+function group_articles_by_customer(array $articles): array {
+    $groups = [];
+    foreach ($articles as $article) {
+        $customerId = trim((string) ($article['customer_id'] ?? '')) ?: '__unassigned';
+        if (!isset($groups[$customerId])) {
+            $groups[$customerId] = [
+                'customer_id' => $customerId,
+                'customer_name' => trim((string) ($article['customer_name'] ?? '')) ?: '未归属客户',
+                'articles' => [],
+            ];
+        }
+        $groups[$customerId]['articles'][] = $article;
+    }
+
+    return array_values($groups);
+}
+
 function search_articles($search, $page = 1, $per_page = 12) {
     global $db;
     try {

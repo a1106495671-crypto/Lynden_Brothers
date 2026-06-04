@@ -21,6 +21,7 @@ $db = $database->getPDO();
 
 $category_id = intval($_GET['category'] ?? 0);
 $search = clean_input($_GET['search'] ?? '');
+$customer_filter = clean_input($_GET['customer'] ?? '');
 $page = max(1, intval($_GET['page'] ?? 1));
 $per_page = max(1, intval(site_setting_value('per_page', 12)));
 
@@ -34,6 +35,8 @@ $category = null;
 
 $categories = get_categories();
 $featured_articles = get_featured_articles($featured_limit);
+$customer_options = get_front_article_customer_options();
+$article_groups = [];
 
 if (!empty($search)) {
     $articles = search_articles($search, $page, $per_page);
@@ -51,21 +54,10 @@ if (!empty($search)) {
         $view_title = '分类不存在';
     }
 } else {
-    $offset = ($page - 1) * $per_page;
-    $stmt = $db->prepare("
-        SELECT a.*, c.name as category_name, au.name as author_name
-        FROM articles a
-        LEFT JOIN categories c ON a.category_id = c.id
-        LEFT JOIN authors au ON a.author_id = au.id
-        WHERE a.status = 'published'
-          AND a.deleted_at IS NULL
-        ORDER BY a.is_featured DESC, a.published_at DESC, a.created_at DESC
-        LIMIT ? OFFSET ?
-    ");
-    $stmt->execute([$per_page, $offset]);
-    $articles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    $total_count = intval($db->query("SELECT COUNT(*) FROM articles WHERE status = 'published' AND deleted_at IS NULL")->fetchColumn());
-    $view_title = '最新文章';
+    $articles = get_front_generated_articles($customer_filter, 500);
+    $article_groups = group_articles_by_customer($articles);
+    $total_count = count($articles);
+    $view_title = '客户文章备份';
 }
 
 $total_pages = max(1, (int) ceil($total_count / $per_page));
@@ -128,4 +120,3 @@ $structured_data_blocks = [
     generate_breadcrumb_structured_data($breadcrumbs)
 ];
 theme_render('home');
-
