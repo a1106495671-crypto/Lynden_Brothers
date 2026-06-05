@@ -174,6 +174,9 @@ if ($currentReport && in_array($diagnosisSource['key'], ['estimated', 'site_craw
         $diagnosisWarning = '当前报告基于本地资料和官网抓取估算，第三方声量不可验证。要做真实全网雷达，请先到首页工作台的“雷达数据源配置”启用搜索服务商并保存 API Key。';
     }
 }
+$rerunBrandName = $currentCustomerName !== '' ? $currentCustomerName : (string) ($currentReport['brand_name'] ?? '');
+$rerunDomain = $currentCustomerDomain !== '' ? $currentCustomerDomain : (string) ($currentReport['domain'] ?? '');
+$rerunIndustry = $currentCustomerIndustry !== '' ? $currentCustomerIndustry : (string) ($currentReport['industry'] ?? '');
 
 require_once __DIR__ . '/includes/header.php';
 ?>
@@ -184,10 +187,27 @@ require_once __DIR__ . '/includes/header.php';
                         <p class="mt-1 text-sm text-gray-600">品牌 GEO 权威性六维评分与短板诊断</p>
                     </div>
                     <div class="flex items-center gap-3">
-                        <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php?new=1')); ?>" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
-                            <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
-                            重新诊断
-                        </a>
+                        <?php if ($rerunBrandName !== ''): ?>
+                            <form method="POST" class="m-0">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                                <input type="hidden" name="action" value="create_diagnosis">
+                                <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars($currentCustomerId); ?>">
+                                <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars($rerunBrandName); ?>">
+                                <input type="hidden" name="domain" value="<?php echo htmlspecialchars($rerunDomain); ?>">
+                                <input type="hidden" name="industry" value="<?php echo htmlspecialchars($rerunIndustry); ?>">
+                                <input type="hidden" name="email" value="">
+                                <input type="hidden" name="evidence" value="">
+                                <button type="submit" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+                                    <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
+                                    重新诊断
+                                </button>
+                            </form>
+                        <?php else: ?>
+                            <a href="<?php echo htmlspecialchars(admin_url('geo-diagnosis.php?new=1')); ?>" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
+                                <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
+                                重新诊断
+                            </a>
+                        <?php endif; ?>
                         <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
                             <i data-lucide="activity" class="mr-2 h-4 w-4"></i>
                             GEO监测

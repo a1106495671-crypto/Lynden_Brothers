@@ -408,14 +408,18 @@ function geo_diagnosis_create(PDO $db, array $input): string {
 }
 
 function geo_diagnosis_calculate_scores(PDO $db, string $brand, string $domain, string $industry, string $evidence): array {
-    // 优先走真实搜索 API；provider=disabled 或 API 调用失败时自动降级为估算
+    // 启用搜索 API 后必须使用真实搜索结果；只有显式 disabled 才走本地估算。
     $cfg = geo_diagnosis_data_source_config();
     $sourceMode = 'estimated';
-    if (($cfg['provider'] ?? 'disabled') !== 'disabled' && ($cfg['api_key'] ?? '') !== '') {
+    if (($cfg['provider'] ?? 'disabled') !== 'disabled') {
+        if (($cfg['api_key'] ?? '') === '') {
+            throw new RuntimeException('已启用搜索数据源，但 API Key 为空；请先保存有效 Key 后再重新诊断。');
+        }
         $realScores = geo_diagnosis_real_calculate_scores($brand, $domain, $industry, $evidence, $cfg);
         if ($realScores !== null) {
             return $realScores;
         }
+        throw new RuntimeException('搜索 API 已启用，但没有完成真实搜索诊断；请检查服务商配置后重试。');
     }
 
     // ── 降级估算：本地资料 + 可选官网抓取。没有搜索 API 时不能判断真实全网声量。 ──
@@ -1027,9 +1031,14 @@ function geo_diagnosis_search(string $provider, string $apiKey, string $query, i
         $url = 'https://serpapi.com/search.json?engine=google&q=' . $encodedQ
             . '&api_key=' . urlencode($apiKey)
             . '&hl=zh-cn&gl=cn&num=' . min($limit, 10);
-        $raw = geo_diagnosis_http_get($url, $timeout);
-        if ($raw === null) return [];
+        $raw = geo_diagnosis_http_get_or_fail($url, $timeout, [], 'SerpAPI');
         $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('SerpAPI 返回不是有效 JSON。');
+        }
+        if (!empty($data['error'])) {
+            throw new RuntimeException('SerpAPI 返回错误：' . (string) $data['error']);
+        }
         foreach ((array) ($data['organic_results'] ?? []) as $item) {
             $results[] = [
                 'title'   => (string) ($item['title'] ?? ''),
@@ -1040,9 +1049,14 @@ function geo_diagnosis_search(string $provider, string $apiKey, string $query, i
     } elseif ($provider === 'bing') {
         $url = 'https://api.bing.microsoft.com/v7.0/search?q=' . $encodedQ
             . '&count=' . min($limit, 50) . '&mkt=zh-CN&setLang=zh-hans';
-        $raw = geo_diagnosis_http_get($url, $timeout, ['Ocp-Apim-Subscription-Key: ' . $apiKey]);
-        if ($raw === null) return [];
+        $raw = geo_diagnosis_http_get_or_fail($url, $timeout, ['Ocp-Apim-Subscription-Key: ' . $apiKey], 'Bing Search API');
         $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Bing Search API 返回不是有效 JSON。');
+        }
+        if (!empty($data['error']['message'])) {
+            throw new RuntimeException('Bing Search API 返回错误：' . (string) $data['error']['message']);
+        }
         foreach ((array) ($data['webPages']['value'] ?? []) as $item) {
             $results[] = [
                 'title'   => (string) ($item['name'] ?? ''),
@@ -1055,9 +1069,14 @@ function geo_diagnosis_search(string $provider, string $apiKey, string $query, i
             . '&key=' . urlencode($apiKey)
             . '&cx=' . urlencode($googleCseId)
             . '&num=' . min($limit, 10) . '&hl=zh-CN';
-        $raw = geo_diagnosis_http_get($url, $timeout);
-        if ($raw === null) return [];
+        $raw = geo_diagnosis_http_get_or_fail($url, $timeout, [], 'Google Custom Search');
         $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Google Custom Search 返回不是有效 JSON。');
+        }
+        if (!empty($data['error']['message'])) {
+            throw new RuntimeException('Google Custom Search 返回错误：' . (string) $data['error']['message']);
+        }
         foreach ((array) ($data['items'] ?? []) as $item) {
             $results[] = [
                 'title'   => (string) ($item['title'] ?? ''),
@@ -1065,28 +1084,46 @@ function geo_diagnosis_search(string $provider, string $apiKey, string $query, i
                 'snippet' => (string) ($item['snippet'] ?? ''),
             ];
         }
+    } elseif ($provider === 'google_cse') {
+        throw new RuntimeException('Google Custom Search 已启用，但缺少 Search Engine ID（CX）。');
     } elseif ($provider === 'bocha') {
         $payload = json_encode([
             'query'     => $query,
             'count'     => min($limit, 10),
             'freshness' => 'noLimit',
             'summary'   => false,
-        ]);
+        ], JSON_UNESCAPED_UNICODE);
         $ch = curl_init('https://api.bochaai.com/v1/web-search');
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $payload,
             CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_CONNECTTIMEOUT => min(10, max(3, $timeout)),
+            CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_HTTPHEADER     => [
                 'Authorization: Bearer ' . $apiKey,
                 'Content-Type: application/json',
             ],
         ]);
         $raw = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
         curl_close($ch);
-        if ($raw === false || $raw === '') return [];
+        if ($raw === false || $raw === '' || $curlError !== '') {
+            throw new RuntimeException('博查 AI 搜索调用失败：' . ($curlError !== '' ? $curlError : '空响应'));
+        }
         $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('博查 AI 返回不是有效 JSON。');
+        }
+        if ($httpCode < 200 || $httpCode >= 400) {
+            $message = (string) ($data['message'] ?? $data['error']['message'] ?? '未知错误');
+            throw new RuntimeException('博查 AI 搜索调用失败：HTTP ' . $httpCode . '，' . $message);
+        }
+        if (isset($data['code']) && !in_array((string) $data['code'], ['0', '200'], true) && empty($data['data'])) {
+            throw new RuntimeException('博查 AI 返回错误：' . (string) ($data['message'] ?? $data['code']));
+        }
         foreach ((array) ($data['data']['webPages']['value'] ?? []) as $item) {
             $results[] = [
                 'title'   => (string) ($item['name'] ?? ''),
@@ -1094,9 +1131,44 @@ function geo_diagnosis_search(string $provider, string $apiKey, string $query, i
                 'snippet' => (string) ($item['snippet'] ?? ''),
             ];
         }
+    } else {
+        throw new RuntimeException('不支持的搜索数据源：' . $provider);
     }
 
     return $results;
+}
+
+function geo_diagnosis_http_get_or_fail(string $url, int $timeout = 15, array $headers = [], string $label = '搜索 API'): string {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => min(10, max(3, $timeout)),
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 3,
+    ]);
+    if (!empty($headers)) {
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    }
+    $response = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false || $response === '' || $curlError !== '') {
+        throw new RuntimeException($label . ' 调用失败：' . ($curlError !== '' ? $curlError : '空响应'));
+    }
+    if ($httpCode < 200 || $httpCode >= 400) {
+        $message = '';
+        $data = json_decode((string) $response, true);
+        if (is_array($data)) {
+            $message = (string) ($data['error']['message'] ?? $data['message'] ?? $data['error'] ?? '');
+        }
+        throw new RuntimeException($label . ' 调用失败：HTTP ' . $httpCode . ($message !== '' ? '，' . $message : ''));
+    }
+
+    return (string) $response;
 }
 
 /**
@@ -1205,11 +1277,6 @@ function geo_diagnosis_real_calculate_scores(
     $homepageHtml = '';
     if ($enableCrawl && $domain !== '') {
         $homepageHtml = (string) (geo_diagnosis_crawl_url('https://' . $domain, $timeout) ?? '');
-    }
-
-    // 如果所有搜索均失败，降级为估算
-    if (empty($thirdResults) && empty($ugcResults) && empty($authResults) && empty($siteResults) && $homepageHtml === '') {
-        return null;
     }
 
     // ── 评分 ──

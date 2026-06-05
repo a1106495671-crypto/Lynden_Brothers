@@ -17,8 +17,51 @@ require_admin_login();
 $message = '';
 $error = '';
 
+function dashboard_json_response(array $payload, int $statusCode = 200): void {
+    http_response_code($statusCode);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 try {
     geo_diagnosis_ensure_schema($db);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'test_radar_data_source') {
+        if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+            dashboard_json_response(['ok' => false, 'message' => 'CSRF验证失败'], 403);
+        }
+
+        $provider = trim((string) ($_POST['provider'] ?? 'disabled'));
+        $allowedProviders = ['bing', 'serpapi', 'google_cse', 'bocha'];
+        if (!in_array($provider, $allowedProviders, true)) {
+            dashboard_json_response(['ok' => false, 'message' => '请先选择一个可用的搜索服务商。'], 400);
+        }
+
+        $savedConfig = geo_diagnosis_data_source_config();
+        $apiKey = trim((string) ($_POST['api_key'] ?? ''));
+        if ($apiKey === '' && empty($_POST['clear_api_key'])) {
+            $apiKey = (string) ($savedConfig['api_key'] ?? '');
+        }
+        if ($apiKey === '') {
+            dashboard_json_response(['ok' => false, 'message' => '请先填写 API Key，或保留已保存的 Key 后再测试。'], 400);
+        }
+
+        try {
+            $googleCseId = trim((string) ($_POST['google_cse_id'] ?? ''));
+            $limit = max(1, min(5, (int) ($_POST['result_limit'] ?? 5)));
+            $timeout = max(3, min(60, (int) ($_POST['timeout_seconds'] ?? 15)));
+            $results = geo_diagnosis_search($provider, $apiKey, 'GEO AI search test', $limit, $timeout, $googleCseId);
+            $firstTitle = trim((string) ($results[0]['title'] ?? ''));
+
+            dashboard_json_response([
+                'ok' => true,
+                'message' => '连接成功，搜索 API 返回 ' . count($results) . ' 条结果。' . ($firstTitle !== '' ? ' 首条：' . $firstTitle : ''),
+            ]);
+        } catch (Throwable $e) {
+            dashboard_json_response(['ok' => false, 'message' => '测试失败：' . $e->getMessage()], 502);
+        }
+    }
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_radar_data_source') {
         if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -388,6 +431,8 @@ $quick_start_steps = [
         'icon' => 'plug',
         'link' => 'ai-configurator.php',
         'button' => '配置 AI 模型',
+        'secondary_link' => 'dashboard.php#radar-data-source-config',
+        'secondary_button' => '配置搜索 API',
         'tone' => 'blue',
     ],
     [
@@ -574,6 +619,10 @@ require_once __DIR__ . '/includes/header.php';
                     </p>
                 </div>
                 <div class="flex flex-wrap gap-2">
+                    <a href="<?php echo htmlspecialchars(admin_url('dashboard.php#radar-data-source-config')); ?>" class="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                        <i data-lucide="search" class="mr-2 h-4 w-4"></i>
+                        配置搜索 API
+                    </a>
                     <button onclick="location.reload()" class="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                         <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
                         刷新
@@ -622,10 +671,18 @@ require_once __DIR__ . '/includes/header.php';
                                             <?php endforeach; ?>
                                         </div>
                                     <?php else: ?>
-                                        <a href="<?php echo htmlspecialchars(admin_url($step['link'])); ?>" class="mt-4 inline-flex h-9 items-center rounded-lg <?php echo $step['tone'] === 'slate' ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'; ?> px-3 text-sm font-semibold">
-                                            <?php echo htmlspecialchars($step['button']); ?>
-                                            <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4"></i>
-                                        </a>
+                                        <div class="mt-4 flex flex-wrap gap-2">
+                                            <a href="<?php echo htmlspecialchars(admin_url($step['link'])); ?>" class="inline-flex h-9 items-center rounded-lg <?php echo $step['tone'] === 'slate' ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'; ?> px-3 text-sm font-semibold">
+                                                <?php echo htmlspecialchars($step['button']); ?>
+                                                <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4"></i>
+                                            </a>
+                                            <?php if (!empty($step['secondary_link']) && !empty($step['secondary_button'])): ?>
+                                                <a href="<?php echo htmlspecialchars(admin_url($step['secondary_link'])); ?>" class="inline-flex h-9 items-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                                                    <?php echo htmlspecialchars($step['secondary_button']); ?>
+                                                    <i data-lucide="arrow-right" class="ml-1.5 h-4 w-4"></i>
+                                                </a>
+                                            <?php endif; ?>
+                                        </div>
                                     <?php endif; ?>
                                 </div>
                             </div>
@@ -635,7 +692,7 @@ require_once __DIR__ . '/includes/header.php';
                     <div id="radar-data-source-config" class="border-t border-gray-100 bg-gray-50/50 px-6 py-5 scroll-mt-24">
                         <div class="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                             <div>
-                                <h3 class="text-base font-semibold text-gray-900">雷达数据源配置</h3>
+                                <h3 class="text-base font-semibold text-gray-900">雷达搜索 API 配置</h3>
                                 <p class="mt-1 text-sm <?php echo $searchProviderEnabled ? 'text-green-700' : 'text-gray-500'; ?>">
                                     <?php if ($searchProviderEnabled): ?>
                                         当前已启用 <?php echo htmlspecialchars($searchProviderName); ?>，API Key 已保存。重新诊断会使用搜索 API。
@@ -649,21 +706,22 @@ require_once __DIR__ . '/includes/header.php';
                                 去重新诊断
                             </a>
                         </div>
-                        <form method="POST" class="rounded-lg border border-gray-200 bg-white p-4">
+                        <form method="POST" class="rounded-lg border border-gray-200 bg-white p-4" id="radar-data-source-form">
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($dashboardCsrfToken); ?>">
                             <input type="hidden" name="action" value="save_radar_data_source">
                             <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
                                 <div>
-                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-search-provider">搜索服务商</label>
+                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-search-provider">搜索服务商（雷达诊断用）</label>
                                     <select id="dashboard-search-provider" name="provider" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                        <?php foreach (['disabled' => '未启用', 'bing' => 'Bing Search API', 'serpapi' => 'SerpAPI', 'google_cse' => 'Google Custom Search', 'bocha' => '博查AI (Bocha)'] as $value => $label): ?>
+                                        <?php foreach (['disabled' => '未启用', 'bocha' => '博查 AI Web Search', 'bing' => 'Bing Search API', 'serpapi' => 'SerpAPI', 'google_cse' => 'Google Custom Search'] as $value => $label): ?>
                                             <option value="<?php echo htmlspecialchars($value); ?>" <?php echo $dataSourceConfig['provider'] === $value ? 'selected' : ''; ?>><?php echo htmlspecialchars($label); ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
                                 <div>
-                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-search-api-key">API Key</label>
-                                    <input id="dashboard-search-api-key" name="api_key" type="password" autocomplete="off" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="<?php echo $dataSourceConfig['api_key_configured'] ? '已保存，留空则不修改' : '粘贴搜索 API Key'; ?>">
+                                    <label class="mb-2 block text-sm font-medium text-gray-700" for="dashboard-search-api-key">搜索 API Key</label>
+                                    <input id="dashboard-search-api-key" name="api_key" type="password" autocomplete="off" class="block h-10 w-full rounded-md border border-gray-300 px-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="<?php echo $dataSourceConfig['api_key_configured'] ? '已保存，留空则不修改' : '粘贴博查 Web Search API Key'; ?>">
+                                    <p class="mt-2 text-xs text-gray-500">这里填写博查 Web Search 的 Key，不是 AI 聊天模型 Key。</p>
                                     <?php if ($dataSourceConfig['api_key_configured']): ?>
                                         <label class="mt-2 inline-flex items-center text-xs text-gray-500">
                                             <input type="checkbox" name="clear_api_key" value="1" class="mr-2 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
@@ -690,7 +748,12 @@ require_once __DIR__ . '/includes/header.php';
                                     </label>
                                 </div>
                             </div>
-                            <div class="mt-4 flex justify-end">
+                            <div id="radar-test-result" class="mt-4 hidden rounded-md border px-3 py-2 text-sm"></div>
+                            <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                                <button type="button" id="radar-test-button" class="inline-flex h-10 items-center justify-center rounded-md border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                                    <i data-lucide="plug-zap" class="mr-2 h-4 w-4"></i>
+                                    测试连接
+                                </button>
                                 <button type="submit" class="inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                                     <i data-lucide="save" class="mr-2 h-4 w-4"></i>
                                     保存数据源配置
@@ -762,6 +825,69 @@ require_once __DIR__ . '/includes/header.php';
             </div>
 
 <?php
+$additional_js = <<<'HTML'
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var form = document.getElementById('radar-data-source-form');
+    var testButton = document.getElementById('radar-test-button');
+    var resultBox = document.getElementById('radar-test-result');
+    if (!form || !testButton || !resultBox) {
+        return;
+    }
+
+    function showRadarTestResult(ok, message) {
+        resultBox.className = 'mt-4 rounded-md border px-3 py-2 text-sm ' + (
+            ok
+                ? 'border-green-200 bg-green-50 text-green-700'
+                : 'border-red-200 bg-red-50 text-red-700'
+        );
+        resultBox.textContent = message;
+        resultBox.classList.remove('hidden');
+    }
+
+    testButton.addEventListener('click', function () {
+        var formData = new FormData(form);
+        formData.set('action', 'test_radar_data_source');
+
+        testButton.disabled = true;
+        testButton.classList.add('cursor-not-allowed', 'opacity-70');
+        resultBox.className = 'mt-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700';
+        resultBox.textContent = '正在测试搜索 API...';
+        resultBox.classList.remove('hidden');
+
+        fetch(window.location.href.split('#')[0], {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin',
+            headers: {'X-Requested-With': 'XMLHttpRequest'}
+        })
+            .then(function (response) {
+                return response.text().then(function (text) {
+                    try {
+                        return JSON.parse(text);
+                    } catch (error) {
+                        return {
+                            ok: false,
+                            message: '测试失败：服务器返回 HTTP ' + response.status + '，但不是 JSON。' + text.replace(/\s+/g, ' ').slice(0, 180)
+                        };
+                    }
+                });
+            })
+            .then(function (data) {
+                showRadarTestResult(!!data.ok, data.message || '测试完成，但没有返回详细信息。');
+            })
+            .catch(function (error) {
+                showRadarTestResult(false, '测试失败：' + error.message);
+            })
+            .finally(function () {
+                testButton.disabled = false;
+                testButton.classList.remove('cursor-not-allowed', 'opacity-70');
+            });
+    });
+});
+</script>
+HTML;
+
 // 包含统一底部
 require_once __DIR__ . '/includes/footer.php';
 ?>

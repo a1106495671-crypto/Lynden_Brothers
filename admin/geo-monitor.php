@@ -723,10 +723,10 @@ require_once __DIR__ . '/includes/header.php';
                 foreach ($monitorTabs as $key => $tab):
                     $isActive = $key === 'baseline';
                 ?>
-                    <button type="button" data-monitor-tab="<?php echo htmlspecialchars($key, ENT_QUOTES, 'UTF-8'); ?>"
+                    <button type="button" data-monitor-tab="<?php echo htmlspecialchars($key, ENT_QUOTES, 'UTF-8'); ?>" aria-selected="<?php echo $isActive ? 'true' : 'false'; ?>"
                         class="monitor-tab cursor-pointer rounded-lg px-4 py-2.5 text-left <?php echo $isActive ? 'bg-slate-900 text-white' : 'text-gray-600 hover:bg-gray-100'; ?>">
                         <div class="text-sm font-semibold"><?php echo $tab['label']; ?></div>
-                        <div class="mt-0.5 text-xs <?php echo $isActive ? 'text-slate-300' : 'text-gray-400'; ?>"><?php echo $tab['desc']; ?></div>
+                        <div data-monitor-tab-desc class="mt-0.5 text-xs <?php echo $isActive ? 'text-slate-300' : 'text-gray-400'; ?>"><?php echo $tab['desc']; ?></div>
                     </button>
                 <?php endforeach; ?>
             </div>
@@ -1496,6 +1496,47 @@ require_once __DIR__ . '/includes/header.php';
 </div>
 
 <script>
+(function () {
+    function switchMonitorTab(target) {
+        if (!target) return false;
+        document.querySelectorAll('[data-monitor-tab]').forEach(function (tab) {
+            var active = tab.getAttribute('data-monitor-tab') === target;
+            tab.classList.toggle('bg-slate-900', active);
+            tab.classList.toggle('text-white', active);
+            tab.classList.toggle('text-gray-600', !active);
+            tab.classList.toggle('hover:bg-gray-100', !active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            var desc = tab.querySelector('[data-monitor-tab-desc]');
+            if (desc) {
+                desc.classList.toggle('text-slate-300', active);
+                desc.classList.toggle('text-gray-400', !active);
+            }
+        });
+        document.querySelectorAll('[data-monitor-panel]').forEach(function (panel) {
+            panel.classList.toggle('hidden', panel.getAttribute('data-monitor-panel') !== target);
+        });
+        document.dispatchEvent(new CustomEvent('geo-monitor-tab-change', { detail: { target: target } }));
+        return false;
+    }
+
+    window.geoMonitorSwitchTab = switchMonitorTab;
+    document.addEventListener('click', function (event) {
+        var tab = event.target.closest('[data-monitor-tab]');
+        if (tab) {
+            event.preventDefault();
+            switchMonitorTab(tab.getAttribute('data-monitor-tab'));
+            return;
+        }
+        var opener = event.target.closest('[data-open-monitor-tab]');
+        if (opener) {
+            event.preventDefault();
+            switchMonitorTab(opener.getAttribute('data-open-monitor-tab'));
+        }
+    }, true);
+})();
+</script>
+
+<script>
 document.addEventListener('DOMContentLoaded', () => {
     const trendPoints = <?php echo json_encode($trendPoints, $jsonOptions); ?>;
     const radarDimensions = <?php echo json_encode($radarDimensions, $jsonOptions); ?>;
@@ -1506,16 +1547,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const panels = document.querySelectorAll('[data-monitor-panel]');
 
     function activateTab(target) {
-        tabs.forEach((tab) => {
-            const isActive = tab.dataset.monitorTab === target;
-            tab.classList.toggle('bg-slate-900', isActive);
-            tab.classList.toggle('text-white', isActive);
-            tab.classList.toggle('text-gray-600', !isActive);
-            tab.classList.toggle('hover:bg-gray-100', !isActive);
-        });
-        panels.forEach((panel) => {
-            panel.classList.toggle('hidden', panel.dataset.monitorPanel !== target);
-        });
+        if (window.geoMonitorSwitchTab) window.geoMonitorSwitchTab(target);
         if (target === 'trend') renderTrendChart();
         if (target === 'competitors') renderRadarChart(0);
     }
@@ -1676,6 +1708,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.querySelectorAll('[data-radar-index]').forEach((button) => {
         button.addEventListener('click', () => renderRadarChart(Number(button.dataset.radarIndex)));
+    });
+
+    document.addEventListener('geo-monitor-tab-change', (event) => {
+        const target = event.detail?.target;
+        if (target === 'trend') renderTrendChart();
+        if (target === 'competitors') renderRadarChart(0);
     });
 
     const platformFilter = document.getElementById('conversation-platform-filter');
