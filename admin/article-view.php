@@ -126,6 +126,15 @@ $stmt = $db->prepare("
 $stmt->execute([$article_id]);
 $article_images = $stmt->fetchAll();
 
+$article_content = (string) ($article['content'] ?? '');
+$article_display_content = $article_content;
+if ($article_display_content !== '') {
+    $title_pattern = preg_quote(trim((string) $article['title']), '/');
+    $article_display_content = preg_replace('/^\s*#\s*' . $title_pattern . '\s*(?:\r?\n)+/u', '', $article_display_content, 1);
+}
+$article_rendered_html = markdown_to_html($article_display_content);
+$copy_markdown_text = trim($article_content !== '' ? $article_content : ('# ' . ($article['title'] ?? '') . "\n\n" . ($article['excerpt'] ?? '')));
+
 $page_title = '查看文章';
 $page_header = '
 <div class="flex items-center space-x-4">
@@ -138,17 +147,28 @@ $page_header = '
     </div>
 </div>';
 $additional_css = '
-<script src="/admin/assets/js/marked.min.js"></script>
 <style>
-    .markdown-content { line-height: 1.6; }
-    .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }
-    .markdown-content h1 { font-size: 1.5em; }
-    .markdown-content h2 { font-size: 1.3em; }
-    .markdown-content h3 { font-size: 1.1em; }
-    .markdown-content p { margin-bottom: 1em; }
-    .markdown-content ul, .markdown-content ol { margin-bottom: 1em; padding-left: 1.5em; }
-    .markdown-content img { max-width: 100%; height: auto; margin: 1em 0; }
-    .markdown-content blockquote { border-left: 4px solid #e5e7eb; padding-left: 1em; margin: 1em 0; color: #6b7280; }
+    .markdown-content { color: #374151; font-size: 16px; line-height: 1.85; }
+    .markdown-content h1, .markdown-content h2, .markdown-content h3, .markdown-content h4 { color: #111827; font-weight: 700; line-height: 1.35; margin-top: 1.75rem; margin-bottom: 1rem; }
+    .markdown-content h1 { font-size: 1.875rem; }
+    .markdown-content h2 { font-size: 1.5rem; }
+    .markdown-content h3 { font-size: 1.25rem; }
+    .markdown-content h4 { font-size: 1.125rem; }
+    .markdown-content p, .markdown-content ul, .markdown-content ol, .markdown-content blockquote { margin-bottom: 1rem; }
+    .markdown-content ul, .markdown-content ol { padding-left: 1.5rem; }
+    .markdown-content img { max-width: 100%; height: auto; margin: 1rem 0; border-radius: 0.5rem; }
+    .markdown-content blockquote { border-left: 4px solid #e5e7eb; padding-left: 1rem; margin: 1rem 0; color: #6b7280; }
+    .markdown-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    .markdown-content th, .markdown-content td { border: 1px solid #e5e7eb; padding: 0.625rem; text-align: left; }
+    .markdown-content th { background: #f9fafb; color: #111827; font-weight: 600; }
+    .article-copy-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.625rem; margin: 1rem 0 1.5rem; }
+    .article-copy-button { display: inline-flex; align-items: center; gap: 0.4rem; min-height: 2.25rem; padding: 0.5rem 0.85rem; border: 1px solid #d1d5db; border-radius: 0.375rem; background: #fff; color: #374151; font-size: 0.875rem; font-weight: 500; line-height: 1; }
+    .article-copy-button:hover { background: #f9fafb; border-color: #9ca3af; color: #111827; }
+    .article-copy-button--primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .article-copy-button--primary:hover { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+    .article-copy-status { min-height: 1.25rem; color: #059669; font-size: 0.875rem; }
+    .article-copy-status[data-state="warning"] { color: #b45309; }
+    .article-copy-status[data-state="error"] { color: #dc2626; }
 </style>';
 
 require_once __DIR__ . '/includes/header.php';
@@ -174,16 +194,31 @@ require_once __DIR__ . '/includes/header.php';
             </div>
             <div class="px-6 py-6">
                 <div class="space-y-6">
-                    <div>
-                        <h1 class="text-2xl font-bold text-gray-900 mb-2"><?php echo htmlspecialchars($article['title']); ?></h1>
-                        <?php if ($article['excerpt']): ?>
-                            <p class="text-gray-600 italic"><?php echo htmlspecialchars($article['excerpt']); ?></p>
-                        <?php endif; ?>
-                    </div>
-                    <div class="prose max-w-none markdown-content" id="article-content"></div>
-                </div>
-            </div>
-        </div>
+	                    <div>
+	                        <h1 class="text-2xl font-bold text-gray-900 mb-2"><?php echo htmlspecialchars($article['title']); ?></h1>
+	                    </div>
+	                    <div class="article-copy-toolbar" aria-label="文章复制工具">
+	                        <button type="button" class="article-copy-button article-copy-button--primary" data-copy-rich>
+	                            <i data-lucide="copy-check" class="w-4 h-4"></i>复制带格式
+	                        </button>
+	                        <button type="button" class="article-copy-button" data-copy-markdown>
+	                            <i data-lucide="file-text" class="w-4 h-4"></i>复制 Markdown
+	                        </button>
+	                        <span class="article-copy-status" data-copy-status aria-live="polite"></span>
+	                    </div>
+	                    <div class="prose max-w-none markdown-content" id="article-content">
+	                        <?php echo $article_rendered_html; ?>
+	                    </div>
+	                    <template id="articleRichCopyTemplate">
+	                        <article>
+	                            <h1><?php echo htmlspecialchars($article['title']); ?></h1>
+	                            <?php echo $article_rendered_html; ?>
+	                        </article>
+	                    </template>
+	                    <script type="application/json" id="articleMarkdownCopyData"><?php echo json_encode($copy_markdown_text, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?></script>
+	                </div>
+	            </div>
+	        </div>
 
         <?php if (!empty($article_images)): ?>
             <div class="mt-6 bg-white shadow rounded-lg">
@@ -290,43 +325,116 @@ require_once __DIR__ . '/includes/header.php';
 </div>
 
 <script>
-    function escapeMarkdownHtml(value) {
-        return value
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-    }
+    document.addEventListener('DOMContentLoaded', function () {
+        const richButton = document.querySelector('[data-copy-rich]');
+        const markdownButton = document.querySelector('[data-copy-markdown]');
+        const status = document.querySelector('[data-copy-status]');
+        const richTemplate = document.getElementById('articleRichCopyTemplate');
+        const markdownData = document.getElementById('articleMarkdownCopyData');
 
-    function renderMarkdown(content) {
-        if (typeof marked !== 'undefined') {
-            return marked.parse(content);
+        if (!richButton || !markdownButton || !status || !richTemplate || !markdownData) {
+            return;
         }
 
-        let html = escapeMarkdownHtml(content);
-        html = html
-            .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-            .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-            .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*/g, '$1<em>$2</em>')
-            .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-            .replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
-            .replace(/^- (.+)$/gm, '<ul><li>$1</li></ul>')
-            .replace(/<\/ul>\s*<ul>/g, '');
+        let markdownText = '';
+        try {
+            markdownText = JSON.parse(markdownData.textContent || '""');
+        } catch (error) {
+            markdownText = '';
+        }
 
-        return html
-            .split(/\n{2,}/)
-            .map((block) => /^\s*<(h\d|ul|blockquote|img)/.test(block) ? block : `<p>${block.replace(/\n/g, '<br>')}</p>`)
-            .join('');
-    }
+        function setCopyStatus(message, type) {
+            status.textContent = message;
+            status.dataset.state = type || 'success';
+            window.clearTimeout(setCopyStatus.timer);
+            setCopyStatus.timer = window.setTimeout(function () {
+                status.textContent = '';
+                status.removeAttribute('data-state');
+            }, 2600);
+        }
 
-    document.addEventListener('DOMContentLoaded', function () {
-        const content = <?php echo json_encode($article['content']); ?>;
-        const contentElement = document.getElementById('article-content');
-        contentElement.innerHTML = renderMarkdown(content);
+        function fallbackCopyText(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.top = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            const copied = document.execCommand('copy');
+            textarea.remove();
+            if (!copied) {
+                throw new Error('copy failed');
+            }
+        }
+
+        async function copyPlainText(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+            fallbackCopyText(text);
+        }
+
+        function applyRichCopyStyles(root) {
+            const baseText = 'color:#374151;font-size:16px;line-height:1.85;margin:0 0 16px;';
+            root.querySelectorAll('h1').forEach(function (node) { node.setAttribute('style', 'color:#111827;font-size:28px;line-height:1.35;font-weight:700;margin:0 0 20px;'); });
+            root.querySelectorAll('h2').forEach(function (node) { node.setAttribute('style', 'color:#111827;font-size:24px;line-height:1.4;font-weight:700;margin:30px 0 16px;'); });
+            root.querySelectorAll('h3').forEach(function (node) { node.setAttribute('style', 'color:#111827;font-size:20px;line-height:1.45;font-weight:700;margin:24px 0 14px;'); });
+            root.querySelectorAll('h4').forEach(function (node) { node.setAttribute('style', 'color:#111827;font-size:18px;line-height:1.45;font-weight:700;margin:22px 0 12px;'); });
+            root.querySelectorAll('p').forEach(function (node) { node.setAttribute('style', baseText); });
+            root.querySelectorAll('ul,ol').forEach(function (node) { node.setAttribute('style', baseText + 'padding-left:24px;'); });
+            root.querySelectorAll('li').forEach(function (node) { node.setAttribute('style', 'margin:0 0 10px;color:#374151;line-height:1.85;'); });
+            root.querySelectorAll('blockquote').forEach(function (node) { node.setAttribute('style', 'border-left:3px solid #d1d5db;padding-left:16px;color:#6b7280;margin:0 0 16px;line-height:1.85;'); });
+            root.querySelectorAll('table').forEach(function (node) { node.setAttribute('style', 'border-collapse:collapse;width:100%;margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;'); });
+            root.querySelectorAll('th').forEach(function (node) { node.setAttribute('style', 'border:1px solid #e5e7eb;background:#f9fafb;color:#111827;font-weight:600;padding:10px;text-align:left;'); });
+            root.querySelectorAll('td').forEach(function (node) { node.setAttribute('style', 'border:1px solid #e5e7eb;padding:10px;text-align:left;'); });
+            root.querySelectorAll('a').forEach(function (node) { node.setAttribute('style', 'color:#2563eb;text-decoration:none;'); });
+            root.querySelectorAll('code').forEach(function (node) { node.setAttribute('style', 'background:#f3f4f6;border-radius:5px;padding:2px 6px;font-size:14px;'); });
+        }
+
+        async function copyRichArticle() {
+            const wrapper = document.createElement('div');
+            wrapper.appendChild(richTemplate.content.cloneNode(true));
+            applyRichCopyStyles(wrapper);
+            const html = wrapper.innerHTML;
+            const plainText = wrapper.textContent.replace(/\n{3,}/g, '\n\n').trim();
+
+            if (navigator.clipboard && window.ClipboardItem) {
+                await navigator.clipboard.write([
+                    new ClipboardItem({
+                        'text/html': new Blob([html], { type: 'text/html' }),
+                        'text/plain': new Blob([plainText], { type: 'text/plain' })
+                    })
+                ]);
+                return;
+            }
+
+            fallbackCopyText(plainText);
+        }
+
+        richButton.addEventListener('click', async function () {
+            try {
+                await copyRichArticle();
+                setCopyStatus('已复制带格式内容', 'success');
+            } catch (error) {
+                try {
+                    await copyPlainText(markdownText);
+                    setCopyStatus('富文本不可用，已复制 Markdown', 'warning');
+                } catch (fallbackError) {
+                    setCopyStatus('复制失败，请手动选择文章内容', 'error');
+                }
+            }
+        });
+
+        markdownButton.addEventListener('click', async function () {
+            try {
+                await copyPlainText(markdownText);
+                setCopyStatus('已复制 Markdown', 'success');
+            } catch (error) {
+                setCopyStatus('复制失败，请手动选择文章内容', 'error');
+            }
+        });
     });
 
     function deleteArticle() {

@@ -349,6 +349,62 @@ body {
     line-height: 1.85;
 }
 
+.article-copy-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.625rem;
+    margin-bottom: 1.5rem;
+}
+
+.article-copy-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 2.25rem;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.5rem;
+    background: #ffffff;
+    color: #374151;
+    font-size: 0.875rem;
+    font-weight: 500;
+    line-height: 1;
+    transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.article-copy-button:hover {
+    background: #f9fafb;
+    border-color: #9ca3af;
+    color: #111827;
+}
+
+.article-copy-button--primary {
+    background: #111827;
+    border-color: #111827;
+    color: #ffffff;
+}
+
+.article-copy-button--primary:hover {
+    background: #1f2937;
+    border-color: #1f2937;
+    color: #ffffff;
+}
+
+.article-copy-status {
+    min-height: 1.25rem;
+    color: #059669;
+    font-size: 0.875rem;
+}
+
+.article-copy-status[data-state="warning"] {
+    color: #b45309;
+}
+
+.article-copy-status[data-state="error"] {
+    color: #dc2626;
+}
+
 .article-prose h1,
 .article-prose h2,
 .article-prose h3,

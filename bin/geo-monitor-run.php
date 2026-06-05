@@ -1,7 +1,7 @@
 <?php
 /**
  * GEO 监测定时脚本 v2
- * 用法：php bin/geo-monitor-run.php [--customer=<id>] [--dry-run]
+ * 用法：php bin/geo-monitor-run.php [--customer=<id>] [--dry-run] [--force]
  *
  * 每天跑一次：
  *  1. 对每个活跃客户的监测关键词调用 AI，检查品牌是否被提及
@@ -23,9 +23,10 @@ require_once $projectRoot . '/includes/playwright_monitor_client.php';
 set_time_limit(600);
 
 // ── 参数解析 ───────────────────────────────────────────────────────────────
-$opts      = getopt('', ['customer:', 'dry-run']);
+$opts      = getopt('', ['customer:', 'dry-run', 'force']);
 $filterCid = $opts['customer'] ?? null;
 $dryRun    = isset($opts['dry-run']);
+$forceRun  = isset($opts['force']);
 
 function gm_log(string $msg): void {
     echo '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n";
@@ -126,6 +127,9 @@ if (empty($providers)) {
 }
 
 gm_log('可用提供商：' . implode(', ', array_keys($providers)));
+if ($forceRun) {
+    gm_log('手动复测模式：忽略今日已查去重，将追加写入新监测记录');
+}
 
 // ── Playwright 浏览器监测（最准确模式） ────────────────────────────────────
 $playwrightAvailable = playwright_is_available();
@@ -258,16 +262,18 @@ foreach ($customers as $customer) {
         }
 
         foreach (array_keys($providers) as $pkey) {
-            // 今天已有记录则跳过
-            $stmtChk = $db->prepare("
-                SELECT id FROM geo_monitor_records
-                WHERE customer_id=? AND provider=? AND query_text=? AND queried_at=?
-                LIMIT 1
-            ");
-            $stmtChk->execute([$cid, $pkey, $kw, $today]);
-            if ($stmtChk->fetch()) {
-                gm_log("  [{$pkey}] \"{$kw}\" 今日已查，跳过");
-                continue;
+            // 今天已有记录则跳过；手动 --force 复测时允许追加证据。
+            if (!$forceRun) {
+                $stmtChk = $db->prepare("
+                    SELECT id FROM geo_monitor_records
+                    WHERE customer_id=? AND provider=? AND query_text=? AND queried_at=?
+                    LIMIT 1
+                ");
+                $stmtChk->execute([$cid, $pkey, $kw, $today]);
+                if ($stmtChk->fetch()) {
+                    gm_log("  [{$pkey}] \"{$kw}\" 今日已查，跳过");
+                    continue;
+                }
             }
 
             gm_log("  [{$pkey}] 查询：{$kw}");

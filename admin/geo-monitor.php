@@ -9,17 +9,149 @@ session_start();
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/database_admin.php';
+require_once __DIR__ . '/../includes/monitor_api_service.php';
+require_once __DIR__ . '/../includes/citation_simulator_service.php';
 require_once __DIR__ . '/../includes/geo_monitor_alert_service.php';
 require_once __DIR__ . '/../includes/geo_baseline_qa_service.php';
 
 require_admin_login();
 
+function geo_monitor_h($value): string {
+    return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+}
+
+function geo_monitor_load_customer(PDO $db, string $customerId): ?array {
+    $customerId = trim($customerId);
+    if ($customerId === '') {
+        return null;
+    }
+    try {
+        $stmt = $db->prepare("
+            SELECT customer_id, name, domain, industry, package_tier, owner, service_status,
+                   contract_start_date, contract_end_date, contract_amount, contact_name, contact_phone
+            FROM customers
+            WHERE customer_id = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$customerId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+        return [
+            'id' => (string) $row['customer_id'],
+            'customer_id' => (string) $row['customer_id'],
+            'name' => (string) $row['name'],
+            'domain' => (string) ($row['domain'] ?? ''),
+            'industry' => (string) ($row['industry'] ?? ''),
+            'package_tier' => (string) ($row['package_tier'] ?? ''),
+            'owner' => (string) ($row['owner'] ?? ''),
+            'service_status' => (string) ($row['service_status'] ?? ''),
+            'contract_start_at' => (string) ($row['contract_start_date'] ?? ''),
+            'contract_end_at' => (string) ($row['contract_end_date'] ?? ''),
+            'contract_amount' => $row['contract_amount'] ?? 0,
+            'contact_name' => (string) ($row['contact_name'] ?? ''),
+            'contact_phone' => (string) ($row['contact_phone'] ?? ''),
+            'competitors' => [],
+            'cities' => [],
+        ];
+    } catch (Throwable $_) {
+        return null;
+    }
+}
+
+function geo_monitor_default_questions(string $brandName, string $industry, array $competitors): array {
+    $brandName = trim($brandName);
+    $industryMain = trim(preg_split('/[\/／,，|]/u', $industry)[0] ?? $industry);
+    $industryMain = $industryMain !== '' ? $industryMain : '同类服务';
+    $questions = [];
+    if ($brandName !== '') {
+        $questions[] = "{$brandName} 是做什么的？";
+        $questions[] = "{$brandName} 怎么样，值得选吗？";
+        $questions[] = "{$brandName} 的核心优势是什么？";
+    }
+    $questions[] = "{$industryMain}服务商推荐";
+    $questions[] = "{$industryMain}哪家更值得选？";
+    foreach (array_slice($competitors, 0, 3) as $competitor) {
+        $competitor = trim((string) $competitor);
+        if ($brandName !== '' && $competitor !== '') {
+            $questions[] = "{$brandName} 和 {$competitor} 对比哪个好？";
+        }
+    }
+    return array_values(array_unique(array_filter($questions)));
+}
+
+$requestedCustomerId = trim((string) ($_GET['customer'] ?? $_GET['customer_id'] ?? ''));
+if ($requestedCustomerId !== '') {
+    $loadedCustomer = geo_monitor_load_customer($db, $requestedCustomerId);
+    if ($loadedCustomer) {
+        $_SESSION['current_customer'] = $loadedCustomer;
+    }
+}
+
 $currentCustomer = $_SESSION['current_customer'] ?? [];
-$brandName = $currentCustomer['name'] ?? '湖南文韵爱阅读';
-$industry = $currentCustomer['industry'] ?? '教培 / 知识付费';
-$competitorsFromCustomer = $currentCustomer['competitors'] ?? ['心田花开', '楚才教育', '麦田格'];
-$contractEndAt = $currentCustomer['contract_end_at'] ?? '2026-06-30';
-$customerId = (string) ($currentCustomer['customer_id'] ?? $currentCustomer['id'] ?? 'default');
+$customerId = (string) ($currentCustomer['customer_id'] ?? $currentCustomer['id'] ?? '');
+if ($customerId === '') {
+    try {
+        $firstCustomer = $db->query("SELECT customer_id FROM customers ORDER BY created_at DESC LIMIT 1")->fetchColumn();
+        if ($firstCustomer) {
+            $loadedCustomer = geo_monitor_load_customer($db, (string) $firstCustomer);
+            if ($loadedCustomer) {
+                $_SESSION['current_customer'] = $loadedCustomer;
+                $currentCustomer = $loadedCustomer;
+                $customerId = (string) $loadedCustomer['customer_id'];
+            }
+        }
+    } catch (Throwable $_) {}
+}
+
+$brandName = $currentCustomer['name'] ?? '未选择客户';
+$industry = $currentCustomer['industry'] ?? '';
+$competitorsFromCustomer = $currentCustomer['competitors'] ?? [];
+$contractEndAt = $currentCustomer['contract_end_at'] ?? '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['add_monitor_keyword', 'add_monitor_competitor', 'seed_monitor_questions'], true)) {
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
+        admin_redirect('geo-monitor.php?customer=' . rawurlencode($customerId) . '&monitor_error=csrf');
+    }
+    $postCustomerId = trim((string) ($_POST['customer_id'] ?? $customerId));
+    if ($postCustomerId !== '') {
+        $customerId = $postCustomerId;
+    }
+
+    try {
+        $action = (string) $_POST['action'];
+        if ($action === 'add_monitor_keyword') {
+            $keyword = trim((string) ($_POST['keyword'] ?? ''));
+            if ($keyword !== '') {
+                $monitorService = new MonitorApiService($db);
+                $monitorService->addKeywords($customerId, [$keyword]);
+            }
+        } elseif ($action === 'add_monitor_competitor') {
+            $competitor = trim((string) ($_POST['competitor'] ?? ''));
+            if ($competitor !== '') {
+                $stmt = $db->prepare("
+                    INSERT INTO geo_customer_competitors (customer_id, competitor, enabled)
+                    VALUES (?, ?, TRUE)
+                    ON CONFLICT (customer_id, competitor) DO UPDATE SET enabled = TRUE
+                ");
+                $stmt->execute([$customerId, $competitor]);
+            }
+        } elseif ($action === 'seed_monitor_questions') {
+            $stmtCmpSeed = $db->prepare("SELECT competitor FROM geo_customer_competitors WHERE customer_id = ? AND enabled = TRUE ORDER BY id ASC");
+            $stmtCmpSeed->execute([$customerId]);
+            $seedCompetitors = $stmtCmpSeed->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            $questions = geo_monitor_default_questions($brandName, $industry, $seedCompetitors);
+            if (!empty($questions)) {
+                $monitorService = new MonitorApiService($db);
+                $monitorService->addKeywords($customerId, $questions);
+            }
+        }
+        admin_redirect('geo-monitor.php?customer=' . rawurlencode($customerId) . '&monitor_saved=1');
+    } catch (Throwable $e) {
+        admin_redirect('geo-monitor.php?customer=' . rawurlencode($customerId) . '&monitor_error=save');
+    }
+}
 
 // 从数据库读取真实合同到期日，计算续费倒计时
 $renewalLabel = 'T-?';
@@ -51,7 +183,6 @@ $page_header = '
 </div>';
 
 // --- 从 geo_monitor_records 读真实数据 ---
-$customerSeed = abs(crc32($customerId));
 $baselineTracking = geo_baseline_qa_tracking($db, $customerId);
 $baselineRows = $baselineTracking['rows'];
 $baselineSummary = $baselineTracking['summary'];
@@ -84,9 +215,9 @@ try {
     // 最近记录（用于AI对话证据展示）
     $stmtRec = $db->prepare("
         SELECT * FROM geo_monitor_records
-        WHERE customer_id = ? AND brand_mentioned = TRUE
+        WHERE customer_id = ?
         ORDER BY queried_at DESC, id DESC
-        LIMIT 10
+        LIMIT 20
     ");
     $stmtRec->execute([$customerId]);
     $realMonitorData['records'] = $stmtRec->fetchAll(PDO::FETCH_ASSOC);
@@ -106,8 +237,80 @@ try {
 if (!empty($competitorsFromDb)) {
     $competitorsFromCustomer = $competitorsFromDb;
 }
-$comp0 = $competitorsFromCustomer[0] ?? '竞品A';
-$comp1 = $competitorsFromCustomer[1] ?? '竞品B';
+$platformDisplay = [
+    'kimi'     => ['label' => 'Kimi',     'combo' => ''],
+    'deepseek' => ['label' => 'DeepSeek', 'combo' => ''],
+    'tongyi'   => ['label' => '通义',      'combo' => '千问'],
+    'wenxin'   => ['label' => '文心',      'combo' => '百度千帆'],
+    'doubao'   => ['label' => '豆包',      'combo' => '火山方舟'],
+    'yuanbao'  => ['label' => '元宝',      'combo' => '腾讯混元'],
+];
+
+$monitorKeywords = [];
+try {
+    $stmtMonitorKeywords = $db->prepare("
+        SELECT id, keyword, enabled, created_at
+        FROM geo_monitor_keywords
+        WHERE customer_id = ?
+        ORDER BY enabled DESC, id ASC
+    ");
+    $stmtMonitorKeywords->execute([$customerId]);
+    $monitorKeywords = $stmtMonitorKeywords->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $_mkw) {}
+
+$monitorFacts = [];
+try {
+    $stmtFacts = $db->prepare("SELECT fact_key, fact_label, fact_value, is_core FROM geo_brand_facts WHERE customer_id = ? ORDER BY is_core DESC, sort_order ASC, id ASC");
+    $stmtFacts->execute([$customerId]);
+    $monitorFacts = $stmtFacts->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $_mf) {}
+
+$apiConfig = [];
+$configuredProviders = [];
+try {
+    $apiConfig = citation_simulator_api_config();
+    foreach (['kimi', 'deepseek', 'tongyi', 'wenxin', 'doubao', 'yuanbao'] as $pkey) {
+        $pcfg = $apiConfig['providers'][$pkey] ?? null;
+        if ($pcfg && !empty($pcfg['configured']) && (($pcfg['op_status'] ?? 'normal') !== 'disabled')) {
+            $configuredProviders[$pkey] = $pcfg['label'] ?? $pkey;
+        }
+    }
+} catch (Throwable $_cfg) {}
+try {
+    $stmtModels = $db->query("
+        SELECT name, model_id, api_url
+        FROM ai_models
+        WHERE status = 'active'
+          AND (model_type = 'chat' OR model_type IS NULL OR model_type = '')
+          AND COALESCE(api_key, '') <> ''
+          AND COALESCE(model_id, '') <> ''
+        ORDER BY priority ASC NULLS LAST, id ASC
+    ");
+    foreach ($stmtModels->fetchAll(PDO::FETCH_ASSOC) as $model) {
+        $modelText = mb_strtolower((string) ($model['name'] ?? '') . ' ' . (string) ($model['model_id'] ?? '') . ' ' . (string) ($model['api_url'] ?? ''));
+        $pkey = preg_replace('/[^a-z0-9_\-]+/', '-', trim((string) ($model['model_id'] ?? 'custom-model')));
+        if (str_contains($modelText, 'deepseek')) $pkey = 'deepseek';
+        elseif (str_contains($modelText, 'doubao') || str_contains($modelText, 'volces') || str_contains($modelText, 'ark.cn')) $pkey = 'doubao';
+        elseif (str_contains($modelText, 'qwen') || str_contains($modelText, 'tongyi') || str_contains($modelText, 'dashscope') || str_contains($modelText, '千问')) $pkey = 'tongyi';
+        elseif (str_contains($modelText, 'moonshot') || str_contains($modelText, 'kimi')) $pkey = 'kimi';
+        elseif (str_contains($modelText, 'hunyuan') || str_contains($modelText, 'yuanbao') || str_contains($modelText, '腾讯') || str_contains($modelText, '混元')) $pkey = 'yuanbao';
+        elseif (str_contains($modelText, 'mimo') || str_contains($modelText, 'xiaomi')) $pkey = 'mimo-v2.5-pro';
+        $configuredProviders[$pkey] = $model['name'] ?: ($model['model_id'] ?? $pkey);
+        if (!isset($platformDisplay[$pkey])) {
+            $platformDisplay[$pkey] = ['label' => (string) ($model['name'] ?: $model['model_id'] ?: $pkey), 'combo' => 'AI模型'];
+        }
+    }
+} catch (Throwable $_models) {}
+
+$enabledKeywordCount = count(array_filter($monitorKeywords, static fn($kw) => !empty($kw['enabled'])));
+$providerCount = count($configuredProviders);
+$readinessIssues = [];
+if ($customerId === '') $readinessIssues[] = '未选择客户';
+if (trim($brandName) === '' || $brandName === '未选择客户') $readinessIssues[] = '缺少品牌名称';
+if ($enabledKeywordCount <= 0) $readinessIssues[] = '没有启用的监测关键词';
+if (empty($competitorsFromCustomer)) $readinessIssues[] = '没有竞品名单';
+if ($providerCount <= 0) $readinessIssues[] = '没有可用 AI 模型或平台 Key';
+$monitorReady = empty($readinessIssues);
 
 try {
     geo_monitor_refresh_alerts($db, $customerId, $brandName, $competitorsFromCustomer);
@@ -195,7 +398,7 @@ try {
     }
 } catch (Throwable $_pe) {}
 
-// ── 真实告警（替换 mock）──────────────────────────────────────────────────
+// ── 真实告警 ─────────────────────────────────────────────────────────────
 $realAlerts = [];
 try {
     $stmtAlerts = $db->prepare("
@@ -210,11 +413,6 @@ try {
 } catch (Throwable $_ae) {}
 $hasRealAlerts = !empty($realAlerts);
 $realAlertCount = count($realAlerts);
-
-// 确定性随机辅助：给定索引和范围，返回稳定整数
-$sr = static function(int $slot, int $min, int $max) use ($customerSeed): int {
-    return $min + (abs((int) crc32($customerSeed . ':' . $slot)) % ($max - $min + 1));
-};
 
 // ── 趋势图：全部使用真实监测数据 ──────────────────────────────────────
 $trendPoints = [];
@@ -253,8 +451,8 @@ if ($hasRealData && !empty($realMonitorData['by_date'])) {
     }
 }
 
-// 获取最新行业均值（取最近一次跨客户平均，供雷达图使用）
-$latestIndustryRate = 50;
+// 获取最新行业均值（取最近一次跨客户平均，供对标使用）
+$latestIndustryRate = null;
 if (!empty($industryByDate)) {
     $latestIndustryRate = (int) end($industryByDate);
 }
@@ -268,21 +466,11 @@ if (!empty($trendPoints)) {
 }
 reset($trendPoints);
 
-// ── 雷达图：mock 保底值（不依赖真实数据时使用）─────────────────────
-$comp0Radar     = [$sr(20, 55, 90), $sr(21, 55, 88), $sr(22, 50, 80), $sr(23, 45, 78), $sr(24, 35, 65)];
-$comp1Radar     = [$sr(30, 40, 75), $sr(31, 38, 70), $sr(32, 40, 68), $sr(33, 30, 60), $sr(34, 28, 58)];
-$comp0MentionRate = $sr(21, 55, 88) . '%';
-$comp1MentionRate = $sr(31, 38, 70) . '%';
-$comp0Appearances = $sr(41, 15, 35);
-$comp1Appearances = $sr(42, 8, 25);
-$comp0AvgRank = number_format($sr(51, 22, 45) / 10, 1);
-$comp1AvgRank = number_format($sr(52, 30, 55) / 10, 1);
-
-// 自身雷达默认值
-$selfRadar       = [$sr(10, 60, 98), $latestBrandRate, $sr(11, 65, 95), $sr(12, 45, 80), $sr(13, 40, 75)];
-$selfMentionRate = $latestBrandRate . '%';
-$selfAppearances = $sr(40, 20, 45);
-$selfAvgRank     = number_format($sr(50, 15, 35) / 10, 1);
+// ── 竞品对标：只基于真实监测记录 ──────────────────────────────────────
+$selfRadar       = [0, 0, 0, 0, 0];
+$selfMentionRate = '0%';
+$selfAppearances = 0;
+$selfAvgRank     = '—';
 $rTotal30d       = 0;
 
 // ── 真实自身雷达（从 platformStats 聚合，最近 30 天）────────────────
@@ -295,42 +483,67 @@ if ($rTotal30d > 0) {
         if (isset($platformStats[$rpk]) && $platformStats[$rpk]['mention_rate'] > 0) $rCovPlatforms++;
     }
     $rSelfMentionNum = round($rMentioned30d / $rTotal30d * 100);
-    $rPlatCov        = round($rCovPlatforms / 6 * 100);
+    $providerDenominator = max(1, $providerCount, count($platformStats));
+    $rPlatCov        = round($rCovPlatforms / $providerDenominator * 100);
     $rCoreRate       = round($rDeepHits30d  / $rTotal30d * 100);
     $accVals         = array_filter(array_column($platformStats, 'avg_accuracy'), static fn($v) => $v !== null);
-    $rAccScore       = !empty($accVals) ? (int) round(array_sum($accVals) / count($accVals)) : $sr(13, 40, 75);
-    $selfRadar       = [$rPlatCov, $rSelfMentionNum, $rCoreRate, $sr(12, 45, 80), $rAccScore];
+    $rAccScore       = !empty($accVals) ? (int) round(array_sum($accVals) / count($accVals)) : 0;
+
+    $keywordCoverageRate = 0;
+    try {
+        $stmtKwCov = $db->prepare("
+            SELECT
+                COUNT(DISTINCT query_text) AS total_keywords,
+                COUNT(DISTINCT query_text) FILTER (WHERE brand_mentioned = TRUE) AS hit_keywords
+            FROM geo_monitor_records
+            WHERE customer_id = ?
+              AND queried_at >= CURRENT_DATE - INTERVAL '29 days'
+        ");
+        $stmtKwCov->execute([$customerId]);
+        $kwCov = $stmtKwCov->fetch(PDO::FETCH_ASSOC) ?: [];
+        $kwTotal = max(1, (int) ($kwCov['total_keywords'] ?? 0), $enabledKeywordCount);
+        $keywordCoverageRate = round(((int) ($kwCov['hit_keywords'] ?? 0)) / $kwTotal * 100);
+    } catch (Throwable $_kwcov) {}
+
+    $selfRadar       = [$rPlatCov, $rSelfMentionNum, $rCoreRate, $keywordCoverageRate, $rAccScore];
     $selfMentionRate = $rSelfMentionNum . '%';
     $selfAppearances = $rMentioned30d;
 }
 
 // ── 竞品雷达：从 competitors_found 聚合最近 30 天 ─────────────────
 $compAggData = [];
+$brandKeywordStats = [];
 try {
     $stmtCfAgg = $db->prepare("
-        SELECT provider, competitors_found
+        SELECT provider, query_text, brand_mentioned, competitors_found
         FROM geo_monitor_records
         WHERE customer_id = ?
           AND queried_at >= CURRENT_DATE - INTERVAL '29 days'
-          AND competitors_found IS NOT NULL AND competitors_found <> '[]'
     ");
     $stmtCfAgg->execute([$customerId]);
     foreach ($stmtCfAgg->fetchAll(PDO::FETCH_ASSOC) as $cfRow) {
+        $kw = trim((string) ($cfRow['query_text'] ?? ''));
+        if ($kw === '') $kw = '(未命名关键词)';
+        $brandKeywordStats[$kw] ??= ['total' => 0, 'hits' => 0];
+        $brandKeywordStats[$kw]['total']++;
+        if (!empty($cfRow['brand_mentioned'])) $brandKeywordStats[$kw]['hits']++;
+
         $cfArr = json_decode((string) $cfRow['competitors_found'], true);
         if (!is_array($cfArr)) continue;
         foreach ($cfArr as $cf) {
             $cn = $cf['name'] ?? '';
             if ($cn === '') continue;
-            if (!isset($compAggData[$cn])) $compAggData[$cn] = ['appears' => 0, 'providers' => []];
+            if (!isset($compAggData[$cn])) $compAggData[$cn] = ['appears' => 0, 'providers' => [], 'keywords' => []];
             $compAggData[$cn]['appears']++;
             $compAggData[$cn]['providers'][$cfRow['provider']] = true;
+            $compAggData[$cn]['keywords'][$kw] = ($compAggData[$cn]['keywords'][$kw] ?? 0) + 1;
         }
     }
 } catch (Throwable $_cfq) {}
 
-$radarDimensions = ['平台覆盖率', '总提及率', '平均排名', '引用来源数', '正面情感'];
+$radarDimensions = ['平台覆盖率', '整体出现率', '深度命中率', '关键词覆盖', '语义准确'];
 
-// 构建 radarSubjects（自身优先真实，竞品有就用真实，无则 mock）
+// 构建 radarSubjects：自身和竞品都只使用真实监测聚合。
 $radarSubjects = [[
     'type'        => 'self',
     'name'        => $brandName,
@@ -340,24 +553,33 @@ $radarSubjects = [[
     'avgRank'     => $selfAvgRank,
     'summary'     => $rTotal30d > 0
         ? '基于近30天 ' . $rTotal30d . ' 次监测查询真实计算，平台覆盖率 ' . $selfRadar[0] . '%，核心信息呈现率 ' . $selfRadar[2] . '%。'
-        : '当前品牌已超过行业均线，主要短板是权威来源数量和正向证据密度。',
+        : '暂无近30天真实监测记录，启动监测后自动计算。',
 ]];
 
 foreach ($competitorsFromCustomer as $ci => $cname) {
-    if ($ci >= 2) break;
     $cdata = $compAggData[$cname] ?? null;
     if ($cdata !== null && $rTotal30d > 0) {
         $cRate  = round($cdata['appears'] / $rTotal30d * 100);
-        $cCov   = round(count($cdata['providers']) / 6 * 100);
-        $cRadar = [$cCov, $cRate, $sr($ci * 10 + 22, 30, 70), $sr($ci * 10 + 23, 20, 55), $sr($ci * 10 + 24, 30, 65)];
+        $cCov   = round(count($cdata['providers']) / max(1, $providerCount, count($platformStats)) * 100);
+        $keywordDenominator = max(1, count($brandKeywordStats), $enabledKeywordCount);
+        $cKeywordCoverage = round(count($cdata['keywords']) / $keywordDenominator * 100);
+        $surpassKeywords = 0;
+        foreach ($cdata['keywords'] as $kw => $hits) {
+            $brandStat = $brandKeywordStats[$kw] ?? ['hits' => 0, 'total' => 0];
+            if ((int) ($brandStat['total'] ?? 0) > 0 && (int) $hits > (int) ($brandStat['hits'] ?? 0)) {
+                $surpassKeywords++;
+            }
+        }
+        $cRisk = round($surpassKeywords / $keywordDenominator * 100);
+        $cRadar = [$cCov, $cRate, 0, $cKeywordCoverage, $cRisk];
         $cMRate = $cRate . '%';
         $cApps  = $cdata['appears'];
-        $cSummary = '在监测期内出现 ' . $cdata['appears'] . ' 次，覆盖 ' . count($cdata['providers']) . ' 个平台，命中率 ' . $cRate . '%。';
+        $cSummary = '近30天真实出现 ' . $cdata['appears'] . ' 次，覆盖 ' . count($cdata['providers']) . ' 个平台，涉及 ' . count($cdata['keywords']) . ' 个关键词。';
     } else {
-        $cRadar   = $ci === 0 ? $comp0Radar : $comp1Radar;
-        $cMRate   = $ci === 0 ? $comp0MentionRate : $comp1MentionRate;
-        $cApps    = $ci === 0 ? $comp0Appearances : $comp1Appearances;
-        $cSummary = '监测数据积累中，暂显示演示值。';
+        $cRadar   = [0, 0, 0, 0, 0];
+        $cMRate   = '0%';
+        $cApps    = 0;
+        $cSummary = $rTotal30d > 0 ? '近30天真实监测中暂未出现。' : '等待监测运行后计算。';
     }
     $radarSubjects[] = [
         'type'        => 'competitor',
@@ -365,99 +587,26 @@ foreach ($competitorsFromCustomer as $ci => $cname) {
         'radar'       => $cRadar,
         'mentionRate' => $cMRate,
         'appearances' => $cApps,
-        'avgRank'     => number_format($sr($ci * 10 + 51, 22, 55) / 10, 1),
+        'avgRank'     => '—',
         'summary'     => $cSummary,
     ];
 }
-$radarSubjects[] = [
-    'type'        => 'industry',
-    'name'        => '行业均值',
-    'radar'       => [55, $latestIndustryRate, $sr(60, 40, 58), $sr(61, 35, 52), $sr(62, 38, 55)],
-    'mentionRate' => $latestIndustryRate . '%',
-    'appearances' => $sr(63, 10, 20),
-    'avgRank'     => number_format($sr(64, 35, 50) / 10, 1),
-    'summary'     => '用于判断当前客户是否已经超过行业基本可见性水位。',
-];
-
-// 告警：下跌幅度用真实周环比，来源数用真实平台计数
-// fallPp: 上周 vs 本周品牌提及率差值
-$fallPp = $sr(70, 15, 22); // default mock
-if ($hasRealData && !empty($realMonitorData['by_date'])) {
-    $today = new DateTimeImmutable('today');
-    $weekRates = ['this' => [], 'prev' => []];
-    for ($wi = 0; $wi < 7; $wi++) {
-        $d = $today->modify("-{$wi} days")->format('Y-m-d');
-        if (isset($realMonitorData['by_date'][$d])) $weekRates['this'][] = $realMonitorData['by_date'][$d]['rate'];
-    }
-    for ($wi = 7; $wi < 14; $wi++) {
-        $d = $today->modify("-{$wi} days")->format('Y-m-d');
-        if (isset($realMonitorData['by_date'][$d])) $weekRates['prev'][] = $realMonitorData['by_date'][$d]['rate'];
-    }
-    if (!empty($weekRates['this']) && !empty($weekRates['prev'])) {
-        $thisAvg = array_sum($weekRates['this']) / count($weekRates['this']);
-        $prevAvg = array_sum($weekRates['prev']) / count($weekRates['prev']);
-        $realFall = (int) round($prevAvg - $thisAvg);
-        if ($realFall > 0) $fallPp = $realFall;
-    }
+if ($latestIndustryRate !== null) {
+    $radarSubjects[] = [
+        'type'        => 'industry',
+        'name'        => '行业均值',
+        'radar'       => [0, $latestIndustryRate, 0, 0, 0],
+        'mentionRate' => $latestIndustryRate . '%',
+        'appearances' => '—',
+        'avgRank'     => '—',
+        'summary'     => '跨客户真实监测记录计算出的最近行业平均提及率。',
+    ];
 }
-// sourceCurrent: 最近 30 天有提及记录的平台数
-$sourceCurrent = !empty($platformStats)
-    ? count(array_filter($platformStats, static fn($p) => $p['mention_rate'] > 0))
-    : $sr(71, 14, 22);
-$rotationPct  = $sr(72, 38, 55);
-$alertDateSuffix = date('Ymd');
-$alerts = [
-    [
-        'id'              => 'alert-' . $alertDateSuffix . '-001-' . substr($customerId, 0, 6),
-        'level'           => 'high',
-        'type'            => 'hit_rate_fall',
-        'title'           => '核心词命中率单周下跌 ' . $fallPp . 'pp',
-        'desc'            => '”' . $cityName . $industryLabel . '推荐”从稳定命中下降到不稳定命中，超过 MVP HIGH 阈值 15pp。',
-        'threshold'       => '单周跌幅 ≥ 15pp',
-        'action'          => '自动拉起应急 SOP，E1 异常确认与分级进入 4 小时 SLA。',
-        'sop_status'      => 'triggered',
-        'sop_instance_id' => 'EMG-' . $alertDateSuffix . '-' . strtoupper(substr(md5($customerId), 0, 6)),
-        'jump'            => 'sop-center.php?scenario=emergency&alert=alert-' . $alertDateSuffix . '-001',
-    ],
-    [
-        'id'              => 'alert-' . $alertDateSuffix . '-002-' . substr($customerId, 0, 6),
-        'level'           => 'medium',
-        'type'            => 'competitor_in',
-        'title'           => '竞品首次进入引用集',
-        'desc'            => $comp0 . ' 在 ' . $sr(73, 1, 3) . ' 个推荐型问题中进入前三引用对象。',
-        'threshold'       => '竞品首次进入引用集',
-        'action'          => '进入本周优化清单，补对比页、案例页和第三方背书。',
-        'sop_status'      => 'skipped',
-        'sop_instance_id' => '',
-        'jump'            => '',
-    ],
-    [
-        'id'              => 'alert-' . $alertDateSuffix . '-003-' . substr($customerId, 0, 6),
-        'level'           => 'medium',
-        'type'            => 'source_low',
-        'title'           => '引用来源数低于强势阈值',
-        'desc'            => '当前可识别引用来源 ' . $sourceCurrent . ' 个，低于 MVP 建议阈值 20 个。',
-        'threshold'       => '引用来源数 < 20',
-        'action'          => '补充百科、媒体报道、问答平台和客户案例信源。',
-        'sop_status'      => 'skipped',
-        'sop_instance_id' => '',
-        'jump'            => '',
-    ],
-    [
-        'id'              => 'alert-' . $alertDateSuffix . '-004-' . substr($customerId, 0, 6),
-        'level'           => 'low',
-        'type'            => 'normal_rotation',
-        'title'           => '引用来源正常轮换',
-        'desc'            => '本月来源轮换约 ' . $rotationPct . '%，处于 40-60% 的正常区间。',
-        'threshold'       => '40-60% 视为正常轮换',
-        'action'          => '仅记录，进入月度复盘，不打扰执行团队。',
-        'sop_status'      => 'skipped',
-        'sop_instance_id' => '',
-        'jump'            => '',
-    ],
-];
 
-// ── AI对话记录：优先用 geo_monitor_records 真实记录，回退 mock ────
+// 告警只使用 geo_monitor_alerts 的真实记录。
+$alerts = [];
+
+// ── AI对话记录：只展示 geo_monitor_records 的真实回答 ───────────────
 $convProviderMap = [
     'kimi' => 'Kimi', 'deepseek' => 'DeepSeek', 'tongyi' => '通义',
     'wenxin' => '文心', 'doubao' => '豆包', 'yuanbao' => '元宝',
@@ -476,74 +625,27 @@ if ($hasRealData && !empty($realMonitorData['records'])) {
         }
         $recDate  = substr((string)($rec['queried_at'] ?? ''), 0, 10);
         $depth    = (int)($rec['mention_depth'] ?? 0);
-        $heat     = min(98, max(55, 60 + $depth * 8 + $sr($rIdx + 300, 0, 15)));
+        $mentionCount = (int) ($rec['mention_count'] ?? 0);
+        $fingerprintHits = json_decode((string) ($rec['fingerprint_matched'] ?? '[]'), true);
+        $fingerprintCount = is_array($fingerprintHits) ? count($fingerprintHits) : 0;
+        $citationCount = (!empty($rec['source_url_cited']) ? 1 : 0) + $fingerprintCount;
+        $heat = min(100, $depth * 22 + min(20, $mentionCount * 4) + min(14, $citationCount * 7));
         $fullResp = mb_substr((string)($rec['full_response'] ?? '（完整响应未存储）'), 0, 600);
         $conversations[] = [
             'id'           => 'conv-real-' . $rec['id'],
             'date'         => $recDate,
             'question'     => (string)($rec['query_text'] ?? ''),
-            'type'         => '监测记录',
+            'type'         => !empty($rec['brand_mentioned']) ? '品牌提及' : '未提及品牌',
             'heat'         => $heat,
             'platform'     => $platLabel,
             'brandTerms'   => [$brandName],
-            'brandMentions'=> 1,
+            'brandMentions'=> $mentionCount,
             'competitors'  => $compNames,
-            'citations'    => [],
-            'citationCount'=> 0,
+            'citations'    => array_values(array_filter(array_merge(!empty($rec['source_url_cited']) ? ['来源URL命中'] : [], is_array($fingerprintHits) ? $fingerprintHits : []))),
+            'citationCount'=> $citationCount,
             'answer'       => $fullResp,
         ];
     }
-}
-if (empty($conversations)) {
-    // Mock fallback（监测脚本尚未运行时）
-    $platforms = ['豆包', '通义', 'Kimi', 'DeepSeek', '元宝'];
-    $plat0 = $platforms[$sr(80, 0, 4)];
-    $plat1 = $platforms[$sr(81, 0, 4)];
-    $plat2 = $platforms[$sr(82, 0, 4)];
-    $conversations = [
-        [
-            'id'           => 'conv-' . $customerId . '-001',
-            'date'         => '2026-05-03',
-            'question'     => $cityName . $industryLabel . '服务商推荐',
-            'type'         => '推荐/建议',
-            'heat'         => $sr(90, 80, 98),
-            'platform'     => $plat0,
-            'brandTerms'   => [$brandName],
-            'brandMentions'=> $sr(91, 3, 6),
-            'competitors'  => array_slice($competitorsFromCustomer, 0, 2),
-            'citations'    => ['知乎问答', '机构官网', '行业媒体', '用户评价'],
-            'citationCount'=> $sr(92, 12, 22),
-            'answer'       => '如果在' . $cityName . '选择' . $industryLabel . '服务，可以先看服务体系、团队稳定性和客户反馈。' . $brandName . ' 在行业内有较完整的服务说明，适合需要系统提升的客户。',
-        ],
-        [
-            'id'           => 'conv-' . $customerId . '-002',
-            'date'         => '2026-05-10',
-            'question'     => $brandName . '怎么样，值得选吗',
-            'type'         => '问题/解决',
-            'heat'         => $sr(93, 75, 95),
-            'platform'     => $plat1,
-            'brandTerms'   => [$brandName],
-            'brandMentions'=> $sr(94, 4, 7),
-            'competitors'  => [],
-            'citations'    => ['知乎问答', '行业公众号', '服务案例', '客户反馈'],
-            'citationCount'=> $sr(95, 15, 26),
-            'answer'       => $brandName . ' 在' . $industryLabel . '领域有一定知名度，资料显示其服务体系较为完整，多个案例展示了实际交付成果，适合中长期合作需求。',
-        ],
-        [
-            'id'           => 'conv-' . $customerId . '-003',
-            'date'         => '2026-05-17',
-            'question'     => $cityName . $industryLabel . '哪家值得选',
-            'type'         => '本地/决策',
-            'heat'         => $sr(96, 65, 88),
-            'platform'     => $plat2,
-            'brandTerms'   => [$brandName],
-            'brandMentions'=> $sr(97, 2, 4),
-            'competitors'  => array_slice($competitorsFromCustomer, 0, 1),
-            'citations'    => ['百度百科', '知乎专栏', '微信公众号'],
-            'citationCount'=> $sr(98, 10, 18),
-            'answer'       => '选择' . $industryLabel . '服务商要看案例深度、长期反馈和第三方评价。' . $brandName . ' 有一定资料可查，仍需补充更多第三方评价和公开案例，以提升 AI 引用可信度。',
-        ],
-    ];
 }
 
 // ── 文章采信率：关联了关键词的文章，统计被AI深度引用的次数 ──────────────
@@ -576,11 +678,28 @@ try {
     $articleAdoption = $stmtArt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $_artE) {}
 
+$competitorRiskCount = count(array_filter($realAlerts, static fn($alert) => ($alert['alert_type'] ?? '') === 'competitor_surpass'));
 $renewalItems = [
-    ['label' => '可见率提升', 'value' => ($trendPoints[0]['brand'] ?? 0) . '% → ' . $latestBrandRate . '%', 'desc' => !empty($trendPoints) ? '从诊断基线到本月监测，客户可见率提升 ' . $brandRiseTotal . ' 个百分点。' : '持续监测后自动计算提升幅度。'],
-    ['label' => '竞品挤出', 'value' => $sr(99, 1, 3) . ' 个', 'desc' => '推荐型问题中，竞品的平均排名被压到品牌之后。'],
-    ['label' => '原话证据', 'value' => count($conversations) . ' 条', 'desc' => '可直接展示 AI 如何提到品牌、竞品和引用来源。'],
-    ['label' => '续费触发', 'value' => 'T-14 自动', 'desc' => '合同到期日 ' . $contractEndAt . '，到期前 14 天自动生成证据包并提醒负责人。'],
+    [
+        'label' => '可见率变化',
+        'value' => !empty($trendPoints) ? (($trendPoints[0]['brand'] ?? 0) . '% → ' . $latestBrandRate . '%') : '待监测',
+        'desc' => count($trendPoints) >= 2 ? '基于真实监测日期计算，变化 ' . $brandRiseTotal . ' 个百分点。' : '至少积累 2 天监测数据后自动计算。',
+    ],
+    [
+        'label' => '竞品风险',
+        'value' => $competitorRiskCount . ' 项',
+        'desc' => $competitorRiskCount > 0 ? '来自竞品超越类真实告警。' : '近期待复测或暂未发现竞品超越。',
+    ],
+    [
+        'label' => '原话证据',
+        'value' => count($conversations) . ' 条',
+        'desc' => '来自 AI 平台真实回答原文，可直接展开核对。',
+    ],
+    [
+        'label' => '续费触发',
+        'value' => $renewalLabel,
+        'desc' => $contractEndAt ? '合同到期日 ' . $contractEndAt . '。' : '客户合同到期日未录入。',
+    ],
 ];
 
 
@@ -627,22 +746,25 @@ $thresholdRows = [
     ],
 ];
 
-$quotaRows = [
-    ['provider' => 'Kimi', 'method' => 'API 反查', 'quota' => '核心词每周', 'status' => '正常'],
-    ['provider' => 'DeepSeek', 'method' => 'API 反查', 'quota' => '核心词每周', 'status' => '正常'],
-    ['provider' => '通义', 'method' => 'API 反查', 'quota' => '核心词每周', 'status' => '正常'],
-    ['provider' => '豆包', 'method' => '浏览器反查', 'quota' => '令牌桶限流', 'status' => 'partial'],
-    ['provider' => '元宝', 'method' => '浏览器反查', 'quota' => '账号池轮换', 'status' => '待补账号'],
-];
+$quotaRows = [];
+foreach ($platformDisplay as $pkey => $pdisp) {
+    $quotaRows[] = [
+        'provider' => $pdisp['label'],
+        'method' => isset($configuredProviders[$pkey]) ? '已接入真实模型/API' : '未接入',
+        'quota' => isset($platformStats[$pkey]) ? ((int) $platformStats[$pkey]['total'] . ' 次查询') : '暂无查询',
+        'status' => isset($configuredProviders[$pkey]) ? (isset($platformStats[$pkey]) ? '已运行' : '待运行') : '未配置',
+    ];
+}
 
 $jsonOptions = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+$monitorCsrfToken = generate_csrf_token();
 
 require_once __DIR__ . '/includes/header.php';
 ?>
 
 <div class="space-y-6">
     <?php
-    // 计算真实可见率；无数据时回退到 mock
+    // 计算真实可见率；无数据时保持空状态
     if ($hasRealData) {
         $realRate = $realMonitorData['total'] > 0
             ? round($realMonitorData['mentioned'] / $realMonitorData['total'] * 100)
@@ -653,7 +775,7 @@ require_once __DIR__ . '/includes/header.php';
     <section class="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <p class="text-sm font-semibold text-gray-500">竞品对标</p>
-            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo max(1, count($competitorsFromCustomer)); ?> 个</div>
+            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo count($competitorsFromCustomer); ?> 个</div>
             <p class="mt-1 text-xs text-gray-400">当前追踪竞品数量</p>
         </div>
         <div class="rounded-xl border border-red-200 <?php echo $realAlertCount > 0 ? 'bg-red-50' : 'bg-white'; ?> p-5 shadow-sm">
@@ -665,6 +787,123 @@ require_once __DIR__ . '/includes/header.php';
             <p class="text-sm font-semibold text-gray-500">续费证据包</p>
             <div class="mt-2 text-4xl font-bold text-gray-900"><?= htmlspecialchars($renewalLabel) ?></div>
             <p class="mt-1 text-xs text-gray-400">合同到期倒计时</p>
+        </div>
+    </section>
+
+    <section class="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div class="border-b border-gray-200 px-6 py-5">
+            <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h2 class="text-xl font-bold text-gray-900">真实监测控制台</h2>
+                        <span class="rounded-full px-2.5 py-1 text-xs font-bold <?php echo $monitorReady ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'; ?>">
+                            <?php echo $monitorReady ? '可运行' : '待补配置'; ?>
+                        </span>
+                    </div>
+                    <p class="mt-2 text-sm text-gray-500">
+                        当前客户：<span class="font-semibold text-gray-900"><?php echo geo_monitor_h($brandName); ?></span>
+                        <span class="text-gray-300">/</span>
+                        <code class="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-700"><?php echo geo_monitor_h($customerId); ?></code>
+                    </p>
+                    <?php if (!$monitorReady): ?>
+                        <div class="mt-3 flex flex-wrap gap-2">
+                            <?php foreach ($readinessIssues as $issue): ?>
+                                <span class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"><?php echo geo_monitor_h($issue); ?></span>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <form method="post">
+                        <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
+                        <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
+                        <input type="hidden" name="action" value="seed_monitor_questions">
+                        <button type="submit" class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                            <i data-lucide="list-plus" class="mr-2 h-4 w-4"></i>生成监测问题
+                        </button>
+                    </form>
+                    <button type="button" id="start-real-monitor" data-customer-id="<?php echo geo_monitor_h($customerId); ?>" data-csrf="<?php echo geo_monitor_h($monitorCsrfToken); ?>" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300" <?php echo $enabledKeywordCount <= 0 || $providerCount <= 0 ? 'disabled' : ''; ?>>
+                        <i data-lucide="play" class="mr-2 h-4 w-4"></i>立即跑真实监测
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 p-6 lg:grid-cols-5">
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p class="text-xs font-semibold text-gray-500">品牌事实</p>
+                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo count($monitorFacts); ?></p>
+                <p class="mt-1 text-xs text-gray-400">用于准确度校验</p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p class="text-xs font-semibold text-gray-500">监测关键词</p>
+                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo $enabledKeywordCount; ?></p>
+                <p class="mt-1 text-xs text-gray-400">启用 / 共 <?php echo count($monitorKeywords); ?> 条</p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p class="text-xs font-semibold text-gray-500">竞品名单</p>
+                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo count($competitorsFromCustomer); ?></p>
+                <p class="mt-1 text-xs text-gray-400">回答中同步识别</p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p class="text-xs font-semibold text-gray-500">真实模型/平台</p>
+                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo $providerCount; ?></p>
+                <p class="mt-1 text-xs text-gray-400">API 或后台模型</p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p class="text-xs font-semibold text-gray-500">今日记录</p>
+                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo (int) ($realMonitorData['by_date'][date('Y-m-d')]['total'] ?? 0); ?></p>
+                <p class="mt-1 text-xs text-gray-400">写入 records</p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 border-t border-gray-200 p-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div class="space-y-4">
+                <form method="post" class="flex flex-col gap-2 sm:flex-row">
+                    <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
+                    <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
+                    <input type="hidden" name="action" value="add_monitor_keyword">
+                    <input type="text" name="keyword" placeholder="添加一个真实监测问题，如：<?php echo geo_monitor_h($brandName); ?> 怎么样？" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
+                    <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
+                        <i data-lucide="plus" class="mr-2 h-4 w-4"></i>添加关键词
+                    </button>
+                </form>
+                <form method="post" class="flex flex-col gap-2 sm:flex-row">
+                    <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
+                    <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
+                    <input type="hidden" name="action" value="add_monitor_competitor">
+                    <input type="text" name="competitor" placeholder="添加竞品名称" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
+                    <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                        <i data-lucide="crosshair" class="mr-2 h-4 w-4"></i>添加竞品
+                    </button>
+                </form>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <div class="mb-2 flex items-center justify-between">
+                        <p class="text-sm font-bold text-gray-900">当前关键词</p>
+                        <a href="<?php echo geo_monitor_h(admin_url('customers.php?customer=' . rawurlencode($customerId) . '#kw-section')); ?>" class="text-xs font-semibold text-blue-600 hover:underline">客户中心管理</a>
+                    </div>
+                    <div class="flex max-h-32 flex-wrap gap-2 overflow-auto">
+                        <?php if (empty($monitorKeywords)): ?>
+                            <span class="text-sm text-gray-400">暂无关键词</span>
+                        <?php else: ?>
+                            <?php foreach ($monitorKeywords as $kw): ?>
+                                <span class="rounded-full <?php echo !empty($kw['enabled']) ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-400'; ?> px-2.5 py-1 text-xs font-semibold"><?php echo geo_monitor_h($kw['keyword']); ?></span>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-lg border border-slate-200 bg-slate-950 p-4 text-slate-100">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                        <p class="text-sm font-bold">运行日志</p>
+                        <p id="monitor-run-status" class="mt-1 text-xs text-slate-400">点击立即跑真实监测后显示后台执行输出</p>
+                    </div>
+                    <button type="button" id="refresh-monitor-status" data-customer-id="<?php echo geo_monitor_h($customerId); ?>" class="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800">刷新状态</button>
+                </div>
+                <pre id="monitor-run-log" class="h-56 overflow-auto whitespace-pre-wrap rounded-md bg-black/30 p-3 text-xs leading-5 text-slate-200">等待启动。</pre>
+            </div>
         </div>
     </section>
 
@@ -690,18 +929,6 @@ require_once __DIR__ . '/includes/header.php';
             <p class="mt-1 text-xs text-gray-400">等待监测脚本写入结果</p>
         </div>
     </section>
-
-    <?php
-    // 6 个平台的展示配置（供 platforms tab 面板使用）
-    $platformDisplay = [
-        'kimi'     => ['label' => 'Kimi',     'combo' => ''],
-        'deepseek' => ['label' => 'DeepSeek', 'combo' => ''],
-        'tongyi'   => ['label' => '通义',      'combo' => '千问+淘宝'],
-        'wenxin'   => ['label' => '文心',      'combo' => '文心+京东'],
-        'doubao'   => ['label' => '豆包',      'combo' => '豆包+抖音'],
-        'yuanbao'  => ['label' => '元宝',      'combo' => ''],
-    ];
-    ?>
 
     <section class="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div class="flex flex-col gap-4 border-b border-gray-200 px-6 py-5 xl:flex-row xl:items-center xl:justify-between">
@@ -987,7 +1214,7 @@ require_once __DIR__ . '/includes/header.php';
             <div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
                 <div class="lg:col-span-3 grid grid-cols-1 gap-4 xl:grid-cols-2">
                     <?php
-                    // 只展示真实告警；无数据时展示空状态，避免演示样例混淆业务判断。
+                    // 只展示真实告警；无数据时展示空状态，避免样例混淆业务判断。
                     $displayAlerts = $realAlerts;
                     $isRealAlertData = $hasRealAlerts;
                     ?>
@@ -1160,6 +1387,15 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </div>
 
+            <?php if (empty($conversations)): ?>
+                <div class="rounded-xl border border-gray-200 bg-gray-50 p-8 text-center">
+                    <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white text-gray-500">
+                        <i data-lucide="message-square" class="h-6 w-6"></i>
+                    </div>
+                    <h3 class="mt-4 text-lg font-bold text-gray-900">暂无真实 AI 回答原文</h3>
+                    <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-gray-600">启动真实监测后，模型返回内容会写入 <code class="rounded bg-gray-100 px-1">geo_monitor_records.full_response</code>，这里才会展示。</p>
+                </div>
+            <?php else: ?>
             <div class="overflow-x-auto rounded-xl border border-gray-200">
                 <table class="min-w-[1120px] w-full divide-y divide-gray-200 text-left text-sm">
                     <thead class="bg-gray-50 text-xs font-bold uppercase text-gray-500">
@@ -1198,6 +1434,7 @@ require_once __DIR__ . '/includes/header.php';
                     </tbody>
                 </table>
             </div>
+            <?php endif; ?>
         </div>
 
         <div data-monitor-panel="renewal" class="monitor-panel hidden p-6">
@@ -1213,7 +1450,13 @@ require_once __DIR__ . '/includes/header.php';
             <div class="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
                 <div class="rounded-xl border border-blue-200 bg-blue-50 p-5">
                     <h3 class="text-lg font-bold text-gray-900">续费证据包摘要</h3>
-                    <p class="mt-2 text-sm leading-6 text-gray-700">本月监测显示，<?php echo htmlspecialchars($brandName, ENT_QUOTES, 'UTF-8'); ?> 的可见率持续上升，但核心词存在单周波动。建议把监测、应急 SOP 和内容补强作为下月续费核心，避免 AI 引用轮换后可见率回落。</p>
+                    <p class="mt-2 text-sm leading-6 text-gray-700">
+                        <?php if ($hasRealData): ?>
+                            本月已沉淀 <?php echo (int) $realMonitorData['total']; ?> 条真实监测记录，其中 <?php echo (int) $realMonitorData['mentioned']; ?> 条提及品牌。当前证据包只汇总真实回答、真实告警和真实趋势。
+                        <?php else: ?>
+                            当前还没有可用于续费复盘的真实监测记录。先启动监测，证据包会自动引用 AI 原话和告警数据。
+                        <?php endif; ?>
+                    </p>
                     <div class="mt-4 flex flex-wrap gap-2">
                         <?php foreach ($conversations as $item): ?>
                             <button type="button" data-open-conversation="<?php echo htmlspecialchars($item['id'], ENT_QUOTES, 'UTF-8'); ?>" class="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm"><?php echo htmlspecialchars($item['question'], ENT_QUOTES, 'UTF-8'); ?></button>
@@ -1542,6 +1785,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const radarDimensions = <?php echo json_encode($radarDimensions, $jsonOptions); ?>;
     const radarSubjects = <?php echo json_encode($radarSubjects, $jsonOptions); ?>;
     const conversations = <?php echo json_encode($conversations, $jsonOptions); ?>;
+    const monitorApiUrl = <?php echo json_encode(admin_url('api/geo-monitor-run.php'), $jsonOptions); ?>;
+    const monitorCustomerId = <?php echo json_encode($customerId, $jsonOptions); ?>;
+    const monitorCsrfToken = <?php echo json_encode($monitorCsrfToken, $jsonOptions); ?>;
+    const monitorCanStart = <?php echo json_encode($enabledKeywordCount > 0 && $providerCount > 0); ?>;
 
     const tabs = document.querySelectorAll('[data-monitor-tab]');
     const panels = document.querySelectorAll('[data-monitor-panel]');
@@ -1656,6 +1903,97 @@ document.addEventListener('DOMContentLoaded', () => {
             renderTrendChart();
         });
     });
+
+    const startMonitorButton = document.getElementById('start-real-monitor');
+    const refreshMonitorButton = document.getElementById('refresh-monitor-status');
+    const monitorStatusEl = document.getElementById('monitor-run-status');
+    const monitorLogEl = document.getElementById('monitor-run-log');
+    let monitorPollTimer = null;
+
+    function setMonitorStatus(message) {
+        if (monitorStatusEl) monitorStatusEl.textContent = message;
+    }
+
+    function setMonitorLog(text) {
+        if (!monitorLogEl) return;
+        monitorLogEl.textContent = text || '暂无日志。';
+        monitorLogEl.scrollTop = monitorLogEl.scrollHeight;
+    }
+
+    async function fetchMonitorStatus(keepPolling = false) {
+        if (!monitorCustomerId || !monitorApiUrl) return;
+        const url = `${monitorApiUrl}?action=status&customer_id=${encodeURIComponent(monitorCustomerId)}&t=${Date.now()}`;
+        try {
+            const response = await fetch(url, { credentials: 'same-origin' });
+            const data = await response.json();
+            if (!data.success) {
+                setMonitorStatus(data.error || '读取状态失败');
+                return;
+            }
+            setMonitorLog(data.log || '暂无日志。');
+            if (data.status === 'running') {
+                setMonitorStatus(data.pid ? `后台监测运行中，PID ${data.pid}，正在调用真实模型并写入数据库` : '后台监测运行中，正在调用真实模型并写入数据库');
+                if (startMonitorButton) startMonitorButton.disabled = true;
+                if (keepPolling && !monitorPollTimer) {
+                    monitorPollTimer = window.setInterval(() => fetchMonitorStatus(true), 3000);
+                }
+            } else {
+                if (monitorPollTimer) {
+                    window.clearInterval(monitorPollTimer);
+                    monitorPollTimer = null;
+                }
+                const total = data.stats?.today_records ?? 0;
+                setMonitorStatus(total > 0 ? `今日已有 ${total} 条监测记录，刷新页面可查看最新分析` : '当前没有正在运行的监测任务');
+                if (startMonitorButton) startMonitorButton.disabled = !monitorCanStart;
+            }
+        } catch (error) {
+            setMonitorStatus('读取状态失败：' + error.message);
+        }
+    }
+
+    async function startMonitorRun() {
+        if (!startMonitorButton || startMonitorButton.disabled || !monitorCanStart) return;
+        startMonitorButton.disabled = true;
+        setMonitorStatus('正在启动后台监测任务');
+        setMonitorLog('正在启动...');
+
+        const body = new FormData();
+        body.append('action', 'start');
+        body.append('customer_id', monitorCustomerId);
+        body.append('csrf_token', monitorCsrfToken);
+        body.append('force', '1');
+
+        try {
+            const response = await fetch(monitorApiUrl, {
+                method: 'POST',
+                body,
+                credentials: 'same-origin'
+            });
+            const data = await response.json();
+            if (!data.success) {
+                setMonitorStatus(data.error || '启动失败');
+                setMonitorLog(data.log || '');
+                startMonitorButton.disabled = false;
+                return;
+            }
+            if (data.already_running) {
+                setMonitorStatus(data.pid ? `已有监测任务运行中，PID ${data.pid}` : '已有监测任务运行中');
+            } else {
+                setMonitorStatus(data.pid ? `已启动后台任务 PID ${data.pid}` : '已启动后台任务');
+            }
+            setMonitorLog(data.log || '任务已启动，等待日志写入。');
+            if (monitorPollTimer) window.clearInterval(monitorPollTimer);
+            monitorPollTimer = window.setInterval(() => fetchMonitorStatus(true), 3000);
+            fetchMonitorStatus(true);
+        } catch (error) {
+            setMonitorStatus('启动失败：' + error.message);
+            startMonitorButton.disabled = false;
+        }
+    }
+
+    startMonitorButton?.addEventListener('click', startMonitorRun);
+    refreshMonitorButton?.addEventListener('click', () => fetchMonitorStatus(false));
+    fetchMonitorStatus(false);
 
     function polygonPoints(values, radius, centerX, centerY) {
         return values.map((value, index) => {

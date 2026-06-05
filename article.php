@@ -62,6 +62,8 @@ $page_keywords = generate_page_keywords(
 );
 $canonical_url = geo_absolute_url('article/' . $article['slug']);
 $article_summary = build_article_geo_summary($article, $article_tags);
+$article_rendered_html = markdown_to_html($article_content);
+$copy_markdown_text = trim('# ' . ($article['title'] ?? '') . "\n\n" . trim($article_content));
 
 $structured_data_blocks = [
     generate_website_structured_data(),
@@ -131,17 +133,31 @@ $structured_data_blocks = [
                         </span>
                     </div>
 
-                    <?php if (!empty($article_excerpt)): ?>
-                        <div class="article-summary-box p-5 mb-6 rounded-xl bg-gray-50">
-                            <p class="article-kicker m-0"><?php echo htmlspecialchars($article_excerpt); ?></p>
-                        </div>
-                    <?php endif; ?>
+                    <div class="article-copy-toolbar" aria-label="文章复制工具">
+                        <button type="button" class="article-copy-button article-copy-button--primary" data-copy-rich>
+                            <i data-lucide="copy-check" class="w-4 h-4"></i>
+                            复制带格式
+                        </button>
+                        <button type="button" class="article-copy-button" data-copy-markdown>
+                            <i data-lucide="file-text" class="w-4 h-4"></i>
+                            复制 Markdown
+                        </button>
+                        <span class="article-copy-status" data-copy-status aria-live="polite"></span>
+                    </div>
 
                 </header>
 
                 <div class="article-prose article-rail max-w-none">
-                    <?php echo markdown_to_html($article_content); ?>
+                    <?php echo $article_rendered_html; ?>
                 </div>
+
+                <template id="articleRichCopyTemplate">
+                    <article class="article-rich-copy">
+                        <h1><?php echo htmlspecialchars($article['title']); ?></h1>
+                        <?php echo $article_rendered_html; ?>
+                    </article>
+                </template>
+                <script type="application/json" id="articleMarkdownCopyData"><?php echo json_encode($copy_markdown_text, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?></script>
 
                 <?php if (!empty($article_tags)): ?>
                     <div class="article-rail mt-8 pt-6 border-t border-gray-100">
@@ -211,6 +227,149 @@ $structured_data_blocks = [
     </main>
 
     <?php include 'includes/footer.php'; ?>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const richButton = document.querySelector('[data-copy-rich]');
+        const markdownButton = document.querySelector('[data-copy-markdown]');
+        const status = document.querySelector('[data-copy-status]');
+        const richTemplate = document.getElementById('articleRichCopyTemplate');
+        const markdownData = document.getElementById('articleMarkdownCopyData');
+
+        if (!richButton || !markdownButton || !status || !richTemplate || !markdownData) {
+            return;
+        }
+
+        let markdownText = '';
+        try {
+            markdownText = JSON.parse(markdownData.textContent || '""');
+        } catch (error) {
+            markdownText = '';
+        }
+
+        function setCopyStatus(message, type) {
+            status.textContent = message;
+            status.dataset.state = type || 'success';
+            window.clearTimeout(setCopyStatus.timer);
+            setCopyStatus.timer = window.setTimeout(function () {
+                status.textContent = '';
+                status.removeAttribute('data-state');
+            }, 2600);
+        }
+
+        function fallbackCopyText(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.top = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            const copied = document.execCommand('copy');
+            textarea.remove();
+            if (!copied) {
+                throw new Error('copy failed');
+            }
+        }
+
+        async function copyPlainText(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+            fallbackCopyText(text);
+        }
+
+        async function copyRichArticle() {
+            const wrapper = document.createElement('div');
+            wrapper.appendChild(richTemplate.content.cloneNode(true));
+            applyRichCopyStyles(wrapper);
+            const html = wrapper.innerHTML;
+            const plainText = wrapper.textContent.replace(/\n{3,}/g, '\n\n').trim();
+
+            if (navigator.clipboard && window.ClipboardItem) {
+                await navigator.clipboard.write([
+                    new ClipboardItem({
+                        'text/html': new Blob([html], { type: 'text/html' }),
+                        'text/plain': new Blob([plainText], { type: 'text/plain' })
+                    })
+                ]);
+                return;
+            }
+
+            fallbackCopyText(plainText);
+        }
+
+        function applyRichCopyStyles(root) {
+            const baseText = 'color:#374151;font-size:16px;line-height:1.85;margin:0 0 16px;';
+            root.querySelectorAll('h1').forEach(function (node) {
+                node.setAttribute('style', 'color:#111827;font-size:28px;line-height:1.35;font-weight:700;margin:0 0 20px;');
+            });
+            root.querySelectorAll('h2').forEach(function (node) {
+                node.setAttribute('style', 'color:#111827;font-size:24px;line-height:1.4;font-weight:700;margin:30px 0 16px;');
+            });
+            root.querySelectorAll('h3').forEach(function (node) {
+                node.setAttribute('style', 'color:#111827;font-size:20px;line-height:1.45;font-weight:700;margin:24px 0 14px;');
+            });
+            root.querySelectorAll('h4').forEach(function (node) {
+                node.setAttribute('style', 'color:#111827;font-size:18px;line-height:1.45;font-weight:700;margin:22px 0 12px;');
+            });
+            root.querySelectorAll('p').forEach(function (node) {
+                node.setAttribute('style', baseText);
+            });
+            root.querySelectorAll('ul').forEach(function (node) {
+                node.setAttribute('style', baseText + 'padding-left:24px;');
+            });
+            root.querySelectorAll('ol').forEach(function (node) {
+                node.setAttribute('style', baseText + 'padding-left:24px;');
+            });
+            root.querySelectorAll('li').forEach(function (node) {
+                node.setAttribute('style', 'margin:0 0 10px;color:#374151;line-height:1.85;');
+            });
+            root.querySelectorAll('blockquote').forEach(function (node) {
+                node.setAttribute('style', 'border-left:3px solid #d1d5db;padding-left:16px;color:#6b7280;margin:0 0 16px;line-height:1.85;');
+            });
+            root.querySelectorAll('table').forEach(function (node) {
+                node.setAttribute('style', 'border-collapse:collapse;width:100%;margin:0 0 18px;color:#374151;font-size:15px;line-height:1.7;');
+            });
+            root.querySelectorAll('th').forEach(function (node) {
+                node.setAttribute('style', 'border:1px solid #e5e7eb;background:#f9fafb;color:#111827;font-weight:600;padding:10px;text-align:left;');
+            });
+            root.querySelectorAll('td').forEach(function (node) {
+                node.setAttribute('style', 'border:1px solid #e5e7eb;padding:10px;text-align:left;');
+            });
+            root.querySelectorAll('a').forEach(function (node) {
+                node.setAttribute('style', 'color:#2563eb;text-decoration:none;');
+            });
+            root.querySelectorAll('code').forEach(function (node) {
+                node.setAttribute('style', 'background:#f3f4f6;border-radius:5px;padding:2px 6px;font-size:14px;');
+            });
+        }
+
+        richButton.addEventListener('click', async function () {
+            try {
+                await copyRichArticle();
+                setCopyStatus('已复制带格式内容', 'success');
+            } catch (error) {
+                try {
+                    await copyPlainText(markdownText);
+                    setCopyStatus('富文本不可用，已复制 Markdown', 'warning');
+                } catch (fallbackError) {
+                    setCopyStatus('复制失败，请手动选择文章内容', 'error');
+                }
+            }
+        });
+
+        markdownButton.addEventListener('click', async function () {
+            try {
+                await copyPlainText(markdownText);
+                setCopyStatus('已复制 Markdown', 'success');
+            } catch (error) {
+                setCopyStatus('复制失败，请手动选择文章内容', 'error');
+            }
+        });
+    });
+    </script>
 
     <?php if (!empty($article_detail_ad)): ?>
     <script>
