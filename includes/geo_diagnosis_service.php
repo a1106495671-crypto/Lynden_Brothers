@@ -33,6 +33,9 @@ function geo_diagnosis_ensure_schema(PDO $db): void {
             predicted_hit_rate VARCHAR(32),
             industry_benchmark NUMERIC(5,2),
             raw_signals_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ai_analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ai_analysis_model VARCHAR(200) DEFAULT '',
+            ai_analyzed_at TIMESTAMP DEFAULT NULL,
             error_message TEXT,
             requester_ip INET,
             requester_email VARCHAR(200) DEFAULT '',
@@ -43,6 +46,15 @@ function geo_diagnosis_ensure_schema(PDO $db): void {
     $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_runs_brand ON geo_diagnosis_runs(brand_id)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_runs_status ON geo_diagnosis_runs(status)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_runs_created ON geo_diagnosis_runs(created_at DESC)");
+    if (!db_column_exists($db, 'geo_diagnosis_runs', 'ai_analysis_json')) {
+        $db->exec("ALTER TABLE geo_diagnosis_runs ADD COLUMN ai_analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb");
+    }
+    if (!db_column_exists($db, 'geo_diagnosis_runs', 'ai_analysis_model')) {
+        $db->exec("ALTER TABLE geo_diagnosis_runs ADD COLUMN ai_analysis_model VARCHAR(200) DEFAULT ''");
+    }
+    if (!db_column_exists($db, 'geo_diagnosis_runs', 'ai_analyzed_at')) {
+        $db->exec("ALTER TABLE geo_diagnosis_runs ADD COLUMN ai_analyzed_at TIMESTAMP DEFAULT NULL");
+    }
 
     $db->exec("
         CREATE TABLE IF NOT EXISTS geo_diagnosis_signal_definitions (
@@ -81,9 +93,13 @@ function geo_diagnosis_ensure_schema(PDO $db): void {
             action_text TEXT NOT NULL,
             estimated_impact NUMERIC(5,2),
             sku_id VARCHAR(64) DEFAULT '',
+            details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     ");
+    if (!db_column_exists($db, 'geo_diagnosis_actions', 'details_json')) {
+        $db->exec("ALTER TABLE geo_diagnosis_actions ADD COLUMN details_json JSONB NOT NULL DEFAULT '{}'::jsonb");
+    }
     $db->exec("CREATE INDEX IF NOT EXISTS idx_geo_diag_actions_run ON geo_diagnosis_actions(diagnosis_id)");
 
     $db->exec("
@@ -780,6 +796,179 @@ function geo_diagnosis_actions_for_scores(array $scores): array {
     return $actions;
 }
 
+function geo_diagnosis_extract_json_object(string $text): array {
+    $text = trim($text);
+    if ($text === '') {
+        return [];
+    }
+    $text = preg_replace('/^```(?:json)?\s*/i', '', $text);
+    $text = preg_replace('/\s*```$/', '', (string) $text);
+    $start = strpos($text, '{');
+    $end = strrpos($text, '}');
+    if ($start === false || $end === false || $end <= $start) {
+        return [];
+    }
+    $json = substr($text, $start, $end - $start + 1);
+    $data = json_decode($json, true);
+    return is_array($data) ? $data : [];
+}
+
+function geo_diagnosis_generate_ai_analysis(PDO $db, string $diagnosisId): array {
+    geo_diagnosis_ensure_schema($db);
+    $diagnosisId = trim($diagnosisId);
+    if ($diagnosisId === '') {
+        throw new InvalidArgumentException('缺少诊断ID');
+    }
+    $report = geo_diagnosis_latest($db, $diagnosisId);
+    if (!$report) {
+        throw new InvalidArgumentException('诊断记录不存在');
+    }
+    if (!function_exists('geo_call_ai')) {
+        throw new RuntimeException('AI 调用函数不可用，请检查系统配置。');
+    }
+
+    $scoreContext = [];
+    foreach ((array) ($report['scores'] ?? []) as $score) {
+        $scoreContext[] = [
+            'signal_key' => (string) ($score['signal_key'] ?? ''),
+            'name' => (string) ($score['name'] ?? $score['signal_key'] ?? ''),
+            'score' => round((float) ($score['score'] ?? 0), 1),
+            'weight_percent' => round(((float) ($score['weight'] ?? 0)) * 100, 1),
+            'benchmark_score' => round((float) ($score['benchmark_score'] ?? 0), 1),
+            'benchmark_gap' => round((float) ($score['benchmark_gap'] ?? 0), 1),
+            'details' => json_decode((string) ($score['details_json'] ?? '{}'), true) ?: [],
+            'raw_metric' => json_decode((string) ($score['raw_metric'] ?? '{}'), true) ?: [],
+        ];
+    }
+
+    $promptContext = [
+        'brand' => (string) ($report['brand_name'] ?? ''),
+        'domain' => (string) ($report['domain'] ?? ''),
+        'industry' => (string) ($report['industry'] ?? ''),
+        'overall_score' => round((float) ($report['overall_score'] ?? 0), 1),
+        'hit_rate' => geo_diagnosis_hit_rate_label((string) ($report['predicted_hit_rate'] ?? '')),
+        'industry_benchmark' => round((float) ($report['industry_benchmark'] ?? 0), 1),
+        'scores' => $scoreContext,
+    ];
+
+    $prompt = "你是给中小企业老板看的GEO/AI搜索诊断顾问。请基于下面数据做真实经营分析，不要套模板，不要编造未给出的事实。\n"
+        . "输出对象不是技术人员。必须使用人话，像咨询顾问在会议上解释：现在有什么问题、会影响什么、这周先做什么、要准备什么材料、做完怎么判断有效。\n"
+        . "禁止在面向用户的文案里出现这些内部词：fact_density、structure、site_identity、third_party_mention、authoritative_links、ugc_coverage、JSON-LD、H标签、schema、爬取、signal_key、sku_id。\n"
+        . "如果必须表达技术动作，请翻译成人能理解的话，例如“把品牌资料整理成搜索引擎和AI容易读取的页面/表格”。\n"
+        . "你的任务：给出一句话结论、实际业务影响、本周行动计划、需要客户准备的资料、3条优先动作。每条动作要具体到可以安排人执行。\n"
+        . "请严格只输出JSON，不要Markdown。JSON结构必须是：{\n"
+        . "  \"plain_summary\":\"60字以内，一句话说清当前最大问题\",\n"
+        . "  \"business_impact\":\"80字以内，说清它会怎样影响客户咨询、成交或AI推荐\",\n"
+        . "  \"evidence_note\":\"80字以内，说清哪些判断有数据支持，哪些还需要补资料，不要讲技术字段\",\n"
+        . "  \"first_week_plan\":\"80字以内，说清本周第一优先级\",\n"
+        . "  \"materials_needed\":[\"客户需要提供的资料1\",\"资料2\",\"资料3\"],\n"
+        . "  \"actions\":[{\"signal_key\":\"六维signal_key之一，仅供系统内部使用\",\"priority\":1,\"title\":\"行动标题，不超过18字\",\"action_text\":\"要做什么，不超过90字\",\"why_it_matters\":\"为什么这件事有用，不超过80字\",\"what_to_prepare\":[\"需要准备1\",\"需要准备2\"],\"deliverables\":[\"交付物1\",\"交付物2\"],\"acceptance_criteria\":[\"验收标准1\",\"验收标准2\"],\"owner_role\":\"建议负责人，如品牌/内容/技术\",\"estimated_impact\":8}],\n"
+        . "  \"risks\":[\"用人话写的风险1\",\"风险2\"],\n"
+        . "  \"next_steps\":[\"下一步1\",\"下一步2\"]\n"
+        . "}\n"
+        . "允许的signal_key：third_party_mention, fact_density, structure, authoritative_links, ugc_coverage, site_identity。\n"
+        . "诊断数据JSON：\n" . json_encode($promptContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+    $ai = geo_call_ai($prompt, 2400, 0.25);
+    if (!empty($ai['error'])) {
+        throw new RuntimeException('小米 MiMo 分析调用失败：' . (string) $ai['error']);
+    }
+    $analysis = geo_diagnosis_extract_json_object((string) ($ai['content'] ?? ''));
+    if (empty($analysis['actions']) || !is_array($analysis['actions'])) {
+        throw new RuntimeException('小米 MiMo 已返回内容，但没有给出可解析的行动项。');
+    }
+
+    $validSignals = array_column(geo_diagnosis_signal_catalog(), 'key');
+    $scoresByKey = [];
+    foreach ($scoreContext as $score) {
+        $scoresByKey[(string) $score['signal_key']] = $score;
+    }
+
+    $normalizedActions = [];
+    $priority = 1;
+    foreach ((array) $analysis['actions'] as $item) {
+        if ($priority > 3) {
+            break;
+        }
+        if (!is_array($item)) {
+            continue;
+        }
+        $signalKey = (string) ($item['signal_key'] ?? '');
+        if (!in_array($signalKey, $validSignals, true)) {
+            $signalKey = (string) ($scoreContext[$priority - 1]['signal_key'] ?? 'fact_density');
+        }
+        $actionText = trim((string) ($item['action_text'] ?? ''));
+        if ($actionText === '') {
+            continue;
+        }
+        $title = trim((string) ($item['title'] ?? ''));
+        $normalizedActions[] = [
+            'signal_key' => $signalKey,
+            'priority' => $priority++,
+            'action_text' => mb_substr($actionText, 0, 180),
+            'estimated_impact' => round(max(1, min(20, (float) ($item['estimated_impact'] ?? 8))), 1),
+            'sku_id' => 'geo_ai_analysis',
+            'details' => [
+                'title' => mb_substr($title !== '' ? $title : $actionText, 0, 36),
+                'why_it_matters' => mb_substr(trim((string) ($item['why_it_matters'] ?? $item['rationale'] ?? '')), 0, 400),
+                'what_to_prepare' => array_values(array_slice(array_map('strval', (array) ($item['what_to_prepare'] ?? [])), 0, 5)),
+                'deliverables' => array_values(array_slice(array_map('strval', (array) ($item['deliverables'] ?? [])), 0, 5)),
+                'acceptance_criteria' => array_values(array_slice(array_map('strval', (array) ($item['acceptance_criteria'] ?? [])), 0, 5)),
+                'owner_role' => mb_substr(trim((string) ($item['owner_role'] ?? '项目负责人')), 0, 40),
+                'source' => 'xiaomi_mimo',
+                'score' => $scoresByKey[$signalKey]['score'] ?? null,
+            ],
+        ];
+    }
+
+    if (empty($normalizedActions)) {
+        throw new RuntimeException('小米 MiMo 返回的行动项为空。');
+    }
+
+    $analysis['actions'] = $normalizedActions;
+    $analysis['model_used'] = (string) ($ai['model_used'] ?? '');
+    $analysis['generated_at'] = date('Y-m-d H:i:s');
+
+    $db->beginTransaction();
+    try {
+        $runStmt = $db->prepare("
+            UPDATE geo_diagnosis_runs
+            SET ai_analysis_json = ?::jsonb,
+                ai_analysis_model = ?,
+                ai_analyzed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ");
+        $runStmt->execute([
+            json_encode($analysis, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            (string) ($ai['model_used'] ?? ''),
+            $diagnosisId,
+        ]);
+
+        $db->prepare("DELETE FROM geo_diagnosis_actions WHERE diagnosis_id = ?")->execute([$diagnosisId]);
+        $actionStmt = $db->prepare("
+            INSERT INTO geo_diagnosis_actions (diagnosis_id, signal_key, priority, action_text, estimated_impact, sku_id, details_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)
+        ");
+        foreach ($normalizedActions as $action) {
+            $actionStmt->execute([
+                $diagnosisId,
+                $action['signal_key'],
+                $action['priority'],
+                $action['action_text'],
+                $action['estimated_impact'],
+                $action['sku_id'],
+                json_encode($action['details'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            ]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        throw $e;
+    }
+
+    return $analysis;
+}
+
 function geo_diagnosis_sku_label(string $sku): string {
     return [
         'ugc_pkg_basic' => 'UGC内容铺设基础包',
@@ -788,6 +977,7 @@ function geo_diagnosis_sku_label(string $sku): string {
         'authority_pr_basic' => '权威提及与PR基础包',
         'ugc_distribution' => 'UGC渠道分发包',
         'trust_page_pack' => '站点可信度页面包',
+        'geo_ai_analysis' => 'AI深度诊断行动包',
         'geo_basic' => 'GEO基础优化包',
     ][$sku] ?? $sku;
 }
@@ -852,9 +1042,11 @@ function geo_diagnosis_latest(PDO $db, ?string $id = null): ?array {
         $action['benchmark_score'] = round((float) $benchmark, 1);
         $action['benchmark_gap'] = round(((float) $benchmark) - ((float) ($action['score'] ?? 0)), 1);
         $action['sku_label'] = geo_diagnosis_sku_label((string) ($action['sku_id'] ?? ''));
+        $action['details'] = json_decode((string) ($action['details_json'] ?? '{}'), true) ?: [];
     }
     unset($action);
 
+    $run['ai_analysis'] = json_decode((string) ($run['ai_analysis_json'] ?? '{}'), true) ?: [];
     $run['scores'] = $scores;
     $run['actions'] = $actions;
     return $run;

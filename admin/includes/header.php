@@ -72,6 +72,7 @@ $primary_nav_items = [
         'icon' => 'radar',
         'children' => [
             ['page' => 'geo-diagnosis.php',         'name' => '雷达诊断',       'desc' => '品牌 GEO 权威性诊断'],
+            ['page' => 'geo-baseline-qa.php',       'name' => '问答基准线',     'desc' => '首次 AI 问答样本维护'],
             ['page' => 'geo-panorama.php',           'name' => '全景诊断',       'desc' => 'AI可见度全景分析'],
             ['page' => 'geo-intent.php',             'name' => '意图挖掘',       'desc' => '发现AI问答意图空白'],
             ['page' => 'citation-simulator.php',     'name' => '引用模拟器',     'desc' => '关键词引用机会推演'],

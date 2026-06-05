@@ -40,33 +40,10 @@ try {
             $scores = is_array($_POST['scores'] ?? null) ? $_POST['scores'] : [];
             geo_diagnosis_update_weights($db, $diagnosisId, $weights, $scores);
             admin_redirect('geo-diagnosis.php?id=' . urlencode($diagnosisId));
-        } elseif ($action === 'save_baseline_qa') {
+        } elseif ($action === 'generate_ai_analysis') {
             $diagnosisId = trim((string) ($_POST['diagnosis_id'] ?? ''));
-            $baselineBrand = clean_input($_POST['brand_name'] ?? '');
-            $baselineCustomer = clean_input($_POST['customer_id'] ?? $currentCustomerId);
-            $savedCount = geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, $baselineCustomer, $baselineBrand, $_POST);
-            $message = '问答基准线已保存 ' . $savedCount . ' 条，并同步为监测关键词';
-            $selectedId = $diagnosisId;
-        } elseif ($action === 'generate_baseline_qa') {
-            $diagnosisId = trim((string) ($_POST['diagnosis_id'] ?? ''));
-            $baselineBrand = clean_input($_POST['brand_name'] ?? '');
-            $baselineCustomer = clean_input($_POST['customer_id'] ?? $currentCustomerId);
-            $baselineIndustry = clean_input($_POST['industry'] ?? '');
-            $generated = geo_baseline_qa_generate_from_chunks($db, $baselineCustomer, $baselineBrand, $baselineIndustry, 10);
-            $generatedBaselineRows = $generated['rows'] ?? [];
-            if (!empty($generatedBaselineRows)) {
-                $saveInput = [
-                    'baseline_question' => array_map(static fn (array $row): string => (string) ($row['question'] ?? ''), $generatedBaselineRows),
-                    'baseline_answer' => array_fill(0, count($generatedBaselineRows), ''),
-                    'baseline_platform' => array_map(static fn (array $row): string => (string) ($row['platform'] ?? 'deepseek'), $generatedBaselineRows),
-                ];
-                $savedCount = geo_baseline_qa_save_for_diagnosis($db, $diagnosisId, $baselineCustomer, $baselineBrand, $saveInput);
-                $message = (string) ($generated['message'] ?? '已生成首问样本。') . ' 已写入问题栏 ' . $savedCount . ' 条，答案留空，请复制问题去真实AI平台提问后再补充保存。';
-                $generatedBaselineRows = [];
-            } else {
-                $message = (string) ($generated['message'] ?? '未生成首问样本。');
-            }
-            $selectedId = $diagnosisId;
+            geo_diagnosis_generate_ai_analysis($db, $diagnosisId);
+            admin_redirect('geo-diagnosis.php?id=' . urlencode($diagnosisId) . '&ai_analysis=1');
         } else {
             $diagnosisId = geo_diagnosis_create($db, [
                 'brand_name'  => clean_input($_POST['brand_name'] ?? ''),
@@ -81,6 +58,10 @@ try {
     }
 } catch (Throwable $e) {
     $error = $e->getMessage();
+}
+
+if (isset($_GET['ai_analysis'])) {
+    $message = '已调用小米 MiMo 生成真实 AI 深度分析';
 }
 
 $summary = geo_diagnosis_summary($db);
@@ -491,24 +472,88 @@ require_once __DIR__ . '/includes/header.php';
 	                        </div>
 
                         <div class="border-t border-gray-200 px-6 py-6">
-                            <h3 class="mb-4 text-base font-semibold text-gray-900">优先优化动作</h3>
+                            <div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                <div>
+                                    <h3 class="text-base font-semibold text-gray-900">优先优化动作</h3>
+                                    <p class="mt-1 text-sm text-gray-500">
+                                        <?php if (!empty($currentReport['ai_analysis'])): ?>
+                                            已由 <?php echo htmlspecialchars((string) ($currentReport['ai_analysis_model'] ?: 'AI模型')); ?> 生成真实分析
+                                            <?php if (!empty($currentReport['ai_analyzed_at'])): ?>
+                                                · <?php echo htmlspecialchars(date('Y-m-d H:i', strtotime((string) $currentReport['ai_analyzed_at']))); ?>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            当前为规则诊断动作，可调用小米 MiMo 生成真实深度分析。
+                                        <?php endif; ?>
+                                    </p>
+                                </div>
+                                <form method="POST">
+                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
+                                    <input type="hidden" name="action" value="generate_ai_analysis">
+                                    <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
+                                    <button type="submit" class="inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                                        <i data-lucide="sparkles" class="mr-2 h-4 w-4"></i>
+                                        用小米 MiMo 真实分析
+                                    </button>
+                                </form>
+                            </div>
+                            <?php if (!empty($currentReport['ai_analysis'])): ?>
+                                <?php $aiAnalysis = is_array($currentReport['ai_analysis']) ? $currentReport['ai_analysis'] : []; ?>
+                                <div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-4">
+                                    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                                        <div>
+                                            <div class="text-xs font-semibold text-emerald-700">一句话结论</div>
+                                            <p class="mt-2 text-base font-semibold leading-7 text-emerald-950"><?php echo htmlspecialchars((string) ($aiAnalysis['plain_summary'] ?? $aiAnalysis['summary'] ?? '')); ?></p>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs font-semibold text-emerald-700">对业务的影响</div>
+                                            <p class="mt-2 text-sm leading-6 text-emerald-950"><?php echo htmlspecialchars((string) ($aiAnalysis['business_impact'] ?? '')); ?></p>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs font-semibold text-emerald-700">本周先做</div>
+                                            <p class="mt-2 text-sm leading-6 text-emerald-950"><?php echo htmlspecialchars((string) ($aiAnalysis['first_week_plan'] ?? implode('；', array_map('strval', (array) ($aiAnalysis['next_steps'] ?? []))))); ?></p>
+                                        </div>
+                                        <div>
+                                            <div class="text-xs font-semibold text-emerald-700">需要准备</div>
+                                            <p class="mt-2 text-sm leading-6 text-emerald-950"><?php echo htmlspecialchars(implode('；', array_map('strval', (array) ($aiAnalysis['materials_needed'] ?? [])))); ?></p>
+                                        </div>
+                                    </div>
+                                    <?php if (!empty($aiAnalysis['evidence_note'])): ?>
+                                        <div class="mt-4 rounded-md border border-emerald-200 bg-white/70 px-3 py-2 text-xs leading-5 text-emerald-900">
+                                            <?php echo htmlspecialchars((string) $aiAnalysis['evidence_note']); ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
                             <div class="space-y-3">
                                 <?php foreach ($currentReport['actions'] as $action): ?>
+                                    <?php $actionDetails = is_array($action['details'] ?? null) ? $action['details'] : []; ?>
                                     <div class="rounded-lg border border-gray-200 px-4 py-4">
-                                        <div class="mb-2 flex items-center justify-between">
-                                            <span class="text-sm font-semibold text-gray-900">优先级 <?php echo (int) $action['priority']; ?> · <?php echo htmlspecialchars($action['signal_name'] ?: $action['signal_key']); ?></span>
-                                            <span class="text-xs text-gray-500">预计 +<?php echo htmlspecialchars((string) round((float) $action['estimated_impact'], 1)); ?> 分</span>
+                                        <div class="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                            <span class="text-base font-semibold text-gray-900"><?php echo (int) $action['priority']; ?>. <?php echo htmlspecialchars((string) ($actionDetails['title'] ?? $action['action_text'])); ?></span>
+                                            <span class="w-fit rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700">预期改善：<?php echo ((float) $action['estimated_impact']) >= 12 ? '高' : '中'; ?></span>
                                         </div>
-                                        <div class="mb-3 grid grid-cols-1 gap-2 text-xs text-gray-600 md:grid-cols-3">
-                                            <div class="rounded-md bg-gray-50 px-3 py-2">当前 <?php echo htmlspecialchars((string) round((float) ($action['score'] ?? 0), 1)); ?> 分</div>
-                                            <div class="rounded-md bg-gray-50 px-3 py-2">行业基准 <?php echo htmlspecialchars((string) round((float) ($action['benchmark_score'] ?? 0), 1)); ?> 分</div>
-                                            <div class="rounded-md <?php echo ((float) ($action['benchmark_gap'] ?? 0)) > 0 ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'; ?> px-3 py-2">
-                                                <?php echo ((float) ($action['benchmark_gap'] ?? 0)) > 0 ? '差距 ' . htmlspecialchars((string) round((float) $action['benchmark_gap'], 1)) . ' 分' : '已达基准'; ?>
+                                        <p class="text-sm leading-6 text-gray-800"><?php echo htmlspecialchars($action['action_text']); ?></p>
+                                        <div class="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                                            <div class="rounded-md bg-gray-50 px-3 py-2 leading-6 text-gray-700">
+                                                <span class="font-semibold text-gray-900">为什么要做：</span><?php echo htmlspecialchars((string) ($actionDetails['why_it_matters'] ?? $actionDetails['rationale'] ?? '补齐客户和AI都能理解的品牌证据。')); ?>
+                                            </div>
+                                            <div class="rounded-md bg-gray-50 px-3 py-2 leading-6 text-gray-700">
+                                                <span class="font-semibold text-gray-900">负责人：</span><?php echo htmlspecialchars((string) ($actionDetails['owner_role'] ?? '项目负责人')); ?>
                                             </div>
                                         </div>
-                                        <p class="text-sm text-gray-700"><?php echo htmlspecialchars($action['action_text']); ?></p>
-                                        <div class="mt-3 inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-                                            对应服务包：<?php echo htmlspecialchars($action['sku_label'] ?? $action['sku_id']); ?>
+                                        <div class="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+                                            <div>
+                                                <div class="text-xs font-semibold text-gray-500">客户要准备</div>
+                                                <p class="mt-1 leading-6 text-gray-700"><?php echo htmlspecialchars(implode('；', array_map('strval', (array) ($actionDetails['what_to_prepare'] ?? [])))); ?></p>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-gray-500">交付物</div>
+                                                <p class="mt-1 leading-6 text-gray-700"><?php echo htmlspecialchars(implode('；', array_map('strval', (array) ($actionDetails['deliverables'] ?? [])))); ?></p>
+                                            </div>
+                                            <div>
+                                                <div class="text-xs font-semibold text-gray-500">怎么验收</div>
+                                                <p class="mt-1 leading-6 text-gray-700"><?php echo htmlspecialchars(implode('；', array_map('strval', (array) ($actionDetails['acceptance_criteria'] ?? [])))); ?></p>
+                                            </div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
@@ -520,96 +565,35 @@ require_once __DIR__ . '/includes/header.php';
 
             <?php if ($currentReport): ?>
                 <?php
-                $baselineEditRows = !empty($generatedBaselineRows) ? $generatedBaselineRows : $currentBaselineRows;
-                if (empty($baselineEditRows)) {
-                    $questionsForCurrentBrand = array_fill(0, 10, '');
-                    $baselineEditRows = array_map(static function ($question, $index) {
-                        return [
-                            'question' => $question,
-                            'platform' => 'deepseek',
-                            'baseline_answer' => '',
-                            'sort_order' => $index + 1,
-                        ];
-                    }, $questionsForCurrentBrand, array_keys($questionsForCurrentBrand));
-                }
                 $baselineMentionCount = 0;
                 foreach ($currentBaselineRows as $baselineRow) {
                     if (!empty($baselineRow['mention_brand'])) {
                         $baselineMentionCount++;
                     }
                 }
+                $baselineFillUrl = admin_url('geo-baseline-qa.php?id=' . urlencode((string) $currentReport['id']));
                 ?>
                 <section class="mt-6 rounded-lg border border-blue-200 bg-white shadow-sm">
-                    <div class="border-b border-blue-100 bg-blue-50 px-6 py-4">
-                        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div class="bg-blue-50 px-6 py-5">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                             <div>
                                 <h2 class="text-lg font-semibold text-gray-900">首次 AI 问答基准线</h2>
                                 <p class="mt-1 text-sm text-gray-600">这组问题会同步到 GEO 监测，用来观察 AI 在品类推荐、排名和竞品比较里是否自然提到我们。</p>
                             </div>
-                            <div class="flex flex-wrap gap-2 text-xs font-semibold">
+                            <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
                                 <span class="rounded-full bg-white px-3 py-1 text-blue-700">已保存 <?php echo count($currentBaselineRows); ?> 条</span>
                                 <span class="rounded-full bg-white px-3 py-1 text-gray-700">首次提及 <?php echo $baselineMentionCount; ?> 条</span>
                                 <a href="<?php echo htmlspecialchars(admin_url('geo-monitor.php')); ?>" class="rounded-full bg-slate-900 px-3 py-1 text-white">去监测追踪</a>
                             </div>
                         </div>
-                        <form method="POST" class="mt-4 flex flex-col gap-3 rounded-lg border border-blue-100 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
-                            <div>
-                                <div class="text-sm font-semibold text-gray-900">从知识切片生成雷达首问</div>
-                                <p class="mt-1 text-xs text-gray-500">读取已切割的知识库片段，整理出客户做品类推荐、排名和竞品比较时最可能拿去问AI的问题；答案由你去真实AI平台提问后手动记录。</p>
-                            </div>
-                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
-                            <input type="hidden" name="action" value="generate_baseline_qa">
-                            <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
-                            <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars((string) $currentReport['brand_name']); ?>">
-                            <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars($currentCustomerId); ?>">
-                            <input type="hidden" name="industry" value="<?php echo htmlspecialchars((string) ($currentReport['industry'] ?? '')); ?>">
-                            <button type="submit" class="inline-flex shrink-0 items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                                <i data-lucide="wand-sparkles" class="mr-2 h-4 w-4"></i>
-                                生成首问样本
-                            </button>
-                        </form>
+                        <div class="mt-4 flex flex-col gap-3 rounded-lg border border-blue-100 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
+                            <p class="text-sm leading-6 text-gray-600">首问样本生成、问题粘贴和首次答案录入已移到独立页面，避免诊断报告被长表单占满。</p>
+                            <a href="<?php echo htmlspecialchars($baselineFillUrl); ?>" class="inline-flex shrink-0 items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                                <i data-lucide="clipboard-pen-line" class="mr-2 h-4 w-4"></i>
+                                填写基准线
+                            </a>
+                        </div>
                     </div>
-                    <form method="POST" class="px-6 py-6">
-                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generate_csrf_token()); ?>">
-                        <input type="hidden" name="action" value="save_baseline_qa">
-                        <input type="hidden" name="diagnosis_id" value="<?php echo htmlspecialchars((string) $currentReport['id']); ?>">
-                        <input type="hidden" name="brand_name" value="<?php echo htmlspecialchars((string) $currentReport['brand_name']); ?>">
-                        <input type="hidden" name="customer_id" value="<?php echo htmlspecialchars($currentCustomerId); ?>">
-                        <div class="space-y-3">
-                            <?php foreach ($baselineEditRows as $idx => $row): ?>
-                                <div class="rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm">
-                                    <div class="mb-3 flex items-center justify-between gap-3">
-                                        <div class="flex items-center gap-3">
-                                            <span class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-sm font-bold text-blue-700"><?php echo (int) $idx + 1; ?></span>
-                                            <span class="text-sm font-semibold text-gray-900">首问样本</span>
-                                        </div>
-                                        <select name="baseline_platform[]" class="h-9 w-36 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                                            <?php foreach ($baselinePlatforms as $platformKey => $platformLabel): ?>
-                                                <option value="<?php echo htmlspecialchars($platformKey); ?>" <?php echo (string) ($row['platform'] ?? '') === $platformKey ? 'selected' : ''; ?>><?php echo htmlspecialchars($platformLabel); ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </div>
-                                    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,0.95fr)_minmax(560px,1.45fr)]">
-                                        <label class="block">
-                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">问题</span>
-                                            <textarea name="baseline_question[]" rows="3" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴你手动问 AI 的问题"><?php echo htmlspecialchars((string) ($row['question'] ?? '')); ?></textarea>
-                                        </label>
-                                        <label class="block">
-                                            <span class="mb-1.5 block text-xs font-semibold text-gray-500">首次答案</span>
-                                            <textarea name="baseline_answer[]" rows="3" class="block min-h-[104px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm leading-6 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="粘贴第一次手动问到的原始答案"><?php echo htmlspecialchars((string) ($row['baseline_answer'] ?? '')); ?></textarea>
-                                        </label>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                        <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <p class="text-sm text-gray-500">保存后，这些问题会作为客户监测关键词，监测页的“基准线追踪”会展示最新答案变化。</p>
-                            <button type="submit" class="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
-                                <i data-lucide="save" class="mr-2 h-4 w-4"></i>
-                                保存基准线
-                            </button>
-                        </div>
-                    </form>
                 </section>
             <?php endif; ?>
 
