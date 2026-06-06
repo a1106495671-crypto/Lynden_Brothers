@@ -11,8 +11,8 @@ if (isset($_SESSION['client_id'])) {
 }
 
 define('FEISHU_TREASURE', true);
-require_once '/www/wwwroot/geo-system/includes/config.php';
-require_once '/www/wwwroot/geo-system/includes/database_admin.php';
+require_once __DIR__ . '/../includes/config.php';
+require_once __DIR__ . '/../includes/database_admin.php';
 
 // Ensure client credentials table
 try {
@@ -61,9 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body class="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-50 flex items-center justify-center p-4">
   <div class="w-full max-w-md">
     <div class="text-center mb-8">
-      <div class="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center mx-auto mb-4">
-        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
-      </div>
+      <img src="/assets/images/lynden-brothers-logo.jpg" alt="Lynden Brothers GEO" class="mx-auto mb-4 h-20 w-auto max-w-72 object-contain">
       <h1 class="text-2xl font-bold text-gray-900">GEO数据看板</h1>
       <p class="text-gray-500 text-sm mt-1">登录查看您的品牌AI可见度报告</p>
     </div>

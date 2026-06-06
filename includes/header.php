@@ -13,7 +13,7 @@ if (!isset($site_title)) {
     }
 }
 
-$site_logo = function_exists('site_setting_value') ? site_setting_value('site_logo', '') : '';
+$site_logo = function_exists('site_setting_value') ? site_setting_value('site_logo', '/assets/images/lynden-brothers-logo.jpg') : '/assets/images/lynden-brothers-logo.jpg';
 
 if (!isset($categories)) {
     $categories = get_categories();
@@ -30,7 +30,7 @@ $is_skills = $request_path === '/skills' || $request_path === '/skills.php' || s
             <div class="flex items-center">
                 <a href="/" class="flex items-center">
                     <?php if (!empty($site_logo)): ?>
-                        <img src="<?php echo htmlspecialchars($site_logo); ?>" alt="<?php echo htmlspecialchars($site_title); ?>" class="h-9 w-auto max-w-48 object-contain">
+                        <img src="<?php echo htmlspecialchars($site_logo); ?>" alt="<?php echo htmlspecialchars($site_title); ?>" class="h-11 w-auto max-w-64 object-contain">
                     <?php else: ?>
                         <span class="text-lg sm:text-xl font-bold text-gray-900"><?php echo htmlspecialchars($site_title); ?></span>
                     <?php endif; ?>

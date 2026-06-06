@@ -112,7 +112,8 @@ function score_grade(int $s): array {
   }
 
   .cover { background: linear-gradient(135deg, #4f46e5 0%, #2563eb 100%); color: white; padding: 60px 48px 48px; }
-  .cover-logo { font-size: 13px; opacity: 0.7; margin-bottom: 48px; letter-spacing: 1px; }
+  .cover-logo { margin-bottom: 48px; }
+  .cover-logo img { height: 52px; width: auto; max-width: 280px; object-fit: contain; background: white; border-radius: 6px; padding: 6px 10px; }
   .cover-title { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
   .cover-sub { font-size: 15px; opacity: 0.8; margin-bottom: 48px; }
   .cover-meta { font-size: 13px; opacity: 0.65; }
@@ -181,7 +182,7 @@ function score_grade(int $s): array {
 
   <!-- Cover -->
   <div class="cover">
-    <div class="cover-logo">GEO月度报告</div>
+    <div class="cover-logo"><img src="/assets/images/lynden-brothers-logo.jpg" alt="Lynden Brothers GEO"></div>
     <div class="cover-title"><?= htmlspecialchars($name) ?></div>
     <div class="cover-sub"><?= $monthLabel ?> · 品牌AI可见度月度报告</div>
     <div class="cover-meta">生成日期：<?= date('Y年m月d日') ?></div>

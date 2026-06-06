@@ -11,6 +11,7 @@ require_once __DIR__ . '/../includes/database_admin.php';
 require_once __DIR__ . '/../includes/functions.php';
 
 $admin_site_name = get_setting('site_title', SITE_NAME);
+$admin_site_logo = get_setting('site_logo', '/assets/images/lynden-brothers-logo.jpg');
 
 // 如果已经登录，跳转到管理面板
 if (is_admin_logged_in()) {
@@ -136,9 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="rounded-2xl p-8 login-form">
             <!-- Logo和标题 -->
             <div class="text-center mb-8">
-                <div class="login-badge w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <i data-lucide="shield-check" class="w-8 h-8 text-white"></i>
-                </div>
+                <img src="<?php echo htmlspecialchars($admin_site_logo); ?>" alt="<?php echo htmlspecialchars($admin_site_name); ?>" class="mx-auto mb-5 h-20 w-auto max-w-72 object-contain">
                 <h1 class="text-2xl font-bold text-gray-900 mb-2">管理员登录</h1>
                 <p class="text-gray-600"><?php echo htmlspecialchars($admin_site_name); ?> 后台管理中心</p>
             </div>

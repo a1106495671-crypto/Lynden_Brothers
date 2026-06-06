@@ -22,6 +22,7 @@ session_write_close();
 $message = '';
 $error = '';
 $admin_site_name = get_setting('site_title', SITE_NAME);
+$admin_site_logo = get_setting('site_logo', '/assets/images/lynden-brothers-logo.jpg');
 
 // 处理POST请求
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -186,7 +187,9 @@ $stats = [
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-16">
                 <div class="flex items-center space-x-8">
-                    <a href="dashboard.php" class="text-xl font-semibold text-gray-900"><?php echo htmlspecialchars($admin_site_name); ?></a>
+                    <a href="dashboard.php" class="flex items-center">
+                        <img src="<?php echo htmlspecialchars($admin_site_logo); ?>" alt="<?php echo htmlspecialchars($admin_site_name); ?>" class="h-10 w-auto max-w-56 object-contain">
+                    </a>
                     <nav class="flex space-x-8">
                         <a href="dashboard.php" class="text-gray-500 hover:text-gray-700">首页</a>
                         <a href="tasks.php" class="text-gray-500 hover:text-gray-700">任务管理</a>

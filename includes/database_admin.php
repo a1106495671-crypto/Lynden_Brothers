@@ -528,6 +528,8 @@ class DatabaseAdmin {
                 ['site_name', SITE_FULL_NAME],
                 ['site_description', SITE_DESCRIPTION],
                 ['site_keywords', SITE_KEYWORDS],
+                ['site_logo', '/assets/images/lynden-brothers-logo.jpg'],
+                ['site_favicon', '/assets/images/lynden-brothers-favicon.jpg'],
                 ['copyright_info', '© 2025 ' . SITE_FULL_NAME . '. All rights reserved.'],
             ] as $setting) {
                 $settingStmt->execute($setting);

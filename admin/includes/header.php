@@ -12,6 +12,7 @@ if (!defined('FEISHU_TREASURE')) {
 }
 
 $admin_site_name = function_exists('get_setting') ? get_setting('site_title', SITE_NAME) : SITE_NAME;
+$admin_site_logo = function_exists('get_setting') ? get_setting('site_logo', '/assets/images/lynden-brothers-logo.jpg') : '/assets/images/lynden-brothers-logo.jpg';
 $current_admin = function_exists('get_current_admin') ? get_current_admin() : null;
 $is_super_admin = function_exists('is_super_admin') ? is_super_admin() : false;
 $admin_role_label = $is_super_admin ? '超级管理员' : '管理员';
@@ -223,7 +224,9 @@ function isActiveNavItem($item, $current_page, $sub_page_mapping) {
             <div class="relative flex h-16 items-center justify-between">
                 <div class="flex shrink-0 items-center">
                     <!-- Logo -->
-                    <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="shrink-0 text-xl font-semibold leading-tight text-gray-900"><?php echo htmlspecialchars($admin_site_name); ?></a>
+                    <a href="<?php echo htmlspecialchars(admin_url('customers.php')); ?>" class="flex shrink-0 items-center">
+                        <img src="<?php echo htmlspecialchars($admin_site_logo); ?>" alt="<?php echo htmlspecialchars($admin_site_name); ?>" class="h-10 w-auto max-w-56 object-contain">
+                    </a>
                 </div>
                     
                 <!-- 主导航菜单 -->

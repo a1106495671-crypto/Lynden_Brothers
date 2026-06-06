@@ -21,8 +21,8 @@ function env_value($key, $default = null) {
 require_once __DIR__ . '/db_support.php';
 
 // 网站基本配置
-define('SITE_NAME', env_value('SITE_NAME', '董逻辑MGEO'));
-define('SITE_FULL_NAME', env_value('SITE_FULL_NAME', '董逻辑MGEO'));
+define('SITE_NAME', env_value('SITE_NAME', 'Lynden Brothers GEO'));
+define('SITE_FULL_NAME', env_value('SITE_FULL_NAME', 'Lynden Brothers GEO'));
 define('SITE_URL', env_value('SITE_URL', 'http://localhost'));
 define('SITE_DESCRIPTION', env_value('SITE_DESCRIPTION', '基于AI的智能内容生成与发布平台'));
 define('SITE_KEYWORDS', env_value('SITE_KEYWORDS', 'GEO,AI内容生成,SEO,智能写作,内容发布'));
@@ -78,8 +78,8 @@ $default_settings = [
     'site_title' => SITE_FULL_NAME,
     'site_description' => SITE_DESCRIPTION,
     'site_keywords' => SITE_KEYWORDS,
-    'site_logo' => '',
-    'site_favicon' => '',
+    'site_logo' => '/assets/images/lynden-brothers-logo.jpg',
+    'site_favicon' => '/assets/images/lynden-brothers-favicon.jpg',
     'copyright_text' => '© 2025 ' . SITE_FULL_NAME . '. All rights reserved.',
     'contact_email' => BOOTSTRAP_ADMIN_EMAIL,
     'analytics_code' => '',
