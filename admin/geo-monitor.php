@@ -1908,6 +1908,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const refreshMonitorButton = document.getElementById('refresh-monitor-status');
     const monitorStatusEl = document.getElementById('monitor-run-status');
     const monitorLogEl = document.getElementById('monitor-run-log');
+    const monitorStartButtonIdleHtml = startMonitorButton?.innerHTML || '';
     let monitorPollTimer = null;
 
     function setMonitorStatus(message) {
@@ -1920,12 +1921,31 @@ document.addEventListener('DOMContentLoaded', () => {
         monitorLogEl.scrollTop = monitorLogEl.scrollHeight;
     }
 
+    function setMonitorStartButton(state) {
+        if (!startMonitorButton) return;
+        if (state === 'starting') {
+            startMonitorButton.disabled = true;
+            startMonitorButton.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>正在启动';
+        } else if (state === 'running') {
+            startMonitorButton.disabled = true;
+            startMonitorButton.innerHTML = '<i data-lucide="loader-2" class="mr-2 h-4 w-4 animate-spin"></i>监测运行中';
+        } else {
+            startMonitorButton.disabled = !monitorCanStart;
+            startMonitorButton.innerHTML = monitorStartButtonIdleHtml;
+        }
+        if (window.lucide?.createIcons) window.lucide.createIcons();
+    }
+
     async function fetchMonitorStatus(keepPolling = false) {
         if (!monitorCustomerId || !monitorApiUrl) return;
         const url = `${monitorApiUrl}?action=status&customer_id=${encodeURIComponent(monitorCustomerId)}&t=${Date.now()}`;
         try {
             const response = await fetch(url, { credentials: 'same-origin' });
-            const data = await response.json();
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                setMonitorStatus(data.error || `读取状态失败：HTTP ${response.status}`);
+                return;
+            }
             if (!data.success) {
                 setMonitorStatus(data.error || '读取状态失败');
                 return;
@@ -1933,7 +1953,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setMonitorLog(data.log || '暂无日志。');
             if (data.status === 'running') {
                 setMonitorStatus(data.pid ? `后台监测运行中，PID ${data.pid}，正在调用真实模型并写入数据库` : '后台监测运行中，正在调用真实模型并写入数据库');
-                if (startMonitorButton) startMonitorButton.disabled = true;
+                setMonitorStartButton('running');
                 if (keepPolling && !monitorPollTimer) {
                     monitorPollTimer = window.setInterval(() => fetchMonitorStatus(true), 3000);
                 }
@@ -1944,7 +1964,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 const total = data.stats?.today_records ?? 0;
                 setMonitorStatus(total > 0 ? `今日已有 ${total} 条监测记录，刷新页面可查看最新分析` : '当前没有正在运行的监测任务');
-                if (startMonitorButton) startMonitorButton.disabled = !monitorCanStart;
+                setMonitorStartButton('idle');
             }
         } catch (error) {
             setMonitorStatus('读取状态失败：' + error.message);
@@ -1953,7 +1973,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function startMonitorRun() {
         if (!startMonitorButton || startMonitorButton.disabled || !monitorCanStart) return;
-        startMonitorButton.disabled = true;
+        setMonitorStartButton('starting');
         setMonitorStatus('正在启动后台监测任务');
         setMonitorLog('正在启动...');
 
@@ -1969,11 +1989,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 body,
                 credentials: 'same-origin'
             });
-            const data = await response.json();
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                setMonitorStatus(data.error || `启动失败：HTTP ${response.status}`);
+                setMonitorLog(data.log || '');
+                setMonitorStartButton('idle');
+                return;
+            }
             if (!data.success) {
                 setMonitorStatus(data.error || '启动失败');
                 setMonitorLog(data.log || '');
-                startMonitorButton.disabled = false;
+                setMonitorStartButton('idle');
                 return;
             }
             if (data.already_running) {
@@ -1981,13 +2007,14 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 setMonitorStatus(data.pid ? `已启动后台任务 PID ${data.pid}` : '已启动后台任务');
             }
+            setMonitorStartButton('running');
             setMonitorLog(data.log || '任务已启动，等待日志写入。');
             if (monitorPollTimer) window.clearInterval(monitorPollTimer);
             monitorPollTimer = window.setInterval(() => fetchMonitorStatus(true), 3000);
             fetchMonitorStatus(true);
         } catch (error) {
             setMonitorStatus('启动失败：' + error.message);
-            startMonitorButton.disabled = false;
+            setMonitorStartButton('idle');
         }
     }
 

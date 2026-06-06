@@ -127,10 +127,13 @@ function geo_monitor_api_run_status(string $customerId): array {
     }
 
     $finished = $log !== '' && str_contains($log, '[geo-monitor-finished');
-    $recent = is_file($logFile) && (time() - filemtime($logFile) < 900);
+    $logAge = is_file($logFile) ? time() - filemtime($logFile) : null;
+    $startedAt = isset($state['started_at']) ? strtotime((string) $state['started_at']) : false;
+    $startedAge = $startedAt ? time() - $startedAt : null;
+    $recentlyStarted = !$finished && $logAge !== null && $logAge < 60 && $startedAge !== null && $startedAge < 60;
 
     return [
-        'status' => ($activeProcess || (!$finished && $recent)) ? 'running' : 'idle',
+        'status' => ($activeProcess || $recentlyStarted) ? 'running' : 'idle',
         'log' => $log,
         'log_file' => $logFile,
         'run_id' => $state['run_id'] ?? null,

@@ -138,6 +138,10 @@ $structured_data_blocks = [
                             <i data-lucide="copy-check" class="w-4 h-4"></i>
                             复制带格式
                         </button>
+                        <button type="button" class="article-copy-button" data-copy-compatible>
+                            <i data-lucide="newspaper" class="w-4 h-4"></i>
+                            复制兼容格式
+                        </button>
                         <button type="button" class="article-copy-button" data-copy-markdown>
                             <i data-lucide="file-text" class="w-4 h-4"></i>
                             复制 Markdown
@@ -231,12 +235,13 @@ $structured_data_blocks = [
     <script>
     document.addEventListener('DOMContentLoaded', function () {
         const richButton = document.querySelector('[data-copy-rich]');
+        const compatibleButton = document.querySelector('[data-copy-compatible]');
         const markdownButton = document.querySelector('[data-copy-markdown]');
         const status = document.querySelector('[data-copy-status]');
         const richTemplate = document.getElementById('articleRichCopyTemplate');
         const markdownData = document.getElementById('articleMarkdownCopyData');
 
-        if (!richButton || !markdownButton || !status || !richTemplate || !markdownData) {
+        if (!richButton || !compatibleButton || !markdownButton || !status || !richTemplate || !markdownData) {
             return;
         }
 
@@ -300,6 +305,69 @@ $structured_data_blocks = [
             fallbackCopyText(plainText);
         }
 
+        async function copyCompatibleArticle() {
+            const wrapper = document.createElement('div');
+            wrapper.appendChild(richTemplate.content.cloneNode(true));
+            const articleTitle = wrapper.querySelector('article > h1');
+            if (articleTitle) {
+                articleTitle.remove();
+            }
+            normalizeCompatibleCopyHtml(wrapper);
+            const html = wrapper.innerHTML;
+            const plainText = wrapper.textContent.replace(/\n{3,}/g, '\n\n').trim();
+
+            if (navigator.clipboard && window.ClipboardItem) {
+                await navigator.clipboard.write([
+                    new ClipboardItem({
+                        'text/html': new Blob([html], { type: 'text/html' }),
+                        'text/plain': new Blob([plainText], { type: 'text/plain' })
+                    })
+                ]);
+                return;
+            }
+
+            fallbackCopyText(plainText);
+        }
+
+        function normalizeCompatibleCopyHtml(root) {
+            root.querySelectorAll('h1,h2,h3,h4').forEach(function (heading) {
+                const paragraph = document.createElement('p');
+                paragraph.setAttribute('style', 'font-size:18px;line-height:1.9;margin:24px 0 12px;color:#111827;');
+                const strong = document.createElement('strong');
+                strong.innerHTML = heading.innerHTML;
+                paragraph.appendChild(strong);
+                heading.replaceWith(paragraph);
+            });
+
+            root.querySelectorAll('li').forEach(function (item) {
+                const paragraph = document.createElement('p');
+                paragraph.setAttribute('style', 'font-size:16px;line-height:1.9;margin:0 0 10px;color:#374151;');
+                paragraph.innerHTML = '• ' + item.innerHTML;
+                item.replaceWith(paragraph);
+            });
+
+            root.querySelectorAll('ul,ol').forEach(function (list) {
+                list.replaceWith(...Array.from(list.childNodes));
+            });
+
+            root.querySelectorAll('p').forEach(function (paragraph) {
+                if (!paragraph.getAttribute('style')) {
+                    paragraph.setAttribute('style', 'font-size:16px;line-height:1.9;margin:0 0 18px;color:#374151;');
+                }
+            });
+
+            root.querySelectorAll('blockquote').forEach(function (quote) {
+                const paragraph = document.createElement('p');
+                paragraph.setAttribute('style', 'font-size:16px;line-height:1.9;margin:0 0 18px;color:#6b7280;border-left:3px solid #d1d5db;padding-left:12px;');
+                paragraph.innerHTML = quote.innerHTML;
+                quote.replaceWith(paragraph);
+            });
+
+            root.querySelectorAll('[class]').forEach(function (node) {
+                node.removeAttribute('class');
+            });
+        }
+
         function applyRichCopyStyles(root) {
             const baseText = 'color:#374151;font-size:16px;line-height:1.85;margin:0 0 16px;';
             root.querySelectorAll('h1').forEach(function (node) {
@@ -354,6 +422,20 @@ $structured_data_blocks = [
                 try {
                     await copyPlainText(markdownText);
                     setCopyStatus('富文本不可用，已复制 Markdown', 'warning');
+                } catch (fallbackError) {
+                    setCopyStatus('复制失败，请手动选择文章内容', 'error');
+                }
+            }
+        });
+
+        compatibleButton.addEventListener('click', async function () {
+            try {
+                await copyCompatibleArticle();
+                setCopyStatus('已复制兼容格式', 'success');
+            } catch (error) {
+                try {
+                    await copyPlainText(markdownText);
+                    setCopyStatus('兼容格式不可用，已复制 Markdown', 'warning');
                 } catch (fallbackError) {
                     setCopyStatus('复制失败，请手动选择文章内容', 'error');
                 }
