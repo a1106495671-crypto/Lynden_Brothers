@@ -28,6 +28,119 @@ function sop_compact_text(string $text, int $limit = 260): string {
     return mb_substr($text, 0, $limit, 'UTF-8') . '...';
 }
 
+function sop_markdown_inline(string $text): string {
+    $text = sop_h($text);
+    $text = preg_replace('/`([^`]+)`/u', '<code class="rounded bg-slate-100 px-1.5 py-0.5 text-[0.9em] text-slate-700">$1</code>', $text) ?? $text;
+    $text = preg_replace('/\*\*([^*]+)\*\*/u', '<strong class="font-semibold text-slate-950">$1</strong>', $text) ?? $text;
+    return $text;
+}
+
+function sop_markdown_cells(string $line): array {
+    $line = trim($line);
+    $line = trim($line, '|');
+    return array_map(static fn($cell) => trim($cell), explode('|', $line));
+}
+
+function sop_render_markdown(string $markdown): string {
+    $lines = preg_split('/\R/u', trim($markdown)) ?: [];
+    $html = [];
+    $inUl = false;
+    $inOl = false;
+    $count = count($lines);
+
+    $closeLists = static function () use (&$html, &$inUl, &$inOl): void {
+        if ($inUl) {
+            $html[] = '</ul>';
+            $inUl = false;
+        }
+        if ($inOl) {
+            $html[] = '</ol>';
+            $inOl = false;
+        }
+    };
+
+    for ($i = 0; $i < $count; $i++) {
+        $line = rtrim((string) $lines[$i]);
+        $trim = trim($line);
+        if ($trim === '') {
+            $closeLists();
+            continue;
+        }
+
+        if (str_contains($trim, '|') && isset($lines[$i + 1]) && preg_match('/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/', (string) $lines[$i + 1])) {
+            $closeLists();
+            $headers = sop_markdown_cells($trim);
+            $i += 2;
+            $rows = [];
+            while ($i < $count && str_contains((string) $lines[$i], '|') && trim((string) $lines[$i]) !== '') {
+                $rows[] = sop_markdown_cells((string) $lines[$i]);
+                $i++;
+            }
+            $i--;
+            $html[] = '<div class="my-5 overflow-x-auto rounded-lg border border-slate-200 bg-white"><table class="min-w-full divide-y divide-slate-200 text-sm">';
+            $html[] = '<thead class="bg-slate-50"><tr>';
+            foreach ($headers as $cell) {
+                $html[] = '<th class="px-4 py-3 text-left font-semibold text-slate-700">' . sop_markdown_inline($cell) . '</th>';
+            }
+            $html[] = '</tr></thead><tbody class="divide-y divide-slate-100">';
+            foreach ($rows as $row) {
+                $html[] = '<tr class="align-top">';
+                foreach ($headers as $idx => $_) {
+                    $html[] = '<td class="px-4 py-3 leading-6 text-slate-700">' . sop_markdown_inline($row[$idx] ?? '') . '</td>';
+                }
+                $html[] = '</tr>';
+            }
+            $html[] = '</tbody></table></div>';
+            continue;
+        }
+
+        if (preg_match('/^(#{1,4})\s+(.+)$/u', $trim, $m)) {
+            $closeLists();
+            $level = strlen($m[1]);
+            $classes = [
+                1 => 'mt-1 text-2xl font-bold text-slate-950',
+                2 => 'mt-8 border-t border-slate-200 pt-6 text-xl font-bold text-slate-950 first:mt-0 first:border-t-0 first:pt-0',
+                3 => 'mt-6 text-base font-bold text-slate-900',
+                4 => 'mt-5 text-sm font-bold text-slate-800',
+            ];
+            $html[] = '<h' . $level . ' class="' . $classes[$level] . '">' . sop_markdown_inline($m[2]) . '</h' . $level . '>';
+            continue;
+        }
+
+        if (preg_match('/^\d+\.\s+(.+)$/u', $trim, $m)) {
+            if ($inUl) {
+                $html[] = '</ul>';
+                $inUl = false;
+            }
+            if (!$inOl) {
+                $html[] = '<ol class="my-4 list-decimal space-y-2 pl-6 text-sm leading-7 text-slate-700">';
+                $inOl = true;
+            }
+            $html[] = '<li>' . sop_markdown_inline($m[1]) . '</li>';
+            continue;
+        }
+
+        if (preg_match('/^[-*]\s+(.+)$/u', $trim, $m)) {
+            if ($inOl) {
+                $html[] = '</ol>';
+                $inOl = false;
+            }
+            if (!$inUl) {
+                $html[] = '<ul class="my-4 list-disc space-y-2 pl-6 text-sm leading-7 text-slate-700">';
+                $inUl = true;
+            }
+            $html[] = '<li>' . sop_markdown_inline($m[1]) . '</li>';
+            continue;
+        }
+
+        $closeLists();
+        $html[] = '<p class="my-3 text-sm leading-7 text-slate-700">' . sop_markdown_inline($trim) . '</p>';
+    }
+
+    $closeLists();
+    return implode("\n", $html);
+}
+
 function sop_ensure_strategy_analysis_table(PDO $db): void {
     $db->exec("
         CREATE TABLE IF NOT EXISTS sop_strategy_analyses (
@@ -42,6 +155,17 @@ function sop_ensure_strategy_analysis_table(PDO $db): void {
         )
     ");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_sop_strategy_analyses_customer ON sop_strategy_analyses(customer_id, created_at DESC)");
+}
+
+function sop_strategy_prompt_template(): string {
+    $file = dirname(__DIR__) . '/prompts/sop_strategy_analysis.md';
+    if (is_file($file)) {
+        $text = file_get_contents($file);
+        if (is_string($text) && trim($text) !== '') {
+            return $text;
+        }
+    }
+    return "你是 GEO 品牌策略负责人。请基于当前品牌真实数据包输出 Markdown 策略分析，不要编造数据。\n\n{{REALITY_JSON}}";
 }
 
 function sop_fetch_reality_snapshot(PDO $db, array $customer): array {
@@ -550,31 +674,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'sop_g
     } elseif ($sopReality['customer_id'] === '') {
         $_analysisError = '请先选择客户';
     } else {
-        $scenarioLines = [];
-        foreach ($sop_scenarios as $scenario) {
-            $scenarioLines[] = sprintf(
-                "- %s：%d个节点；触发：%s；描述：%s",
-                $scenario['name'],
-                count($scenario['nodes']),
-                $scenario['trigger'],
-                $scenario['description']
-            );
-        }
-        $nodeLines = [];
-        foreach ($sop_scenarios as $scenario) {
-            foreach ($scenario['nodes'] as $node) {
-                $nodeLines[] = sprintf(
-                    "- [%s/%s] %s；KPI：%s；产出物：%s；当前状态：%s",
-                    $scenario['key'],
-                    $node['code'],
-                    $node['name'],
-                    $node['kpi'],
-                    $node['deliverable'],
-                    $node['status']
-                );
-            }
-        }
-
         $snapshotForPrompt = [
             'brand_name' => $sopReality['brand_name'],
             'industry' => $sopReality['industry'],
@@ -592,38 +691,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'sop_g
             'human_tasks' => $sopReality['human_tasks'],
             'content_queue_pending' => $sopReality['content_queue_pending'],
         ];
-        $snapshotJson = json_encode($snapshotForPrompt, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $scenarioText = implode("\n", $scenarioLines);
-        $nodeText = implode("\n", array_slice($nodeLines, 0, 80));
-
-        $prompt = <<<PROMPT
-你是 GEO 客户交付负责人。请基于“当前客户真实数据、已有品牌资料、内容资产、监测样本”和“可用 SOP 节点”，判断下一步应该怎么执行。
-
-## 当前客户上下文包
-{$snapshotJson}
-
-## 可用 SOP 场景
-{$scenarioText}
-
-## 可派发节点
-{$nodeText}
-
-请只输出 Markdown，结构必须为：
-### 推荐场景
-- 场景：只能填写 onboard、emergency、annual、overview、maintain 中的一个
-- 原因：必须引用上下文包里的具体信号、资料或监测样本，不要泛泛而谈
-
-### 优先派发节点
-| 优先级 | 节点 | 关联上下文 | 为什么现在做 | 产出物 | 建议负责人 |
-|---|---|---|---|---|---|
-
-### 本周执行建议
-- 3 到 5 条，必须能落到任务、内容、分发或监测动作
-- 每条建议都要说明应复用哪类已有资料，或需要补哪类资料
-
-### 风险提醒
-- 如果数据不足，明确说缺哪类数据；不要编造不存在的监测结论、客户案例、效果数字
-PROMPT;
+        $snapshotJson = json_encode($snapshotForPrompt, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        $prompt = str_replace('{{REALITY_JSON}}', (string) $snapshotJson, sop_strategy_prompt_template());
 
         session_write_close();
         $aiResult = geo_call_ai($prompt, 2600, 0.35);
@@ -631,8 +700,6 @@ PROMPT;
             $_analysisError = 'AI 分析失败：' . $aiResult['error'];
         } else {
             $analysisMd = trim((string) ($aiResult['content'] ?? ''));
-            preg_match('/场景：\s*(onboard|emergency|annual|overview|maintain)/u', $analysisMd, $m);
-            $recommendedScenario = $m[1] ?? 'onboard';
             $stmt = $db->prepare("
                 INSERT INTO sop_strategy_analyses
                     (customer_id, brand_name, recommended_scenario, analysis_md, input_snapshot, model_used)
@@ -641,12 +708,12 @@ PROMPT;
             $stmt->execute([
                 $sopReality['customer_id'],
                 $sopReality['brand_name'],
-                $recommendedScenario,
+                'brand_strategy',
                 $analysisMd,
                 json_encode($snapshotForPrompt, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 (string) ($aiResult['model_used'] ?? ''),
             ]);
-            $_analysisMessage = '已基于当前客户数据生成 SOP 分析建议';
+            $_analysisMessage = '已基于当前品牌真实数据生成策略分析';
         }
     }
 }
@@ -681,8 +748,8 @@ require_once __DIR__ . '/includes/header.php';
             <div class="mb-6">
                 <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div>
-                        <h1 class="text-3xl font-bold text-gray-900">策略</h1>
-                        <p class="mt-1 text-sm text-gray-600">GEO 服务 SOP 与任务派发。</p>
+                        <h1 class="text-3xl font-bold text-gray-900">品牌策略分析</h1>
+                        <p class="mt-1 text-sm text-gray-600">基于当前品牌的真实监测、诊断、知识库和内容资产生成策略建议。</p>
                     </div>
                     <div class="flex flex-wrap gap-3">
                         <a href="<?php echo htmlspecialchars(admin_url('tasks.php')); ?>" class="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
@@ -697,7 +764,7 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </div>
 
-            <div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div class="mb-6 hidden grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <section class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
                     <div class="text-sm font-semibold text-gray-500">场景</div>
                     <div class="mt-2 text-3xl font-bold text-gray-900">5</div>
@@ -724,7 +791,7 @@ require_once __DIR__ . '/includes/header.php';
                 <div class="border-b border-gray-200 p-5">
                     <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         <div>
-                            <h2 class="text-xl font-semibold text-gray-900">真实策略信号</h2>
+                            <h2 class="text-xl font-semibold text-gray-900">当前品牌真实信号</h2>
                             <p class="mt-1 text-sm text-gray-500">来自当前客户的意图、监测、诊断、知识图谱、素材、队列和人工任务。</p>
                         </div>
                         <form method="POST">
@@ -732,12 +799,13 @@ require_once __DIR__ . '/includes/header.php';
                             <input type="hidden" name="action" value="sop_generate_analysis">
                             <button type="submit" class="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                                 <i data-lucide="sparkles" class="mr-2 h-4 w-4"></i>
-                                AI 分析下一步 SOP
+                                生成品牌策略分析
                             </button>
                         </form>
                     </div>
                 </div>
                 <div class="grid grid-cols-1 gap-4 p-5 lg:grid-cols-[520px_minmax(0,1fr)]">
+                    <div class="space-y-4">
                     <div class="grid grid-cols-2 gap-3 xl:grid-cols-3">
                         <div class="rounded-lg bg-red-50 p-4">
                             <div class="text-xs font-semibold text-red-700">P0 未覆盖</div>
@@ -766,21 +834,61 @@ require_once __DIR__ . '/includes/header.php';
                             <div class="mt-2 text-2xl font-bold text-purple-700"><?= count($sopReality['geo_materials']) ?></div>
                         </div>
                     </div>
+                    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                        <div class="mb-3 text-sm font-semibold text-gray-900">本次分析输入</div>
+                        <div class="space-y-3 text-sm">
+                            <div>
+                                <div class="text-xs font-semibold text-gray-500">低提及关键词</div>
+                                <div class="mt-1 flex flex-wrap gap-2">
+                                    <?php foreach (array_slice($sopReality['weak_keywords'], 0, 5) as $kw): ?>
+                                        <span class="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-orange-700">
+                                            <?= sop_h(($kw['query_text'] ?? '') . ' · ' . ($kw['mention_rate'] ?? '-') . '%') ?>
+                                        </span>
+                                    <?php endforeach; ?>
+                                    <?php if (empty($sopReality['weak_keywords'])): ?><span class="text-xs text-gray-400">暂无低提及关键词</span><?php endif; ?>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="text-xs font-semibold text-gray-500">P0 未覆盖问题</div>
+                                <div class="mt-1 space-y-1">
+                                    <?php foreach (array_slice($sopReality['p0_questions'], 0, 3) as $q): ?>
+                                        <div class="truncate rounded bg-white px-2.5 py-1 text-xs text-gray-700"><?= sop_h($q['question'] ?? '') ?></div>
+                                    <?php endforeach; ?>
+                                    <?php if (empty($sopReality['p0_questions'])): ?><div class="text-xs text-gray-400">暂无 P0 未覆盖问题</div><?php endif; ?>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="text-xs font-semibold text-gray-500">最近监测样本</div>
+                                <div class="mt-1 space-y-1">
+                                    <?php foreach (array_slice($sopReality['monitor_samples'], 0, 3) as $sample): ?>
+                                        <div class="truncate rounded bg-white px-2.5 py-1 text-xs text-gray-700">
+                                            <?= sop_h(($sample['provider'] ?? '') . ' · ' . ($sample['query_text'] ?? '') . ' · ' . (!empty($sample['brand_mentioned']) ? '提及' : '未提及')) ?>
+                                        </div>
+                                    <?php endforeach; ?>
+                                    <?php if (empty($sopReality['monitor_samples'])): ?><div class="text-xs text-gray-400">暂无监测样本</div><?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    </div>
                     <div class="rounded-lg bg-gray-50 p-4">
                         <?php if ($latestSopAnalysis): ?>
                             <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
                                 <div class="text-sm font-semibold text-gray-900">
-                                    最新 AI SOP 建议
-                                    <span class="ml-2 rounded-full bg-blue-100 px-2 py-1 text-xs text-blue-700">推荐：<?= sop_h($latestSopAnalysis['recommended_scenario']) ?></span>
+                                    最新品牌策略分析
                                 </div>
                                 <div class="text-xs text-gray-500"><?= sop_h($latestSopAnalysis['created_at']) ?> · <?= sop_h($latestSopAnalysis['model_used']) ?></div>
                             </div>
-                            <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-white p-4 text-sm leading-6 text-gray-700"><?= sop_h($latestSopAnalysis['analysis_md']) ?></pre>
+                            <div class="max-h-[620px] overflow-auto rounded-lg bg-white px-6 py-5 shadow-sm ring-1 ring-slate-100">
+                                <article class="sop-markdown max-w-none">
+                                    <?= sop_render_markdown((string) $latestSopAnalysis['analysis_md']) ?>
+                                </article>
+                            </div>
                         <?php else: ?>
                             <div class="flex h-full min-h-40 items-center justify-center rounded-md border border-dashed border-gray-300 bg-white p-6 text-center">
                                 <div>
-                                    <div class="text-sm font-semibold text-gray-900">还没有生成过 SOP 分析</div>
-                                    <div class="mt-1 text-sm text-gray-500">点击右上角按钮，会把这些真实信号送进 AI，生成推荐场景和优先派发节点。</div>
+                                    <div class="text-sm font-semibold text-gray-900">还没有生成过品牌策略分析</div>
+                                    <div class="mt-1 text-sm text-gray-500">点击右上角按钮，会把当前品牌真实数据送进 AI，生成本周策略、内容方向和风险缺口。</div>
                                 </div>
                             </div>
                         <?php endif; ?>
@@ -788,7 +896,7 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </section>
 
-            <section class="mb-6 rounded-lg border border-gray-200 bg-white shadow-sm">
+            <section class="mb-6 hidden rounded-lg border border-gray-200 bg-white shadow-sm">
                 <div class="border-b border-gray-200 p-5">
                     <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         <div>
@@ -822,7 +930,7 @@ require_once __DIR__ . '/includes/header.php';
                 </div>
             </section>
 
-            <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_340px] xl:items-start">
+            <div class="hidden grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[minmax(0,1fr)_340px] xl:items-start">
                 <section class="rounded-lg border border-gray-200 bg-white shadow-sm">
                     <div class="border-b border-gray-200 p-5">
                         <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">

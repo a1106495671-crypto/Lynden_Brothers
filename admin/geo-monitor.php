@@ -108,7 +108,6 @@ if ($customerId === '') {
 $brandName = $currentCustomer['name'] ?? '未选择客户';
 $industry = $currentCustomer['industry'] ?? '';
 $competitorsFromCustomer = $currentCustomer['competitors'] ?? [];
-$contractEndAt = $currentCustomer['contract_end_at'] ?? '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['add_monitor_keyword', 'add_monitor_competitor', 'seed_monitor_questions'], true)) {
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
@@ -153,19 +152,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($_POST['action'] ?? '', ['
     }
 }
 
-// 从数据库读取真实合同到期日，计算续费倒计时
-$renewalLabel = 'T-?';
-try {
-    $stmtContract = $db->prepare("SELECT contract_end_date FROM customers WHERE customer_id = ?");
-    $stmtContract->execute([$customerId]);
-    $dbContractEnd = $stmtContract->fetchColumn();
-    if ($dbContractEnd) {
-        $daysLeft = (int) ceil((strtotime($dbContractEnd) - time()) / 86400);
-        $renewalLabel = 'T-' . $daysLeft;
-        $contractEndAt = $dbContractEnd;
-    }
-} catch (Throwable $e) {}
-
 $page_title = 'GEO监测';
 $page_header = '
 <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -173,9 +159,6 @@ $page_header = '
         <h1 class="text-3xl font-bold text-gray-900">GEO监测</h1>
     </div>
     <div class="flex flex-wrap gap-3">
-        <button type="button" data-open-monitor-tab="renewal" class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-            <i data-lucide="file-down" class="mr-2 h-4 w-4"></i>续费证据包
-        </button>
         <a href="' . admin_url('sop-center.php') . '" class="inline-flex items-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700">
             <i data-lucide="siren" class="mr-2 h-4 w-4"></i>应急 SOP
         </a>
@@ -678,31 +661,6 @@ try {
     $articleAdoption = $stmtArt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $_artE) {}
 
-$competitorRiskCount = count(array_filter($realAlerts, static fn($alert) => ($alert['alert_type'] ?? '') === 'competitor_surpass'));
-$renewalItems = [
-    [
-        'label' => '可见率变化',
-        'value' => !empty($trendPoints) ? (($trendPoints[0]['brand'] ?? 0) . '% → ' . $latestBrandRate . '%') : '待监测',
-        'desc' => count($trendPoints) >= 2 ? '基于真实监测日期计算，变化 ' . $brandRiseTotal . ' 个百分点。' : '至少积累 2 天监测数据后自动计算。',
-    ],
-    [
-        'label' => '竞品风险',
-        'value' => $competitorRiskCount . ' 项',
-        'desc' => $competitorRiskCount > 0 ? '来自竞品超越类真实告警。' : '近期待复测或暂未发现竞品超越。',
-    ],
-    [
-        'label' => '原话证据',
-        'value' => count($conversations) . ' 条',
-        'desc' => '来自 AI 平台真实回答原文，可直接展开核对。',
-    ],
-    [
-        'label' => '续费触发',
-        'value' => $renewalLabel,
-        'desc' => $contractEndAt ? '合同到期日 ' . $contractEndAt . '。' : '客户合同到期日未录入。',
-    ],
-];
-
-
 $thresholdRows = [
     [
         'name'  => '品牌消失',
@@ -746,16 +704,6 @@ $thresholdRows = [
     ],
 ];
 
-$quotaRows = [];
-foreach ($platformDisplay as $pkey => $pdisp) {
-    $quotaRows[] = [
-        'provider' => $pdisp['label'],
-        'method' => isset($configuredProviders[$pkey]) ? '已接入真实模型/API' : '未接入',
-        'quota' => isset($platformStats[$pkey]) ? ((int) $platformStats[$pkey]['total'] . ' 次查询') : '暂无查询',
-        'status' => isset($configuredProviders[$pkey]) ? (isset($platformStats[$pkey]) ? '已运行' : '待运行') : '未配置',
-    ];
-}
-
 $jsonOptions = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
 $monitorCsrfToken = generate_csrf_token();
 
@@ -772,117 +720,126 @@ require_once __DIR__ . '/includes/header.php';
         $realConvCount = count($realMonitorData['records']);
     }
     ?>
-    <section class="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <p class="text-sm font-semibold text-gray-500">竞品对标</p>
-            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo count($competitorsFromCustomer); ?> 个</div>
-            <p class="mt-1 text-xs text-gray-400">当前追踪竞品数量</p>
+    <section class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.8fr)]">
+        <div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <p class="text-sm font-semibold text-gray-500">监测概览</p>
+                    <h2 class="mt-1 text-2xl font-bold text-gray-900"><?php echo geo_monitor_h($brandName); ?></h2>
+                </div>
+                <span class="inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-bold <?php echo $realAlertCount > 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'; ?>">
+                    <?php echo $realAlertCount > 0 ? $realAlertCount . ' 项告警' : '暂无异常告警'; ?>
+                </span>
+            </div>
+            <div class="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <div class="border-l-2 border-slate-300 pl-4">
+                    <p class="text-xs font-semibold text-gray-500">监测关键词</p>
+                    <p class="mt-1 text-3xl font-bold text-gray-900"><?php echo $enabledKeywordCount; ?></p>
+                    <p class="mt-1 text-xs text-gray-400">共 <?php echo count($monitorKeywords); ?> 条</p>
+                </div>
+                <div class="border-l-2 border-slate-300 pl-4">
+                    <p class="text-xs font-semibold text-gray-500">竞品名单</p>
+                    <p class="mt-1 text-3xl font-bold text-gray-900"><?php echo count($competitorsFromCustomer); ?></p>
+                    <p class="mt-1 text-xs text-gray-400">同步识别</p>
+                </div>
+                <div class="border-l-2 border-slate-300 pl-4">
+                    <p class="text-xs font-semibold text-gray-500">真实模型</p>
+                    <p class="mt-1 text-3xl font-bold text-gray-900"><?php echo $providerCount; ?></p>
+                    <p class="mt-1 text-xs text-gray-400">API / 平台</p>
+                </div>
+                <div class="border-l-2 <?php echo (int) ($realMonitorData['by_date'][date('Y-m-d')]['total'] ?? 0) > 0 ? 'border-blue-400' : 'border-slate-300'; ?> pl-4">
+                    <p class="text-xs font-semibold text-gray-500">今日记录</p>
+                    <p class="mt-1 text-3xl font-bold text-gray-900"><?php echo (int) ($realMonitorData['by_date'][date('Y-m-d')]['total'] ?? 0); ?></p>
+                    <p class="mt-1 text-xs text-gray-400">写入 records</p>
+                </div>
+            </div>
         </div>
-        <div class="rounded-xl border border-red-200 <?php echo $realAlertCount > 0 ? 'bg-red-50' : 'bg-white'; ?> p-5 shadow-sm">
-            <p class="text-sm font-semibold <?php echo $realAlertCount > 0 ? 'text-red-700' : 'text-gray-500'; ?>">异常告警</p>
-            <div class="mt-2 text-4xl font-bold text-gray-900"><?php echo $realAlertCount; ?> 项</div>
-            <p class="mt-1 text-xs <?php echo $realAlertCount > 0 ? 'text-red-500' : 'text-gray-400'; ?>"><?php echo $realAlertCount > 0 ? '点击异常告警 tab 查看详情' : '暂无真实告警'; ?></p>
-        </div>
-        <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <p class="text-sm font-semibold text-gray-500">续费证据包</p>
-            <div class="mt-2 text-4xl font-bold text-gray-900"><?= htmlspecialchars($renewalLabel) ?></div>
-            <p class="mt-1 text-xs text-gray-400">合同到期倒计时</p>
+
+        <div class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <p class="text-sm font-semibold text-gray-500">运行状态</p>
+                    <p class="mt-1 text-xl font-bold text-gray-900"><?php echo $monitorReady ? '配置完整，可以运行' : '需要补齐配置'; ?></p>
+                </div>
+                <span class="rounded-full px-3 py-1 text-xs font-bold <?php echo $monitorReady ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'; ?>">
+                    <?php echo $monitorReady ? '可运行' : '待补配置'; ?>
+                </span>
+            </div>
+            <div class="mt-5 space-y-3 text-sm">
+                <div class="flex items-center justify-between gap-4">
+                    <span class="text-gray-500">品牌事实</span>
+                    <span class="font-bold text-gray-900"><?php echo count($monitorFacts); ?> 条</span>
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                    <span class="text-gray-500">当前客户</span>
+                    <code class="max-w-[190px] truncate rounded bg-gray-100 px-2 py-1 text-xs text-gray-700"><?php echo geo_monitor_h($customerId); ?></code>
+                </div>
+                <?php if (!$monitorReady): ?>
+                    <div class="flex flex-wrap gap-2 pt-1">
+                        <?php foreach ($readinessIssues as $issue): ?>
+                            <span class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"><?php echo geo_monitor_h($issue); ?></span>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
         </div>
     </section>
 
     <section class="rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div class="border-b border-gray-200 px-6 py-5">
-            <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div>
-                    <div class="flex flex-wrap items-center gap-2">
-                        <h2 class="text-xl font-bold text-gray-900">真实监测控制台</h2>
-                        <span class="rounded-full px-2.5 py-1 text-xs font-bold <?php echo $monitorReady ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'; ?>">
-                            <?php echo $monitorReady ? '可运行' : '待补配置'; ?>
-                        </span>
-                    </div>
-                    <p class="mt-2 text-sm text-gray-500">
-                        当前客户：<span class="font-semibold text-gray-900"><?php echo geo_monitor_h($brandName); ?></span>
-                        <span class="text-gray-300">/</span>
-                        <code class="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-700"><?php echo geo_monitor_h($customerId); ?></code>
-                    </p>
-                    <?php if (!$monitorReady): ?>
-                        <div class="mt-3 flex flex-wrap gap-2">
-                            <?php foreach ($readinessIssues as $issue): ?>
-                                <span class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"><?php echo geo_monitor_h($issue); ?></span>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                    <form method="post">
+        <div class="flex flex-col gap-4 border-b border-gray-200 px-6 py-5 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+                <h2 class="text-xl font-bold text-gray-900">真实监测控制台</h2>
+                <p class="mt-1 text-sm text-gray-500">当前客户：<span class="font-semibold text-gray-900"><?php echo geo_monitor_h($brandName); ?></span></p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <form method="post">
+                    <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
+                    <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
+                    <input type="hidden" name="action" value="seed_monitor_questions">
+                    <button type="submit" class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                        <i data-lucide="list-plus" class="mr-2 h-4 w-4"></i>生成监测问题
+                    </button>
+                </form>
+                <button type="button" id="start-real-monitor" data-customer-id="<?php echo geo_monitor_h($customerId); ?>" data-csrf="<?php echo geo_monitor_h($monitorCsrfToken); ?>" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300" <?php echo $enabledKeywordCount <= 0 || $providerCount <= 0 ? 'disabled' : ''; ?>>
+                    <i data-lucide="play" class="mr-2 h-4 w-4"></i>立即跑真实监测
+                </button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-6 p-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <div class="space-y-4">
+                <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    <form method="post" class="space-y-2">
                         <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
                         <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
-                        <input type="hidden" name="action" value="seed_monitor_questions">
-                        <button type="submit" class="inline-flex items-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                            <i data-lucide="list-plus" class="mr-2 h-4 w-4"></i>生成监测问题
-                        </button>
+                        <input type="hidden" name="action" value="add_monitor_keyword">
+                        <label class="text-xs font-semibold text-gray-500">新增监测问题</label>
+                        <div class="flex gap-2">
+                            <input type="text" name="keyword" placeholder="<?php echo geo_monitor_h($brandName); ?> 怎么样？" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
+                            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700">
+                                <i data-lucide="plus" class="h-4 w-4"></i>
+                            </button>
+                        </div>
                     </form>
-                    <button type="button" id="start-real-monitor" data-customer-id="<?php echo geo_monitor_h($customerId); ?>" data-csrf="<?php echo geo_monitor_h($monitorCsrfToken); ?>" class="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300" <?php echo $enabledKeywordCount <= 0 || $providerCount <= 0 ? 'disabled' : ''; ?>>
-                        <i data-lucide="play" class="mr-2 h-4 w-4"></i>立即跑真实监测
-                    </button>
+                    <form method="post" class="space-y-2">
+                        <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
+                        <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
+                        <input type="hidden" name="action" value="add_monitor_competitor">
+                        <label class="text-xs font-semibold text-gray-500">新增竞品</label>
+                        <div class="flex gap-2">
+                            <input type="text" name="competitor" placeholder="竞品名称" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
+                            <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                                <i data-lucide="crosshair" class="h-4 w-4"></i>
+                            </button>
+                        </div>
+                    </form>
                 </div>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 p-6 lg:grid-cols-5">
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <p class="text-xs font-semibold text-gray-500">品牌事实</p>
-                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo count($monitorFacts); ?></p>
-                <p class="mt-1 text-xs text-gray-400">用于准确度校验</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <p class="text-xs font-semibold text-gray-500">监测关键词</p>
-                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo $enabledKeywordCount; ?></p>
-                <p class="mt-1 text-xs text-gray-400">启用 / 共 <?php echo count($monitorKeywords); ?> 条</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <p class="text-xs font-semibold text-gray-500">竞品名单</p>
-                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo count($competitorsFromCustomer); ?></p>
-                <p class="mt-1 text-xs text-gray-400">回答中同步识别</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <p class="text-xs font-semibold text-gray-500">真实模型/平台</p>
-                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo $providerCount; ?></p>
-                <p class="mt-1 text-xs text-gray-400">API 或后台模型</p>
-            </div>
-            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <p class="text-xs font-semibold text-gray-500">今日记录</p>
-                <p class="mt-2 text-2xl font-bold text-gray-900"><?php echo (int) ($realMonitorData['by_date'][date('Y-m-d')]['total'] ?? 0); ?></p>
-                <p class="mt-1 text-xs text-gray-400">写入 records</p>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 border-t border-gray-200 p-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <div class="space-y-4">
-                <form method="post" class="flex flex-col gap-2 sm:flex-row">
-                    <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
-                    <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
-                    <input type="hidden" name="action" value="add_monitor_keyword">
-                    <input type="text" name="keyword" placeholder="添加一个真实监测问题，如：<?php echo geo_monitor_h($brandName); ?> 怎么样？" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
-                    <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
-                        <i data-lucide="plus" class="mr-2 h-4 w-4"></i>添加关键词
-                    </button>
-                </form>
-                <form method="post" class="flex flex-col gap-2 sm:flex-row">
-                    <input type="hidden" name="csrf_token" value="<?php echo geo_monitor_h($monitorCsrfToken); ?>">
-                    <input type="hidden" name="customer_id" value="<?php echo geo_monitor_h($customerId); ?>">
-                    <input type="hidden" name="action" value="add_monitor_competitor">
-                    <input type="text" name="competitor" placeholder="添加竞品名称" class="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
-                    <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                        <i data-lucide="crosshair" class="mr-2 h-4 w-4"></i>添加竞品
-                    </button>
-                </form>
                 <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                    <div class="mb-2 flex items-center justify-between">
+                    <div class="mb-3 flex items-center justify-between">
                         <p class="text-sm font-bold text-gray-900">当前关键词</p>
                         <a href="<?php echo geo_monitor_h(admin_url('customers.php?customer=' . rawurlencode($customerId) . '#kw-section')); ?>" class="text-xs font-semibold text-blue-600 hover:underline">客户中心管理</a>
                     </div>
-                    <div class="flex max-h-32 flex-wrap gap-2 overflow-auto">
+                    <div class="flex max-h-40 flex-wrap gap-2 overflow-auto pr-1">
                         <?php if (empty($monitorKeywords)): ?>
                             <span class="text-sm text-gray-400">暂无关键词</span>
                         <?php else: ?>
@@ -902,7 +859,7 @@ require_once __DIR__ . '/includes/header.php';
                     </div>
                     <button type="button" id="refresh-monitor-status" data-customer-id="<?php echo geo_monitor_h($customerId); ?>" class="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800">刷新状态</button>
                 </div>
-                <pre id="monitor-run-log" class="h-56 overflow-auto whitespace-pre-wrap rounded-md bg-black/30 p-3 text-xs leading-5 text-slate-200">等待启动。</pre>
+                <pre id="monitor-run-log" class="h-64 overflow-auto whitespace-pre-wrap rounded-md bg-black/30 p-3 text-xs leading-5 text-slate-200">等待启动。</pre>
             </div>
         </div>
     </section>
@@ -1435,49 +1392,6 @@ require_once __DIR__ . '/includes/header.php';
                 </table>
             </div>
             <?php endif; ?>
-        </div>
-
-        <div data-monitor-panel="renewal" class="monitor-panel hidden p-6">
-            <div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
-                <?php foreach ($renewalItems as $item): ?>
-                    <div class="rounded-xl border border-gray-200 bg-white p-5">
-                        <p class="text-sm font-semibold text-gray-500"><?php echo htmlspecialchars($item['label'], ENT_QUOTES, 'UTF-8'); ?></p>
-                        <div class="mt-2 text-2xl font-bold text-gray-900"><?php echo htmlspecialchars($item['value'], ENT_QUOTES, 'UTF-8'); ?></div>
-                        <p class="mt-3 text-sm leading-6 text-gray-600"><?php echo htmlspecialchars($item['desc'], ENT_QUOTES, 'UTF-8'); ?></p>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-            <div class="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <div class="rounded-xl border border-blue-200 bg-blue-50 p-5">
-                    <h3 class="text-lg font-bold text-gray-900">续费证据包摘要</h3>
-                    <p class="mt-2 text-sm leading-6 text-gray-700">
-                        <?php if ($hasRealData): ?>
-                            本月已沉淀 <?php echo (int) $realMonitorData['total']; ?> 条真实监测记录，其中 <?php echo (int) $realMonitorData['mentioned']; ?> 条提及品牌。当前证据包只汇总真实回答、真实告警和真实趋势。
-                        <?php else: ?>
-                            当前还没有可用于续费复盘的真实监测记录。先启动监测，证据包会自动引用 AI 原话和告警数据。
-                        <?php endif; ?>
-                    </p>
-                    <div class="mt-4 flex flex-wrap gap-2">
-                        <?php foreach ($conversations as $item): ?>
-                            <button type="button" data-open-conversation="<?php echo htmlspecialchars($item['id'], ENT_QUOTES, 'UTF-8'); ?>" class="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm"><?php echo htmlspecialchars($item['question'], ENT_QUOTES, 'UTF-8'); ?></button>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-                <div class="rounded-xl border border-gray-200 bg-white p-5">
-                    <h3 class="text-lg font-bold text-gray-900">反查配额状态</h3>
-                    <div class="mt-4 space-y-3">
-                        <?php foreach ($quotaRows as $row): ?>
-                            <div class="flex items-center justify-between gap-3 rounded-lg bg-gray-50 p-3 text-sm">
-                                <div>
-                                    <div class="font-bold text-gray-900"><?php echo htmlspecialchars($row['provider'], ENT_QUOTES, 'UTF-8'); ?></div>
-                                    <div class="text-xs text-gray-500"><?php echo htmlspecialchars($row['method'], ENT_QUOTES, 'UTF-8'); ?> · <?php echo htmlspecialchars($row['quota'], ENT_QUOTES, 'UTF-8'); ?></div>
-                                </div>
-                                <span class="rounded-full px-2.5 py-1 text-xs font-bold <?php echo $row['status'] === '正常' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'; ?>"><?php echo htmlspecialchars($row['status'], ENT_QUOTES, 'UTF-8'); ?></span>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </div>
         </div>
 
         <div data-monitor-panel="platforms" class="monitor-panel hidden p-6">
